@@ -12,14 +12,14 @@ $(shell mkdir -p $(MODDIR) $(OBJDIR) $(DEPDIR) >/dev/null)
 INCLUDES += -I$(MODDIR)
 
 # Detect the compiler vendors (sort to remove duplicates)
-F_COMPILER_FAMILY :=$(sort $(shell $(FC) --version | grep -oim 1 'intel\|gcc\|gnu' | tr A-Z a-z | sed 's/gcc/gnu/'))
-C_COMPILER_FAMILY :=$(sort $(shell $(CC) --version | grep -oim 1 'intel\|gcc\|gnu' | tr A-Z a-z | sed 's/gcc/gnu/'))
-CXX_COMPILER_FAMILY :=$(sort $(shell $(CXX) --version | grep -oim 1 'intel\|gcc\|gnu\|g[+][+]' | tr A-Z a-z | sed -e 's/gcc/gnu/' -e 's/g[+][+]/gnu/'))
+F_COMPILER_FAMILY :=$(sort $(shell $(FC) --version | grep -oim 1 'intel\|nvidia\|gcc\|gnu' | tr A-Z a-z | sed 's/gcc/gnu/'))
+C_COMPILER_FAMILY :=$(sort $(shell $(CC) --version | grep -oim 1 'intel\|pgcc\|nvidia\|gcc\|gnu' | tr A-Z a-z | sed -e 's/pgcc/nvidia/' -e 's/gcc/gnu/'))
+CXX_COMPILER_FAMILY :=$(sort $(shell $(CXX) --version | grep -oim 1 'intel\|gcc\|gnu\|g[+][+]\|nvidia' | tr A-Z a-z | sed -e 's/gcc/gnu/' -e 's/g[+][+]/gnu/'))
 ifneq ($(F_COMPILER_FAMILY),$(C_COMPILER_FAMILY))
-  $(error "Fortran compiler ($(F_COMPILER_FAMILY)) must be same as C compiler ($(C_COMPILER_FAMILY))")
+#  $(error "Fortran compiler ($(F_COMPILER_FAMILY)) must be same as C compiler ($(C_COMPILER_FAMILY))")
 endif
 ifneq ($(CXX_COMPILER_FAMILY),$(C_COMPILER_FAMILY))
-  $(error "C++ compiler ($(CXX_COMPILER_FAMILY)) must be same as C compiler ($(C_COMPILER_FAMILY))")
+#  $(error "C++ compiler ($(CXX_COMPILER_FAMILY)) must be same as C compiler ($(C_COMPILER_FAMILY))")
 endif
 ifeq ($(COMPILER_FAMILY),)
   COMPILER_FAMILY = $(F_COMPILER_FAMILY)
@@ -103,6 +103,14 @@ ifeq ($(COMPILER_FAMILY), intel)
     FFLAGS += -gen-interfaces -warn-interfaces
     F90FLAGS += -implicitnone
   endif
+
+  FFLAGS +=-module $(MODDIR)
+endif
+
+ifeq ($(COMPILER_FAMILY), nvidia)
+  FLAGS += -cpp -mp
+  #FFLAGS += -Mfree
+  FFLAGS += -r8
 
   FFLAGS +=-module $(MODDIR)
 endif
@@ -214,6 +222,22 @@ ifeq (1, $(USE_FFTW))
   INCLUDES := $(INCLUDES) $(INC_FFTW)
 endif
 
+ifeq (1, $(USE_GPU))
+  FLAGS += -mp=gpu -Minfo=mp -gpu=cc80
+  DEFINES  := $(DEFINES) -DUSE_GPU
+
+  # Check for CuFFT Flag
+  #ifeq (1, $(USE_CUFFT))
+  #  LIBS     := $(LIBS) $(LIBCUFFT)
+  #  DEFINES  := $(DEFINES) -DUSE_CUFFT
+  #  INCLUDES := $(INCLUDES) $(INC_CUFFT)
+  #else ifeq (1, $(USE_ROCFFT))
+  #  #LIBS     := $(LIBS) $(LIBROCFFT)
+  #  #DEFINES  := $(DEFINES) -DUSE_ROCFFT
+  #  #INCLUDES := $(INCLUDES) $(INC_ROCFFT)
+  #endif
+endif
+
 # polynomial order > 3 requires more Gauss points
 N_ORDER_PARAMETER = $(shell cat models/mod_settings.f90 |grep n_order |grep -v n_degrees | grep -v SETTINGS | awk '{print $$6}' | bc)
 ifneq (3, $(N_ORDER_PARAMETER))
@@ -246,7 +270,7 @@ ifeq (1, $(USE_PASTIX6))
   DEFINES  := $(DEFINES) -DUSE_PASTIX6
   LIBS     := $(LIBS) $(LIB_PASTIX)
   INCLUDES := $(INCLUDES) $(INC_PASTIX)
-  EXTRA_FLAGS := $(EXTRA_FLAGS) -lstdc++ -std=c++14
+  EXTRA_FLAGS := $(EXTRA_FLAGS) -lstdc++ #-std=c++14
 endif
 
 ifeq (1, $(USE_WSMP))
@@ -302,7 +326,7 @@ ifeq (1, $(USE_STRUMPACK))
   DEFINES  := $(DEFINES) -DUSE_STRUMPACK
   LIBS     := $(LIBS) $(STRUMPACKLIB)
   INCLUDES := $(INCLUDES) $(STRUMPACKINC)
-  EXTRA_FLAGS := $(EXTRA_FLAGS) -lstdc++ -std=c++14
+  EXTRA_FLAGS := $(EXTRA_FLAGS) -lstdc++ #-std=c++14
 endif
 
 ifeq (1, $(USE_STD_BESSELK))
