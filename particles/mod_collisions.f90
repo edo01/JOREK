@@ -171,7 +171,8 @@ subroutine sample_velocity_dist_magnetized(n, u, ktb, q, n_b, m_b, q_b, v_b, w_1
   ! Add mean flow and normalize with v_thermal
   do i=1,n
     w_1(:,i) = w_1(:,i) * v_thermal + v_b
-    if (isnan(w_1(1,i)) .or. isnan(w_1(2,i)) .or. isnan(w_1(3,i))) then
+    !if (isnan(w_1(1,i)) .or. isnan(w_1(2,i)) .or. isnan(w_1(3,i))) then
+    if (w_1(1,i) /= w_1(1,i) .or. w_1(2,i) /= w_1(2,i) .or. w_1(3,i) /= w_1(3,i)) then
       write(*,*) u(:,i), w_1(:,i)
       call sample_distorted_maxwellian(n, u, A, q, w_1)
     end if

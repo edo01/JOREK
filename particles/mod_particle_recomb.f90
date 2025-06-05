@@ -124,7 +124,10 @@ module mod_particle_recomb
       !$omp reduction(+:sanity_rec_local)
         do ife = 1, size(rec_rate_local) ! loop over all local elements
   
-          if (isnan(rec_v_R(ife)) .or. isnan(rec_v_Z(ife)) .or. isnan(rec_v_phi(ife))) CYCLE !NaN check
+          !if (isnan(rec_v_R(ife)) .or. isnan(rec_v_Z(ife)) .or. isnan(rec_v_phi(ife))) CYCLE !NaN check
+          if (rec_v_R(ife) /= rec_v_R(ife) .or. &
+              rec_v_Z(ife) /= rec_v_Z(ife) .or. &
+              rec_v_phi(ife) /= rec_v_phi(ife)) CYCLE !NaN check
           if (rec_rate_local(ife) * central_density * 1.d20 .le. 1.d3) CYCLE
     
           !$ i_rng = omp_get_thread_num()+1
