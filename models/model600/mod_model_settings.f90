@@ -46,6 +46,9 @@ integer, parameter :: n_var_impurities  = sum(merge( (/1/), (/0/), with_impuriti
 integer, parameter :: n_var_refluid     = sum(merge( (/1/), (/0/), with_refluid   )) !### not yet
 integer, parameter :: n_var_ext(n_mod_ext) = (/ n_var_TiTe, n_var_vpar, n_var_neutrals,         &
   n_var_impurities, n_var_refluid /)
+integer, parameter :: n_var_ext_sum_2 = sum(n_var_ext(1:2))
+integer, parameter :: n_var_ext_sum_3 = sum(n_var_ext(1:3))
+integer, parameter :: n_var_ext_sum_4 = sum(n_var_ext(1:4))
 integer, parameter :: n_var = n_var_base + sum(n_var_ext) !< total number of variables
 
 ! --- variable indices for the base model
@@ -59,9 +62,9 @@ integer, parameter :: var_T    = sum(merge( (/0/), (/6/), with_TiTe ))
 integer, parameter :: var_Ti       = sum(merge((/                               6/), (/0/), with_TiTe      ))
 integer, parameter :: var_Te       = sum(merge((/n_var_base+n_var_vpar         +1/), (/0/), with_TiTe      ))
 integer, parameter :: var_Vpar     = sum(merge((/                               7/), (/0/), with_vpar      ))
-integer, parameter :: var_rhon     = sum(merge((/n_var_base+sum(n_var_ext(1:2))+1/), (/0/), with_neutrals  ))
-integer, parameter :: var_rhoimp   = sum(merge((/n_var_base+sum(n_var_ext(1:3))+1/), (/0/), with_impurities))
-integer, parameter :: var_nre      = sum(merge((/n_var_base+sum(n_var_ext(1:4))+1/), (/0/), with_refluid   ))
+integer, parameter :: var_rhon     = sum(merge((/n_var_base+n_var_ext_sum_2+1/), (/0/), with_neutrals  ))
+integer, parameter :: var_rhoimp   = sum(merge((/n_var_base+n_var_ext_sum_3+1/), (/0/), with_impurities))
+integer, parameter :: var_nre      = sum(merge((/n_var_base+n_var_ext_sum_4+1/), (/0/), with_refluid   ))
 ! --- variables not relevant to this model
 integer, parameter :: var_AR   = 0
 integer, parameter :: var_AZ   = 0
