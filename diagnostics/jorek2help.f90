@@ -122,9 +122,9 @@ contains
     write(*,111) 'compile_dir         ', trim(adjustl(compile_dir))
     write(*,111) 'compile_command     ', trim(adjustl(compile_command))
     write(*,111) 'compile_flags       ', trim(adjustl(compile_flags))
-    write(*,111) 'compile_includes    ', trim(adjustl(compile_includes))
+    !write(*,111) 'compile_includes    ', trim(adjustl(compile_includes))
     write(*,111) 'compile_defines     ', trim(adjustl(compile_defines))
-    write(*,111) 'compile_libs        ', trim(adjustl(compile_libs))
+    !write(*,111) 'compile_libs        ', trim(adjustl(compile_libs))
     write(*,111) 'compile_modules     ', trim(adjustl(compile_modules))
   end subroutine print_version
 
