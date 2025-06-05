@@ -826,8 +826,10 @@ Bnorm_k_arr,E_k_arr,dAstar_k_arr)
     write(*,*) "WARNING: particle list not allocated: exit!"
     ierr = 1; return;
   endif 
+
   !> store particle base arrays
-  !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+  !!$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+  !$omp parallel do private(ii) firstprivate(n_particles) &
   !$omp shared(particle_list,i_elm_arr,i_life_arr,t_birth_arr,weight_arr,&
   !$omp st_arr,x_arr,v_1d_arr,B_hat_prev_arr,E_arr,mu_arr,q_arr,vpar_arr,&
   !$omp B_norm_arr,x_m_arr,vpar_m_arr,Astar_m_arr,Astar_k_arr,dAstar_k_arr,&
