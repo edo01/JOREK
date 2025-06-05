@@ -963,7 +963,8 @@ subroutine fluid2part_action(this, sim)
 #ifdef __GFORTRAN__
     !$omp parallel default(shared) &
 #else
-    !$omp parallel default(none) &
+    !!$omp parallel default(none) &
+    !$omp parallel                &
     !$omp shared(this, sim, rng_sample, xyz_sampled, st_sampled, i_elm_sampled, i_free, &
     !$omp q, Z, n_supers_loc, n_supers) &
 #endif
@@ -1118,7 +1119,8 @@ subroutine part2self_action(this, sim)
 #ifdef __GFORTRAN__
   !$omp parallel default(shared) & ! workaround for Error: ‘__vtab_mod_pcg32_rng_Pcg32_rng’ not specified in enclosing ‘parallel’
 #else
-  !$omp parallel default(none) &
+  !!$omp parallel default(none) &
+  !$omp parallel               &
   !$omp shared(this, sim)      & 
 #endif
   !$omp private(i_rng)         &
