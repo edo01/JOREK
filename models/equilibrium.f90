@@ -176,8 +176,8 @@ if (my_id == 0) then
     diff = diff / float(node_list%n_nodes)
 
     ! Error handling, really is no point continuing if diff is NaN
-    if (ISNAN(diff)) then
-      write(*,*)'Equilibrium diff is NaN - stop here'
+    if (diff /= diff) then
+      write(*,*) 'Equilibrium diff is NaN - stop here'
       stop
     end if
 
