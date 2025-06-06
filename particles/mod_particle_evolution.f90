@@ -12,6 +12,7 @@ module mod_particle_evolution
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
+    use mod_fields_linear, only: jorek_fields_interp_linear
     !$ use omp_lib
 
     implicit none
@@ -165,6 +166,9 @@ contains
     integer   :: i_tor, index_lm, i_elm_temp
     integer   :: n_particles, ifail 
     integer   :: imp_q_idx_temp
+#ifdef USE_GPU
+    type(particle_kinetic_leapfrog), allocatable :: particles_group_tmp(:)
+#endif
 
     !> Initialise diagnostics to 0
     n_lost_ion     = 0.d0; n_lost_ion_all = 0.d0; p_lost_ion     = 0.d0; p_lost_ion_all  = 0.d0; p_lost_plt          = 0.d0; 
@@ -183,8 +187,22 @@ contains
 
 
 #ifdef USE_GPU
-select type (particles => sim%groups(1)%particles)
-type is (particle_kinetic_leapfrog)
+!> This is a workaround for the GPU compiler to understand the type of particles
+!> and to avoid the error: "NVFORTRAN-F-1252-Call to type-bound procedures are not allowed on device'
+
+
+! Allocate temporary array and copy particles
+allocate(particles_group_tmp(size(sim%groups(group_num)%particles)))
+do i = 1, size(sim%groups(group_num)%particles)
+    particles_group_tmp(i) = sim%groups(group_num)%particles(i)
+end do
+
+!$omp target data map(alloc: particles_group_tmp(:)) 
+
+!select type (particles => sim%groups(1)%particles)
+!type is (particle_kinetic_leapfrog)
+select type (fields => sim%fields)
+type is (jorek_fields_interp_linear)
 
 #endif
 
@@ -200,23 +218,23 @@ type is (particle_kinetic_leapfrog)
     !$omp parallel do default(none)                                                                       &
 #endif
 #ifdef DISABLE
-    !!$omp schedule(runtime)                                                                               &
-    !!$omp shared(sim, group_num, nstep_particles, tstep_part_adj, rng,                         &
-    !!$omp rho_norm, t_norm, v_norm, E_norm, M_norm, N_norm,                                               &    
-    !!$omp rho_idx_kin, mom_par_idx_kin, E_idx_kin, imp_q_idx, ics_indices_kin,                            &
-    !!$omp CENTRAL_DENSITY, CENTRAL_MASS, feedback_nodelist, feedback_element_list)                        &
-    !!$omp private(particle_tmp, i_rng, i, j, k, l, m, t, E, B, psi, U, rz_old, st_old,                    &
-    !!$omp i_elm_old, i_elm, n_i, n_e, T_e,imp_charge_density, PLT, PRB, Srec, grad_T_e, q_old,            &
-    !!$omp ionize_rate, ionize_prob, ionize_ran, ionize_ran_imp, ionize_source, ionize_energy,             &
-    !!$omp cx_rate, cx_prob, cx_source, cx_energy, cx_ran,                                                 &
-    !!$omp kinetic_energy, line_rad_energy, radiation_energy, binding_energy,                              &  
-    !!$omp R_g, R_s, R_t, Z_g, Z_s, Z_t, R, Z, xjac, HH, HH_s, HH_t, HZ, index_lm, ifail,                  &
-    !!$omp density_fb, E_fb, mom_par_fb,extra_proj, imp_q_fb, imp_density_fb, imp_P_rad_fb,                &
-    !!$omp density_source, mom_par_source, energy_source, v_temp, T_eV,                                    &
-    !!$omp m_b, kTb,coulomb_log ,n_b,v_b, ran, ran2, q_b, q,                                               &
-    !!$omp P, P_s, P_t, P_phi, P_time, limits, limits_coll,                                                &
-    !!$omp vvector, ran_norm, imp_q_idx_temp)                                                              &
-    !!$omp reduction(+:feedback_rhs,n_lost_ion,p_lost_plt,p_lost_cx,p_lost_ion,n_super_ionized)
+    !$omp schedule(runtime)                                                                               &
+    !$omp shared(sim, group_num, nstep_particles, tstep_part_adj, rng,                                    &
+    !$omp rho_norm, t_norm, v_norm, E_norm, M_norm, N_norm,                                               &    
+    !$omp rho_idx_kin, mom_par_idx_kin, E_idx_kin, imp_q_idx, ics_indices_kin,                            &
+    !$omp CENTRAL_DENSITY, CENTRAL_MASS, feedback_nodelist, feedback_element_list)                        &
+    !$omp private(particle_tmp, i_rng, i, j, k, l, m, t, E, B, psi, U, rz_old, st_old,                    &
+    !$omp i_elm_old, i_elm, n_i, n_e, T_e,imp_charge_density, PLT, PRB, Srec, grad_T_e, q_old,            &
+    !$omp ionize_rate, ionize_prob, ionize_ran, ionize_ran_imp, ionize_source, ionize_energy,             &
+    !$omp cx_rate, cx_prob, cx_source, cx_energy, cx_ran,                                                 &
+    !$omp kinetic_energy, line_rad_energy, radiation_energy, binding_energy,                              &  
+    !$omp R_g, R_s, R_t, Z_g, Z_s, Z_t, R, Z, xjac, HH, HH_s, HH_t, HZ, index_lm, ifail,                  &
+    !$omp density_fb, E_fb, mom_par_fb,extra_proj, imp_q_fb, imp_density_fb, imp_P_rad_fb,                &
+    !$omp density_source, mom_par_source, energy_source, v_temp, T_eV,                                    &
+    !$omp m_b, kTb,coulomb_log ,n_b,v_b, ran, ran2, q_b, q,                                               &
+    !$omp P, P_s, P_t, P_phi, P_time, limits, limits_coll,                                                &
+    !$omp vvector, ran_norm, imp_q_idx_temp)                                                              &
+    !$omp reduction(+:feedback_rhs,n_lost_ion,p_lost_plt,p_lost_cx,p_lost_ion,n_super_ionized)
 #endif
     !$omp schedule(runtime)                                                                               &
     !$omp shared(sim, group_num, nstep_particles, tstep_part_adj, ics_indices_kin,                        &
@@ -232,13 +250,14 @@ type is (particle_kinetic_leapfrog)
     !!$omp i_elm_old, q_old, v_temp, n_i, T_e, grad_T_e, imp_charge_density, n, &
     !!$omp imp_q_idx_temp, P, n_e, limits, ifail, ionize_source, ionize_energy, &
     !!$omp line_rad_energy, radiation_energy, cx_source, cx_energy)
-    !$omp target teams distribute parallel do map(tofrom: sim, group_num, nstep_particles, tstep_part_adj) &
-    !$omp map(tofrom: particles(:)) &
-    !$omp private(particle_tmp, i_rng, j, k, t) &
+    !$omp target teams distribute parallel do map(tofrom: group_num, nstep_particles, tstep_part_adj)     &
+    !$omp map(tofrom: particles_group_tmp(:), fields)                                                               &
+    !$omp private(particle_tmp, i_rng, j, k, t)                                                           &
     !$omp private(E, B, psi, U, rz_old, st_old, i_elm_old, q_old, v_temp)
 #endif
-    do j=1,size(particles,1)
-      call copy_particle_kinetic_leapfrog(particles(j), particle_tmp)
+    do j=1,size(particles_group_tmp,1)
+      call copy_particle_kinetic_leapfrog(particles_group_tmp(j), particle_tmp)
+      !particle_tmp = particles_group(j)
       ! HERE WE SHOULD CHECK!!
       !!!!!! $ i_rng = omp_get_thread_num()+1
       do k=1,nstep_particles
@@ -257,15 +276,15 @@ type is (particle_kinetic_leapfrog)
 
         !cx_energy = 0.d0
 
-#ifdef DEFINE
         !> calculate local fields
-        call sim%fields%calc_EBpsiU(t, particle_tmp%i_elm, particle_tmp%st, particle_tmp%x(3), E, B, psi, U)
+        call calc_EBpsiU_linear(fields, t, particle_tmp%i_elm, particle_tmp%st, particle_tmp%x(3), E, B, psi, U)
+        !call fields%calc_EBpsiU(t, particle_tmp%i_elm, particle_tmp%st, particle_tmp%x(3), E, B, psi, U)
         rz_old    = particle_tmp%x(1:2)
         st_old    = particle_tmp%st
         i_elm_old = particle_tmp%i_elm
         q_old     = particle_tmp%q 
         v_temp    = particle_tmp%v
-#endif
+
 
 #ifdef DISABLE       
         !> calculate ion density and electron temperature (jorek model assumption: n_e = n_i)
@@ -515,23 +534,33 @@ type is (particle_kinetic_leapfrog)
 
 #endif
 
-#ifdef DISABLE
         !> =============================== PUSH PARTICLE ====================================
         if (particle_tmp%i_elm .gt. 0) then
           call boris_push_cylindrical(particle_tmp, sim%groups(group_num)%mass, E, B, tstep_part_adj)
+#ifdef NICO
           call find_RZ_nearby(sim%fields%node_list, sim%fields%element_list, rz_old(1), rz_old(2), st_old(1), st_old(2), i_elm_old, &
                               particle_tmp%x(1), particle_tmp%x(2), particle_tmp%st(1), particle_tmp%st(2), particle_tmp%i_elm, ifail)
+#endif
         end if
     
-#endif
       end do ! steps 
       !sim%groups(1)%particles(j) = particle_tmp
-      call copy_particle_kinetic_leapfrog(particle_tmp, particles(j))
+      call copy_particle_kinetic_leapfrog(particle_tmp, particles_group_tmp(j))
+      !particles_group(j) = particle_tmp
     end do   ! particles
     !!$omp end parallel do
 
 #ifdef USE_GPU
-  end select
+  end select ! fields
+  !end select ! particles
+
+  !$omp end target data
+
+  !> Copy particles back to the sim
+  do i = 1, size(sim%groups(group_num)%particles)
+    sim%groups(group_num)%particles(i) = particles_group_tmp(i) 
+  end do
+  deallocate(particles_group_tmp)
 #endif
 
       

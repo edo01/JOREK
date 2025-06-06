@@ -8,7 +8,11 @@ module phys_module
   use mod_coronal
 
   implicit none
-  
+
+#ifdef USE_GPU
+  !$omp declare target(F0, mode, central_mass, central_density)
+#endif
+
   !> @name Various parameters
   real*8  :: eta                  !< Resistivity at plasma cener (normalized)
   real*8  :: eta_T_0              !< Initial resistivity

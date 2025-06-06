@@ -29,6 +29,9 @@ pure subroutine boris_push_cylindrical(particle, m, E, B, dt)
   real*8 :: R, Rphi
   real*8 :: fE, fB, eom
   real*8 :: B2, Bnorm
+  
+  !$omp declare target
+
   eom = EL_CHG / (m * ATOMIC_MASS_UNIT)
 
   B2    = dot_product(B,B)

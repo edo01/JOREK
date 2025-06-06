@@ -9,6 +9,9 @@ use mod_interp
 implicit none
 private
 public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_before_time
+#ifdef USE_GPU
+public calc_EBpsiU_linear
+#endif
 
 !> Action to read in the fields into sim%fields
 type, extends(action) :: read_jorek_fields_interp_linear
@@ -36,11 +39,133 @@ type, extends(fields_base) :: jorek_fields_interp_linear
   real*8 :: time_now  = 0.d0 !< Time of current restart file (SI units)
   real*8 :: time_prev = 0.d0!< Time of previous restart file (SI units)
   contains
-    procedure :: interp_PRZ => do_interp_PRZ_1
-    procedure :: interp_PRZ_2 => do_interp_PRZ_2
-    procedure :: interp_PRZP_1 => do_interp_PRZP_1
+    procedure :: interp_PRZ     => do_interp_PRZ_1
+    procedure :: interp_PRZ_2   => do_interp_PRZ_2
+    procedure :: interp_PRZP_1  => do_interp_PRZP_1
 end type jorek_fields_interp_linear
 contains
+
+#ifdef USE_GPU
+!> Calculates the electric and magnetic fields at a specific position
+!> in the jorek element `i_elm` at `st`.
+pure subroutine calc_EBpsiU_linear(fields, time, i_elm, st, phi, E, B, psi, U)
+  use phys_module, only: F0, mode, central_mass, central_density
+  use constants, only: mu_zero, mass_proton
+  use mod_coordinate_transforms, only: transform_derivatives_st_to_RZ
+  use mod_chi
+  ! Routine parameters
+  class(jorek_fields_interp_linear), intent(in) :: fields
+  real*8, intent(in)  :: time
+  integer, intent(in) :: i_elm !< JOREK element index
+  real*8, intent(in)  :: st(2) !< element-local coordinates
+  real*8, intent(in)  :: phi !< toroidal angle
+  real*8, intent(out) :: E(3) !< Electric field [V/m]
+  real*8, intent(out) :: B(3) !< Magnetic field [T]
+  real*8, intent(out) :: psi !< psi in JOREK units
+  real*8, intent(out) :: u !< velocity stream function in m/s
+
+  ! Internal parameters
+#ifdef fullmhd
+  integer, parameter :: i_var(3) = [1,2,3]
+  real*8             :: P(3), P_s(3), P_t(3), P_phi(3), P_time(3) !Placeholders, differ in full MHD
+  real*8             :: A3, AR, AZ, A3_R, A3_Z, A3_t, AR_Z, AR_p, AR_t, AZ_R, AZ_P,AZ_t, Fprof
+#else
+  integer, parameter :: i_var(2) = [1,2]
+  real*8             :: P(2), P_s(2), P_t(2), P_phi(2), P_time(2) ! Placeholder for evaluating variables and derivatives locally
+#endif
+  ! Values
+  real*8             :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
+  ! Others
+  real*8             :: inv_st_jac, R_inv
+  real*8             :: psi_R, psi_Z, psi_phi, U_R, U_Z, U_phi, t_norm
+  real*8, dimension(0:n_order-1,0:n_order-1,0:n_order-1) :: chi
+  !$omp declare target 
+
+  t_norm  = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
+
+  ! Interpolate the fields to get psi and U at the current position (and the
+  ! changes u_n - u(n-1))
+
+
+#ifdef fullmhd
+  call fields%calc_F_profile(i_elm,st(1),st(2),phi,Fprof)
+  !In full MHD equations are easier,
+  ! B = F/R e_\phi  + curl A
+  ! E=\partial_t A
+  !
+  !Interpolating A^3=psi=1, AR=2, AZ=3, including time derivatives
+  call fields%interp_PRZ(time, i_elm, i_var,3, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+
+  R_inv = 1.d0/R
+  inv_st_jac = 1.d0/(R_s * Z_t - R_t * Z_s)
+  A3=P(1)
+  AR=P(2)
+  AZ=P(3)
+  !Derivatives of A3
+  A3_R    = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
+  A3_Z    = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
+  A3_t    = P_time(1)
+  !Derivatives of AR
+  AR_Z    = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
+  AR_p    = P_phi(2)
+  AR_t    = P_time(2)
+  !Derivatives of AZ
+  AZ_R    = (  P_s(3) * Z_t - P_t(3) * Z_s ) * inv_st_jac
+  AZ_p    = P_phi(3)
+  AZ_t    = P_time(3)
+
+  B=[(A3_Z-AZ_p)*R_inv, (AR_p-A3_R)*R_inv, AZ_R-AR_Z + Fprof*R_inv]
+  E=[-AR_t, -AZ_t, -R_inv*A3_t]
+#else
+#if STELLARATOR_MODEL
+  call fields%interp_PRZP_1(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+#else
+  R_phi = 0.0; Z_phi = 0.0
+  call fields%interp_PRZ(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+#endif
+  ! Calculate the derivatives to R and Z
+
+  R_inv = 1.d0/R
+  inv_st_jac = 1.d0/(R_s * Z_t - R_t * Z_s)
+  psi_R    = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
+  psi_Z    = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
+  psi_phi  = P_phi(1) - R_phi*psi_R - Z_phi*psi_Z
+  U_R      = (  P_s(2) * Z_t - P_t(2) * Z_s ) * inv_st_jac
+  U_Z      = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
+  U_phi    = P_phi(2) - R_phi*U_R - Z_phi*U_Z
+
+  ! Update psi and U
+  psi = P(1)
+  U   = P(2)/t_norm
+
+  ! Set dpsi/dt to 0 if flag is true
+  if(fields%flag_zero_dpsidt) P_time(1) = 0.d0
+
+#if STELLARATOR_MODEL
+  chi = get_chi(R,Z,phi,fields%node_list,fields%element_list,i_elm,st(1),st(2))
+
+  B = (/ chi(1,0,0)      + (psi_Z*chi(0,0,1) - psi_phi*chi(0,1,0))/(F0*R), &
+         chi(0,1,0)      - (psi_R*chi(0,0,1) - psi_phi*chi(1,0,0))/(F0*R), &
+         chi(0,0,1)/R    + (psi_R*chi(0,1,0) - psi_Z * chi(1,0,0))/F0         /)
+  
+  E     = [-U_R, -U_Z, -U_phi*R_inv]/t_norm
+  E     = E - P_time(1)/F0*(/ chi(1,0,0), chi(0,1,0), chi(0,0,1)*R_inv /) 
+#else
+  ! Calculate the magnetic field (see http://jorek.eu/wiki/doku.php?id=reduced_mhd)
+  B     = [+psi_Z, -psi_R, F0] * R_inv
+
+  ! The local electric field, obtained from E=-Grad (u F0)-\partial_t A
+  ! See http://jorek.eu/wiki/doku.php?id=u_phi
+  E     = [-F0*U_R, -F0*U_Z, -F0*U_phi*R_inv]/t_norm
+  E(3)  = E(3) - R_inv*P_time(1) ! because this is not normalized with t_norm
+#endif
+
+#endif
+
+end subroutine calc_EBpsiU_linear
+
+#endif 
+
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
