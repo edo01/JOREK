@@ -183,6 +183,7 @@ contains
   pure subroutine copy_particle_kinetic_leapfrog(in, out)
     type(particle_kinetic_leapfrog), intent(in)    :: in
     type(particle_kinetic_leapfrog), intent(inout) :: out
+    !$omp declare target
     out%x       = in%x
     out%st      = in%st
     out%weight  = in%weight

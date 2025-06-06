@@ -180,6 +180,15 @@ contains
     M_norm   = rho_norm * v_norm                                    ! momentum normalisation
 #endif
 
+
+
+#ifdef USE_GPU
+select type (particles => sim%groups(1)%particles)
+type is (particle_kinetic_leapfrog)
+
+#endif
+
+#ifndef USE_GPU
     if(use_manual_random_seed) then
       !$ call omp_set_schedule(omp_sched_static,10)
     else
@@ -216,9 +225,22 @@ contains
     !$omp i_elm_old, q_old, v_temp, n_i, T_e, grad_T_e, imp_charge_density, n,                            &
     !$omp imp_q_idx_temp, P, n_e, limits, ifail, ionize_source, ionize_energy,                            &
     !$omp line_rad_energy, radiation_energy, cx_source, cx_energy)
-    do j=1,size(sim%groups(group_num)%particles,1)
-      particle_tmp = sim%groups(group_num)%particles(j)
-      !$ i_rng = omp_get_thread_num()+1
+#else
+    !!$omp target teams distribute parallel do map(tofrom: sim, group_num, nstep_particles, tstep_part_adj, &
+    !!$omp ics_indices_kin, feedback_nodelist, feedback_element_list) &
+    !!$omp private(particle_tmp, i_rng, j, k, t, E, B, psi, U, rz_old, st_old, &
+    !!$omp i_elm_old, q_old, v_temp, n_i, T_e, grad_T_e, imp_charge_density, n, &
+    !!$omp imp_q_idx_temp, P, n_e, limits, ifail, ionize_source, ionize_energy, &
+    !!$omp line_rad_energy, radiation_energy, cx_source, cx_energy)
+    !$omp target teams distribute parallel do map(tofrom: sim, group_num, nstep_particles, tstep_part_adj) &
+    !$omp map(tofrom: particles(:)) &
+    !$omp private(particle_tmp, i_rng, j, k, t) &
+    !$omp private(E, B, psi, U, rz_old, st_old, i_elm_old, q_old, v_temp)
+#endif
+    do j=1,size(particles,1)
+      call copy_particle_kinetic_leapfrog(particles(j), particle_tmp)
+      ! HERE WE SHOULD CHECK!!
+      !!!!!! $ i_rng = omp_get_thread_num()+1
       do k=1,nstep_particles
 
         !> exit evolution loop if particle is outside domain
@@ -226,13 +248,16 @@ contains
         
         t = sim%time + (k-1)*tstep_part_adj
 
-        ionize_source = 0.d0
-        ionize_energy = 0.d0
-        line_rad_energy = 0.d0
-        radiation_energy = 0.d0
-        cx_source = 0.d0
-        cx_energy = 0.d0
+        !ionize_source = 0.d0
+        !ionize_energy = 0.d0
+        !line_rad_energy = 0.d0
+        !radiation_energy = 0.d0
+        !cx_source = 0.d0
+        !cx_energy = 0.d0
 
+        !cx_energy = 0.d0
+
+#ifdef DEFINE
         !> calculate local fields
         call sim%fields%calc_EBpsiU(t, particle_tmp%i_elm, particle_tmp%st, particle_tmp%x(3), E, B, psi, U)
         rz_old    = particle_tmp%x(1:2)
@@ -240,7 +265,9 @@ contains
         i_elm_old = particle_tmp%i_elm
         q_old     = particle_tmp%q 
         v_temp    = particle_tmp%v
-        
+#endif
+
+#ifdef DISABLE       
         !> calculate ion density and electron temperature (jorek model assumption: n_e = n_i)
         call sim%fields%calc_NeTe(t, particle_tmp%i_elm, particle_tmp%st, particle_tmp%x(3), n_i, T_e, grad_T_e)
 
@@ -261,6 +288,8 @@ contains
         
         !> check that particle weight is non negative
         if (particle_tmp%weight .lt. 0.0d0) write(*,*) "Negative particle weight p(j)%w=", particle_tmp%weight
+
+#endif
 
 #ifdef DISABLE
         write(*,*) 'ERROR: DISABLE is set, but this code should not be compiled'
@@ -486,6 +515,7 @@ contains
 
 #endif
 
+#ifdef DISABLE
         !> =============================== PUSH PARTICLE ====================================
         if (particle_tmp%i_elm .gt. 0) then
           call boris_push_cylindrical(particle_tmp, sim%groups(group_num)%mass, E, B, tstep_part_adj)
@@ -493,11 +523,17 @@ contains
                               particle_tmp%x(1), particle_tmp%x(2), particle_tmp%st(1), particle_tmp%st(2), particle_tmp%i_elm, ifail)
         end if
     
+#endif
       end do ! steps 
-
-      sim%groups(group_num)%particles(j) = particle_tmp
+      !sim%groups(1)%particles(j) = particle_tmp
+      call copy_particle_kinetic_leapfrog(particle_tmp, particles(j))
     end do   ! particles
-    !$omp end parallel do
+    !!$omp end parallel do
+
+#ifdef USE_GPU
+  end select
+#endif
+
       
     !> ===================================== DIAGNOSTICS ===================================
     call MPI_REDUCE(n_lost_ion, n_lost_ion_all, 1, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)

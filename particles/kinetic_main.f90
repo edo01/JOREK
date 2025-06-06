@@ -211,6 +211,14 @@ project_jorek_feedback = new_event_ptr(jorek_feedback,   start = sim%time)
 jorek_stepper_event    = new_event_ptr(jorek_stepper,    start = sim%time)
 
 
+
+#ifdef USE_GPU
+select type (particles => sim%groups(1)%particles)
+type is (particle_kinetic_leapfrog)
+
+!$omp target data map(alloc: sim%groups(1)%particles(:))
+#endif
+
 !***********************************************************************
 !*                           main loop                                 *
 !***********************************************************************
@@ -321,6 +329,13 @@ do while (.not. sim%stop_now)
   call conservation_checks(sim)
 
 end do ! while
+
+#ifdef USE_GPU
+!$omp end target data
+
+end select
+#endif
+
 
 !***********************************************************************
 !*                          end of simulation                          *
