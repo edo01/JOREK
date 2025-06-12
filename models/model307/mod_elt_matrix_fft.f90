@@ -458,15 +458,15 @@ do i=1,n_vertex_max
             aux_mom_par0 = eq_aux_g(mp,mom_par_idx_kin,ms,mt)
           end if
 
-          if (use_ccs) then
+          if (use_epc) then
             aux_q0    = eq_aux_g(mp,4,ms,mt)
             aux_jx0   = eq_aux_g(mp,5,ms,mt)
             aux_jy0   = eq_aux_g(mp,6,ms,mt)
             aux_jz0   = eq_aux_g(mp,7,ms,mt)
-          elseif (use_pcs) then
+          elseif (use_epp) then
             aux_P0      = eq_aux_g(mp,1,ms,mt)
             aux_jz0_pcs = 0.d0 !eq_aux_g(mp,5,ms,mt)
-          elseif(use_pcf) then 
+          elseif(use_epf) then 
             aux_PIRR    = eq_aux_g(mp,1,ms,mt);
             aux_PIRR_s  = eq_aux_s(mp,1,ms,mt);
             aux_PIRR_t  = eq_aux_t(mp,1,ms,mt);

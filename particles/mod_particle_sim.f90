@@ -35,6 +35,9 @@ type :: particle_group
   logical            :: use_kin_bg_collisions    !< switch only collisions with the background plasma
   integer            :: ics_group_idx            !< internal index given to this specific impurities group
 
+  ! ==================== for runaway electrons =================
+  real*8             :: av_weight                !< average weight of each super particle in the group
+  integer            :: q                        !< charge of each runaway electron super particle
 
   class(particle_base), dimension(:), allocatable :: particles
 
@@ -79,30 +82,40 @@ subroutine configure_particle_groups(sim)
   do i=1, n_part_groups ! loop over groups defined in part_groups_in_use
     config = part_group_configs(matching_part_config_indices(i))
 
+    sim%groups(i)%coupling_scheme = config%coupling_scheme
+
     sim%groups(i)%Z = config%Z
     sim%groups(i)%mass = config%mass
-    sim%groups(i)%coupling_scheme = config%coupling_scheme
     sim%groups(i)%n_particles = config%n_particles
     sim%groups(i)%id = config%id
-  
+
     ! === ncs and ics options
-    sim%groups(i)%use_kin_ionisation     =  config%use_kin_ionisation          
-    sim%groups(i)%use_kin_puffing        =  config%use_kin_puffing        
-    sim%groups(i)%use_kin_radiation      =  config%use_kin_radiation 
+    if (sim%groups(i)%coupling_scheme == 'ncs' .or. sim%groups(i)%coupling_scheme == 'ics') then
+        sim%groups(i)%use_kin_ionisation     =  config%use_kin_ionisation          
+        sim%groups(i)%use_kin_puffing        =  config%use_kin_puffing        
+        sim%groups(i)%use_kin_radiation      =  config%use_kin_radiation 
 
-    ! --- ncs only
-    sim%groups(i)%use_kin_cx             =  config%use_kin_cx
-    sim%groups(i)%use_kin_recombination  =  config%use_kin_recombination         
+      ! --- ncs only
+      sim%groups(i)%use_kin_cx             =  config%use_kin_cx
+      sim%groups(i)%use_kin_recombination  =  config%use_kin_recombination         
 
-    ! --- ics only
-    sim%groups(i)%use_kin_bg_collisions  =  config%use_kin_bg_collisions
-    sim%groups(i)%ics_group_idx          =  config%ics_group_idx
-    
-    if (len_trim(config%atom_data_suffix) > 0) then
-      sim%groups(i)%ad =  read_adf11(sim%my_id, trim(part_group_configs(i)%atom_data_suffix))
-    else
-      if (trim(config%coupling_scheme) == 'ncs') write(*,*) "WARNING: No atom_data_suffix set for particle group ", i, "."
+      ! --- ics only
+      sim%groups(i)%use_kin_bg_collisions  =  config%use_kin_bg_collisions
+      sim%groups(i)%ics_group_idx          =  config%ics_group_idx
+      
+      if (len_trim(config%atom_data_suffix) > 0) then
+        sim%groups(i)%ad =  read_adf11(sim%my_id, trim(part_group_configs(i)%atom_data_suffix))
+      else
+        if (trim(config%coupling_scheme) == 'ncs') write(*,*) "WARNING: No atom_data_suffix set for particle group ", i, "."
+      endif
     endif
+
+    ! === rep options
+    if (sim%groups(i)%coupling_scheme == 'rep') then
+      sim%groups(i)%av_weight  =  config%num_re / config%n_particles
+      sim%groups(i)%q          =  -1 !< default charge of the runaway electrons
+    endif
+
   enddo 
 
 end subroutine configure_particle_groups

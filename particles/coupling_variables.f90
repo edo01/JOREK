@@ -12,24 +12,24 @@ module coupling_variables
   integer, parameter :: var_name_len  = 15
   character(len=var_name_len), dimension(n_aux_var_max) :: coupling_vars
 
-  ! NCS
+  ! NCS (Coupling scheme for neutral particles) 
   character(len=var_name_len), dimension(3) :: ncs_var_names = [character(len=var_name_len) :: &
     "rho",      & !> density
     "mom_par",  & !> parallel momentum
     "E"         & !> energy
   ]
 
-  ! ICS base variables
+  ! ICS (Coupling scheme for impurity particles)
+  !> These are only the base variables, there is also the impurity charge density, unique to each impurity group
   character(len=var_name_len), dimension(2) :: ics_var_names = [character(len=var_name_len) :: &
     "mom_par",  & !> parallel momentum
     "E"         & !> energy
   ]
 
-  ! CCS
-  character(len=var_name_len), dimension(4) :: ccs_var_names = [character(len=var_name_len) :: &
-    "q",        & !> charge density
-    "j_R",      & !> R   component of current
-    "j_Z",      & !> Z   component of current
+  ! REP (Pressure coupling scheme for runaway electrons)
+  character(len=var_name_len), dimension(3) :: rep_var_names = [character(len=var_name_len) :: &
+    "P_par",    & !> parallel component of dynamic pressure tensor
+    "P_perp",   & !> perpendicular component of dynamic pressure tensor
     "j_Phi"     & !> Phi compoment of current  
   ]
 
@@ -39,9 +39,8 @@ module coupling_variables
   integer :: rho_idx_kin      = 0
   integer :: mom_par_idx_kin  = 0
   integer :: E_idx_kin        = 0
-  integer :: q_idx_kin        = 0
-  integer :: j_R_idx_kin      = 0
-  integer :: j_Z_idx_kin      = 0
+  integer :: P_par_idx_kin    = 0
+  integer :: P_perp_idx_kin   = 0
   integer :: j_Phi_idx_kin    = 0
 
   !> index of coupling variables specific to each impurity group

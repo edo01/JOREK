@@ -7,16 +7,17 @@ use coupling_variables
 
 implicit none
 private
-public  :: use_ncs, use_ics, use_ccs, use_pcs, use_pcf, use_kin_recomb_global, n_ics
+public  :: use_ncs, use_ics, use_rep, use_epp, use_epc, use_epf, use_kin_recomb_global, n_ics
 public  :: check_compatibility_and_determine_coupling_schemes, determine_coupling_variables
 
 ! the variables below are global variables determined by scanning over particle groups, 
 ! and hence shoud NOT be modified manually
-logical :: use_ncs               = .false. !< use kinetic neutral particles
+logical :: use_ncs               = .false. !< use kinetic neutral particles 
 logical :: use_ics               = .false. !< use kinetic impurity particles
-logical :: use_ccs               = .false. !< use current coupling scheme for fast particles
-logical :: use_pcs               = .false. !< use pressure coupling scheme for fast particles
-logical :: use_pcf               = .false. !< use full tensor pressure coupling scheme for fast particles
+logical :: use_rep               = .false. !< use pressure coupling scheme for runaway electrons
+logical :: use_epc               = .false. !< use current coupling scheme for energetic particles                          [PLACEHOLDER, NOT YET IMPLEMENTED]
+logical :: use_epp               = .false. !< use pressure coupling scheme for energetic particles                         [PLACEHOLDER, NOT YET IMPLEMENTED]
+logical :: use_epf               = .false. !< use full anisotropic pressure tensor coupling scheme for energetic particles [PLACEHOLDER, NOT YET IMPLEMENTED]
 logical :: use_kin_recomb_global = .false. !< whether recombination is required (has effect on both fluid and kinetic side)
 integer :: n_ics                 = 0       !< number of ics groups in the simulation
 contains
@@ -40,12 +41,8 @@ subroutine check_compatibility_and_determine_coupling_schemes()
         use_ics = .true.
         n_ics = n_ics + 1
         part_group_configs(group_num)%ics_group_idx = n_ics
-      case ('ccs')
-        use_ccs = .true.
-      case ('pcs')
-        use_pcs = .true.
-      case ('pcf')
-        use_pcf = .true.
+      case ('rep')
+        use_rep = .true.
       case ('non')
         
       case default
@@ -182,13 +179,13 @@ subroutine determine_coupling_variables()
     enddo
   endif
     
-  if (use_ccs) then
-    do i=1, size(ccs_var_names)
-      call assess_and_accumulate_variable(ccs_var_names(i), coupling_var_idx, coupling_vars)
+  if (use_rep) then
+    do i=1, size(rep_var_names)
+      call assess_and_accumulate_variable(rep_var_names(i), coupling_var_idx, coupling_vars)
     enddo
   endif
 
-  !> additional coupling schemes will be added here in future PRs (e.g. use_pcs, use_pcf)  
+  !> additional coupling schemes will be added here in future PRs (e.g. use_epp, use_epf)  
     
   !> assign indices to the coupling variables and determine n_aux_var
   write(*,*) "===== Indices of coupling variables ====="
@@ -201,12 +198,10 @@ subroutine determine_coupling_variables()
         mom_par_idx_kin = final_var_idx
       case ("E")
         E_idx_kin = final_var_idx
-      case ("q")
-        q_idx_kin = final_var_idx
-      case ("j_R")
-        j_R_idx_kin = final_var_idx
-      case ("j_Z")
-        j_Z_idx_kin = final_var_idx
+      case ("P_par")
+        P_par_idx_kin  = final_var_idx
+      case ("P_perp")
+        P_perp_idx_kin = final_var_idx
       case ("j_Phi")
         j_Phi_idx_kin = final_var_idx
       case ("imp_q")

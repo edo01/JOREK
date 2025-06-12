@@ -858,6 +858,7 @@ filter_par_n0      = 0.d0
 restart_particles  = .false.
 use_marker         = .false.
 apply_dirichlet_proj = .false.
+init_particles_only = .false.
 
 !--------------- valves -------------------------
 valves(:)%type = 'none'
@@ -880,6 +881,8 @@ part_group_configs(:)%coupling_scheme   = 'non'
 part_group_configs(:)%n_particles       = 0.d0
 part_group_configs(:)%type              = 'none'
 part_group_configs(:)%id                = 'non'
+part_group_configs(:)%init_function     = 'none'
+part_group_configs(:)%init_pdf          = 'none'
 
 !----- specific to ics and ncs 
 part_group_configs(:)%atom_data_suffix      = ''
@@ -892,6 +895,12 @@ part_group_configs(:)%use_kin_cx             = .false.
 ! --- ics only
 part_group_configs(:)%use_kin_bg_collisions  = .false.
 part_group_configs(:)%ics_group_idx          = -1
+
+!----- specific to ics and ncs 
+part_group_configs(:)%num_re                 = 0.d0
+part_group_configs(:)%re_energy              = 0.d0
+part_group_configs(:)%std_energy             = 0.d0
+part_group_configs(:)%pitch                  = 0.d0
 
 do i=1, n_part_groups_max
   do j=1, n_valves_max

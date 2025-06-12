@@ -892,7 +892,7 @@ do i=1,n_vertex_max
                       + Up0_t * (x_st(ms,mt)*x_s(ms,mt) - x_ss(ms,mt)*x_t(ms,mt) )   )/ xjac**2   &
                       - Up0_Z * xjac_Z / xjac
 
-          ! --- rho
+          ! --- rhog
           rho0      = eq_g(mp,var_rho,ms,mt)
           rho0_corr = max(rho0,1.d-12)!corr_neg_dens1(rho0) ! CAREFUL! FULL-MHD DOESN'T LIKE THE CORR FUNCTIONS AT ALL
           rho0_p    = eq_p(mp,var_rho,ms,mt)
@@ -1064,7 +1064,7 @@ do i=1,n_vertex_max
           divRhoU  = rho0 * divU + UgradRho
 
           ! --- Anisotropic pressure coupling scheme
-          if (use_pcs) then
+          if (use_epf) then
              aux_PIRR    = eq_aux_g(mp,1,ms,mt);
              aux_PIRR_s  = eq_aux_s(mp,1,ms,mt);
              aux_PIRR_t  = eq_aux_t(mp,1,ms,mt);

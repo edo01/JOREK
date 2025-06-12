@@ -200,7 +200,8 @@ namelist /in1/  tstep, nstep, tstep_n, nstep_n,                     &
                 filter_perp_n0, filter_hyper_n0, filter_par_n0,     &
                 apply_dirichlet_proj, restart_particles,            &
                 part_group_configs, part_groups_in_use, valves,     &
-                fluid_configs, min_sheath_angle, bcs,               &
+                fluid_configs, init_particles_only,                 &
+                min_sheath_angle, bcs,                              &
                 use_sc, add_sources_in_sc, visco_sc_num,            &
                 D_perp_sc_num, D_par_sc_num, ZK_perp_sc_num,        &
                 ZK_par_sc_num, ZK_i_perp_sc_num, ZK_i_par_sc_num,   &

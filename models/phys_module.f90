@@ -946,6 +946,9 @@ module phys_module
   real*8  :: zjz_0, zjz_1,  zj_coef(10)
   real*8  :: D_neutral
 
+  !> @name Global quantity for REs 
+  real*8, allocatable :: re_current_t(:), Ipre_tot_t(:)
+
   !> @name Particles-related input parameters
   integer :: n_aux_var            !< number of variables in aux_node_list
   integer :: n_diag_var = n_var   !< number of variables in diag_node_list (= n_var is temporary)
@@ -961,6 +964,7 @@ module phys_module
   real*8  :: filter_hyper_n0      !< particle projection smoothing parameter, poloidal plane (n=0)
   real*8  :: filter_par_n0        !< particle projection smoothing parameter, parallel direction (n=0)
   logical :: apply_dirichlet_proj !< use dirichlet boundary conditions for the particle feedback projections
+  logical :: init_particles_only  !< only initialise particles, and produce part_restart files, do not run the simulation (only relevant when restart_particles=.f.)
 
   ! -----------------------------------------------
   ! --- Structures for particle valves 
@@ -998,7 +1002,7 @@ module phys_module
     real*8  :: times(n_puff_segment_max)  !< array of time checkpoints (SI, in seconds) for which the puffing rate is specified (requires a defined puff_ctrl(i)%rates of the same length)   
     real*8  :: rates(n_puff_segment_max)  !< array of specified puff rates (atoms/second) at given time checkpoints (requires a defined puff_ctrl(i)%times of the same length)
   end type type_puff_ctrl
-  
+
   ! ------------------------------------------------
   ! --- Structures for settings wall_action
   ! ------------------------------------------------
@@ -1015,7 +1019,7 @@ module phys_module
     !< if none of these three above options are set, the supers_ratio_wall method
     !< will be used, with its default value being set by supers_ratio_wall_default in mod_particle_wall_interaction.f90
   end type type_wall_act_config
-
+  
   ! ------------------------------------------------
   ! --- Structures for particle groups
   ! ------------------------------------------------
@@ -1031,8 +1035,10 @@ module phys_module
     real*8             :: n_particles              !< number of super/marker particles allocated for the group (real*8 on purpose)
     character(len=50)  :: type                     !< type of particle for the group (e.g. particle_kinetic_leapfrog)
     character(len=3)   :: id                       !< unique identifer for the particle group (mainly used in in/export)
+    character(len=50)  :: init_function            !< name of the function to use for creating the initial distribution of in particles in the group
+    character(len=50)  :: init_pdf                 !< the pdf to be used by the init_function to sample the initial distribution of particles in the group 
 
-    ! --------------- for neutrals and impurities (ncs and ics coupling) particles ------------
+    ! ================ for neutrals and impurities ('ncs' and 'ics' coupling schemes) particles ===============
 
     character(len=8)    :: atom_data_suffix        !< suffix of ADAS data, temporary and should be replaced by relative path instead    
     logical             :: use_kin_ionisation      !< switch on ionisation* for group 
@@ -1063,6 +1069,14 @@ module phys_module
 
     !> --- the settings to define the wall_action objects for this particle group. Index is arbitrary
     type(type_wall_act_config), dimension(n_part_groups_max) :: wall_act_configs
+
+    ! ================ for runaway electrons ('rep' coupling scheme) particles ===============
+
+    real*8              :: num_re                  !< number of runaway electrons in the group
+    real*8              :: re_energy               !< energy [eV] of the runaway electrons in the group
+    real*8              :: std_energy              !< standard deviation of the energy [eV] of the runaway electrons in the group
+    real*8              :: pitch                   !< pitch between RE momentum and magnetic field line (i.e. p_re_par/p_re_tot)
+
   end type type_part_group_config
 
   !> @name Particle groups in use (used when changing groups on restart), fill with group ids
