@@ -163,13 +163,14 @@ contains
       else
         !$ call omp_set_schedule(omp_sched_dynamic,10)
       end if  
-      !$omp parallel do default(none) &
-      !$omp schedule(runtime)         &
-      !$omp private(j, k, m, n, HZ, HH, HH_s, HH_t, E, B, psi, U,  &
-      !$omp B_norm2, proj_factor, v_Ppar, v_Pperp, v_jPhi, v_n, i_tor, ifail, &
+      !!$omp parallel do default(none) &
+      !$omp parallel do                                                          &
+      !$omp schedule(runtime)                                                    &
+      !$omp private(j, k, m, n, HZ, HH, HH_s, HH_t, E, B, psi, U,                &
+      !$omp B_norm2, proj_factor, v_Ppar, v_Pperp, v_jPhi, v_n, i_tor, ifail,    &
       !$omp cylindrical_velocity, cylindrical_momentum, v_par, v_perp, gamma_m ) &
-      !$omp shared (nstep_particles, tstep_part_adj, sim, group_num, rho_norm, &
-      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) &
+      !$omp shared (nstep_particles, tstep_part_adj, sim, group_num, rho_norm,   &
+      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                        &
       !$omp reduction(+:feedback_rhs)
   
       do j=1,size(particles,1)

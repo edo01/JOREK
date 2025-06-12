@@ -113,7 +113,8 @@ end function current_pdf
     ! Set particle momentum
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
-      !$omp parallel do default(none) &
+      !!$omp parallel do default(none) &
+      !$omp parallel do &
       !$omp private(E, B, psi, U, B_cart, B_norm, e1, e2, gyro_angle, j) &
       !$omp shared (sim, tstep_particles, p_par, p_perp, num_part)
       do j=1,num_part
