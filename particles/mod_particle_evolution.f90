@@ -12,9 +12,6 @@ module mod_particle_evolution
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
-#ifdef USE_GPU
-    use mod_fields_linear, only: jorek_fields_interp_linear
-#endif
     use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
     !$ use omp_lib
 
@@ -130,6 +127,9 @@ contains
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
+#ifdef USE_GPU
+    use mod_fields_linear, only: jorek_fields_interp_linear
+#endif
     
     implicit none
     class(particle_sim), target, intent(inout)                :: sim
@@ -158,6 +158,8 @@ contains
     n_lost = 0
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
+
+#ifndef USE_GPU
       if(use_manual_random_seed) then
         !$ call omp_set_schedule(omp_sched_static,10)
       else
@@ -172,26 +174,41 @@ contains
       !$omp shared (nstep_particles, tstep_part_adj, sim, group_num, rho_norm,   &
       !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                        &
       !$omp reduction(+:feedback_rhs)
-  
+#else
+
+    ! TODO: what about other fields?
+    select type (fields => sim%fields)
+    type is (jorek_fields_interp_linear)
+
+      !allocate particles and fields on the gpu after select type
+      !$omp target data map(alloc: particles(:), fields)
+
+
+      !$omp target teams distribute parallel do map(tofrom: particles(:), fields)                            &
+      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, cylindrical_velocity,                          &
+      !$omp B_norm2, B, v_par, v_perp, gamma_m)
+#endif
       do j=1,size(particles,1)
         do k=1,nstep_particles
-          if (particles(j)%i_elm .le. 0) exit
-  
+          if (particles(j)%i_elm .le. 0) exit ! MUST BE REMOVED!!!
           call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
           call mode_moivre(particles(j)%x(3), HZ)
   
           ! Determines velocity in cylindrical coordinates
           cylindrical_momentum = vector_cartesian_to_cylindrical(particles(j)%x(3), particles(j)%p)
+          !> TODO: sim%groups(group_num)%mass should be declared above
+          !> TODO: can dot_product and sqrt GPU implementation cause issues?
           cylindrical_velocity = cylindrical_momentum / &
                                   sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + sim%groups(group_num)%mass**2)
   
           ! Uncomment for PCS
-          call sim%fields%calc_EBpsiU(sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+          call calc_EBpsiU_linear(fields, sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
           B_norm2 = B/norm2(B)
   
           v_par   = dot_product(cylindrical_velocity, B_norm2)
           v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
+#ifdef ENABLE
   
           do n=1,n_degrees
             do m=1,n_vertex_max
@@ -220,13 +237,20 @@ contains
               enddo
             enddo
           enddo
-  
-          call volume_preserving_push_jorek(particles(j),sim%fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
-  
+#endif
+          call volume_preserving_push_jorek(particles(j),fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
   
         end do !< steps
       end do !< particles
+#ifndef USE_GPU
       !$omp end parallel do 
+#else
+      !$omp end target teams distribute parallel do
+
+      !$omp end target data
+
+    end select
+#endif
   
     end select
     

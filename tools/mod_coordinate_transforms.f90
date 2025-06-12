@@ -128,6 +128,9 @@ contains
   pure function cartesian_to_cylindrical_r4(xyz) result(cyl)
     real*4, intent(in)           :: xyz(3) !< The position in xyz coordinates
     real*4                       :: cyl(3) !< The position in RZPhi coordinates
+#ifdef USE_GPU
+    !$omp declare target
+#endif
 
     cyl(1) = sqrt(xyz(1)*xyz(1) + xyz(2)*xyz(2))
     cyl(2) = xyz(3)
@@ -138,6 +141,9 @@ contains
   pure function cartesian_to_cylindrical_r8(xyz) result(cyl)
     real*8, intent(in)           :: xyz(3) !< The position in xyz coordinates
     real*8                       :: cyl(3) !< The position in RZPhi coordinates
+#ifdef USE_GPU
+    !$omp declare target
+#endif
 
     cyl(1) = sqrt(xyz(1)*xyz(1) + xyz(2)*xyz(2))
     cyl(2) = xyz(3)
@@ -148,7 +154,9 @@ contains
   pure function cylindrical_to_cartesian_real4(cyl) result(xyz)
     real*4, intent(in)           :: cyl(3) !< The vector components in RZPhi coordinates
     real*4                       :: xyz(3) !< The vector components in xyz coordinates
-
+#ifdef USE_GPU
+    !$omp declare target
+#endif
     xyz(1) = cyl(1)*cos(-cyl(3))
     xyz(2) = cyl(1)*sin(-cyl(3))
     xyz(3) = cyl(2)
@@ -158,7 +166,9 @@ contains
   pure function cylindrical_to_cartesian_real8(cyl) result(xyz)
     real*8, intent(in)           :: cyl(3) !< The vector components in RZPhi coordinates
     real*8                       :: xyz(3) !< The vector components in xyz coordinates
-
+#ifdef USE_GPU
+    !$omp declare target
+#endif
     xyz(1) = cyl(1)*cos(-cyl(3))
     xyz(2) = cyl(1)*sin(-cyl(3))
     xyz(3) = cyl(2)
@@ -169,7 +179,7 @@ contains
     real*4, intent(in) :: R,phi
     real*4, intent(in) :: v_cyl(3)
     real*4             :: v_xyz(3)
-    
+
     v_xyz(1) = v_cyl(1)*cos(-phi) + R*v_cyl(3)*sin(-phi)
     v_xyz(2) = v_cyl(1)*sin(-phi) - R*v_cyl(3)*cos(-phi)
     v_xyz(3) = v_cyl(2)
@@ -374,6 +384,9 @@ contains
     real*8, dimension(3), intent(in) :: a   !< The vector components in (ex,ey,ez) basis
     real*8, dimension(3)             :: b   !< The vector components in (eR,eZ,ephi) basis
     real*8, dimension(2)             :: sincosphi
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
     sincosphi = (/sin(phi),cos(phi)/)
    
@@ -388,6 +401,9 @@ contains
     real*8, dimension(3), intent(in) :: a   !< The vector components in (eR,eZ,ephi) basis
     real*8, dimension(3)             :: b   !< The vector components in (ex,ey,ez) basis
     real*8, dimension(2)             :: sincosphi
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
     sincosphi = (/sin(phi),cos(phi)/)
 

@@ -43,6 +43,9 @@ pure subroutine volume_preserving_first_half_step_jorek(particle,half_position,&
   class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
   ! output variables
   real(kind=8), intent(out) :: scaling_factor
+#ifdef USE_GPU
+    !$omp declare target
+#endif
 
   scaling_factor = 5.d-1*dt*particle%q*EL_CHG/(ATOMIC_MASS_UNIT*mass*SPEED_OF_LIGHT)
   ! compute dimensionless momentum
@@ -74,6 +77,9 @@ pure subroutine volume_preserving_second_half_step_jorek(particle,&
   ! define input variables
   real(kind=8),dimension(3),intent(in) :: B, E
   real(kind=8),intent(in) :: scaling_factor, mass, dt
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
   ! compute momentum at t_(i+1/2)
   particle%p = particle%p + scaling_factor*E
@@ -99,18 +105,31 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   use mod_fields
   use mod_find_rz_nearby
+#ifdef USE_GPU
+  use mod_fields_linear, only: jorek_fields_interp_linear, &
+       calc_EBpsiU_linear
+#endif
+
   ! declare input/output variables
   integer(kind=4),intent(inout) :: ifail
   class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
+#ifdef USE_GPU
+  ! TODO: what about other fields?
+  class(jorek_fields_interp_linear), intent(in) :: fields 
+#else
   class(fields_base), intent(in) :: fields
+#endif
   ! declare internal variables
   real(kind=8) :: psi, U
   real(kind=8),dimension(3) :: B, E
   ! half_position coordinates: 1:x, 2:y, 3:z, 4:R, 5:Z, 6:phi 
   real(kind=8),dimension(6) :: half_position
   real(kind=8) :: scaling_factor !< in [s^2*C/(kg*m)]
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
   ! check if the particle is valid
   if(particle%i_elm.le.0) return
@@ -122,17 +141,23 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   ! calculate cylindrical coordinates from cartesian ones
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
-  call find_RZ_nearby(fields%node_list,fields%element_list,particle%x(1),&
-       particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
-       half_position(4),half_position(5),particle%st(1),particle%st(2),&
-       particle%i_elm,ifail)
+  !call find_RZ_nearby(fields%node_list,fields%element_list,particle%x(1),&
+  !     particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
+  !     half_position(4),half_position(5),particle%st(1),particle%st(2),&
+  !     particle%i_elm,ifail)
   ! check if the particle is lost, exit if it is the case
   if(particle%i_elm.le.0) return
   ! copy RZPHI coordinates in particles
   particle%x = half_position(4:6)
   ! compute magnetic and electric fields
+#ifdef USE_GPU
+  call calc_EBpsiU_linear(fields, time+5.d-1*timestep,particle%i_elm,&
+       particle%st,particle%x(3),E,B,psi,U)
+#else
   call fields%calc_EBpsiU(time+5.d-1*timestep,particle%i_elm,&
        particle%st,particle%x(3),E,B,psi,U)
+#endif
+
   ! compute the second half-step  
   call volume_preserving_second_half_step_jorek(particle, &
     half_position(1:3),scaling_factor,                    &
@@ -142,10 +167,10 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   ! transform back from cartesian to cylindrical coordinates
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
-  call find_RZ_nearby(fields%node_list,fields%element_list,particle%x(1), &
-    particle%x(2),particle%st(1),particle%st(2),particle%i_elm,           &
-    half_position(4),half_position(5),particle%st(1),particle%st(2),      &
-    particle%i_elm,ifail)
+  !call find_RZ_nearby(fields%node_list,fields%element_list,particle%x(1), &
+  !  particle%x(2),particle%st(1),particle%st(2),particle%i_elm,           &
+  !  half_position(4),half_position(5),particle%st(1),particle%st(2),      &
+  !  particle%i_elm,ifail)
   ! copy new RZPHI position into particle
   particle%x = half_position(4:6)
 end subroutine volume_preserving_push_jorek

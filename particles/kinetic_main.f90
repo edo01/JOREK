@@ -228,10 +228,9 @@ jorek_stepper_event    = new_event_ptr(jorek_stepper,    start = sim%time)
 
 
 #ifdef USE_GPU
-select type (particles => sim%groups(1)%particles)
-type is (particle_kinetic_leapfrog)
-
-!$omp target data map(alloc: sim%groups(1)%particles(:))
+!select type (particles => sim%groups(1)%particles)
+!type is (particle_kinetic_leapfrog)
+!!$omp target data map(alloc: sim%groups(:)%particles(:))
 #endif
 
 !***********************************************************************
@@ -346,9 +345,9 @@ do while (.not. sim%stop_now)
 end do ! while
 
 #ifdef USE_GPU
-!$omp end target data
+!!$omp end target data
 
-end select
+!end select
 #endif
 
 

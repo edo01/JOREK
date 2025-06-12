@@ -674,6 +674,9 @@ pure subroutine mode_moivre(phi,HZ)
   real*8     :: phase
   complex*16 :: H_complex
   integer    :: i
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
   HZ(1) = 1.d0
 

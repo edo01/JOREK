@@ -52,6 +52,9 @@ pure function cayley_transform(alpha,vec)
   real(kind=8),dimension(3,3) :: cayley_transform !< Cayley transform of vec
   ! defining internal variables
   real(kind=8),dimension(3,3) :: A,B !< (I-alpha*B)^(-1) and (I+alpha*B)
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
 ! computing (I+alpha*B)
   B(1:3,1) = (/1.d0,-alpha*vec(3),alpha*vec(2)/)
