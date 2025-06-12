@@ -9,9 +9,6 @@ module phys_module
 
   implicit none
 
-#ifdef USE_GPU
-  !$omp declare target(F0, mode, central_mass, central_density)
-#endif
 
   !> @name Various parameters
   real*8  :: eta                  !< Resistivity at plasma cener (normalized)
