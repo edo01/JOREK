@@ -202,7 +202,11 @@ contains
                                   sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + sim%groups(group_num)%mass**2)
   
           ! Uncomment for PCS
+#ifdef USE_GPU
           call calc_EBpsiU_linear(fields, sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+#else
+          call sim%fields%calc_EBpsiU(sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+#endif
           B_norm2 = B/norm2(B)
   
           v_par   = dot_product(cylindrical_velocity, B_norm2)
@@ -238,8 +242,12 @@ contains
             enddo
           enddo
 #endif
+
+#ifdef USE_GPU
           call volume_preserving_push_jorek(particles(j),fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
-  
+#else 
+          call volume_preserving_push_jorek(particles(j),sim%fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
+#endif
         end do !< steps
       end do !< particles
 #ifndef USE_GPU
