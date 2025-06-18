@@ -27,10 +27,10 @@ implicit none
 real*8, intent(out) :: density_tot, density_in, density_out,  pressure, pressure_in, pressure_out
 real*8, intent(out) :: kin_par_tot, kin_par_in, kin_par_out, mom_par_tot, mom_par_in, mom_par_out
 
-type (type_node_list)    :: node_list
-type (type_element_list) :: element_list
-type (type_element)      :: element
-type (type_node)         :: nodes(n_vertex_max)
+type (type_node_list)         :: node_list
+type (type_element_list)      :: element_list
+type (type_element)           :: element
+type (type_node), allocatable :: nodes(:) ! Make it allocatable to fix nvfortran bug when entering in the parallel region
 
 real*8  :: x_g(n_gauss,n_gauss),        x_s(n_gauss,n_gauss),        x_t(n_gauss,n_gauss)
 real*8  :: y_g(n_gauss,n_gauss),        y_s(n_gauss,n_gauss),        y_t(n_gauss,n_gauss)
@@ -140,6 +140,9 @@ ife_max   = min((my_id +1) * ife_delta, element_list%n_elements)
 !> Initialise the minimum of all variables
 varmin(:) = 1.d50; varmax(:) = -1.d50; varminout(:) = 1.d50; varmaxout(:) = -1.d50;
 
+!> Allocate the nodes array before the parallel region
+allocate(nodes(n_vertex_max))
+
 !$omp parallel default(none)                                                                   &                                                                  
 !$omp   shared(element_list,node_list, H, H_s, H_t, HZ, HZ_p, ife_min, ife_max, xpoint, xcase, &
 !$omp          ES, my_id, use_pellet, psi_limit, delta_phi,                                    &
@@ -173,7 +176,7 @@ varmin(:) = 1.d50; varmax(:) = -1.d50; varminout(:) = 1.d50; varmaxout(:) = -1.d
 !$omp           rn0, source_neutral, source_neutral_drift, source_neutral_arr, source_neutral_drift_arr, &
 #endif
 !$omp           omp_nthreads,omp_tid)                                                          &
-!$omp   firstprivate(nodes) !< so that these nodes are unallocated at the start of the omp region and can be explicitly allocated/deallocated 
+!$omp   private(nodes)
 
 
 #ifdef _OPENMP
@@ -448,6 +451,8 @@ do ife = ife_min, ife_max
 enddo
 !$omp end do
 !$omp end parallel
+
+deallocate(nodes)
 
 call MPI_AllReduce(D_int,density_in,1,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
 call MPI_AllReduce(D_ext,density_out,1,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)

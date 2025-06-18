@@ -63,11 +63,13 @@ logical, optional,            intent(in)    :: exclude_n0     !< Ommit n=0 compo
 
 
 ! --- Local variables
-type (type_element)      :: element, elm_k
-type (type_node)         :: nodes(n_vertex_max), node_k
-type (type_bnd_element)  :: bndelem
-type (type_surface_list) :: surface_list
-type (type_node) :: aux_nodes(n_vertex_max) 
+type (type_element)                   :: element, elm_k
+!> Make it allocatable to fix nvfortran bug when entering in the parallel region
+type (type_node), allocatable         :: nodes(:)
+type (type_node), allocatable         :: aux_nodes(:) 
+type (type_node)                      :: node_k
+type (type_bnd_element)               :: bndelem
+type (type_surface_list)              :: surface_list
 
 real*8  :: psi_axis, psi_bnd
 real*8  :: x_g(n_plane,n_gauss,n_gauss),        x_s(n_plane,n_gauss,n_gauss),        x_t(n_plane,n_gauss,n_gauss),        x_p(n_plane,n_gauss,n_gauss),         x_ss(n_plane,n_gauss,n_gauss),        x_tt(n_plane,n_gauss,n_gauss),        x_st(n_plane,n_gauss,n_gauss)
@@ -429,6 +431,9 @@ ife_max   = min((my_id +1) * ife_delta, element_list%n_elements)
 Tie_min_neg = 0.5*T_min_neg
 #endif
 
+!> Allocate arrays for nodes and auxiliary nodes before the parallel region
+allocate(nodes(n_vertex_max), aux_nodes(n_vertex_max))
+
 !$omp parallel default(none)                                                                                  &
 !$omp   shared(element_list,node_list, aux_node_list, H, H_s, H_t, HZ, HZ_p, ife_min, ife_max, xpoint, xcase, &
 !$omp          H_ss, H_tt, H_st, HZ_pp, HZ_coord, HZ_coord_p,                                                 &
@@ -518,8 +523,8 @@ Tie_min_neg = 0.5*T_min_neg
 !$omp           Arad_bg, Brad_bg, Crad_bg,                                                                    &
 !$omp           coef_prad_si,                                                                                 &
 #endif
-!$omp           omp_nthreads,omp_tid)                                                          &
-!$omp   firstprivate(nodes, aux_nodes) !< so that these nodes are unallocated at the start of the omp region and can be explicitly allocated/deallocated 
+!$omp           omp_nthreads,omp_tid)                                                                         &
+!$omp   private(nodes, aux_nodes)
 
 
 
@@ -1573,6 +1578,8 @@ aux_q0    = 0.d0; aux_jx0   = 0.d0; aux_jy0   = 0.d0; aux_jz0   = 0.d0; aux_jz0_
 enddo
 !$omp end do
 !$omp end parallel
+
+deallocate(nodes, aux_nodes)
 
 !------ Calculate boundary fluxes --------------------------------------------------------
 !--- go through the boundary elements

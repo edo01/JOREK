@@ -53,10 +53,11 @@ logical,                  intent(in)    :: freeboundary_equil
 logical,                  intent(in)    :: refinement       
 
 ! --- Local variables
-type (type_element)      :: element
-type (type_node)         :: nodes(n_vertex_max)
+type (type_element)               :: element
+! Make it allocatable to fix nvfortran bug when entering in the parallel region
+type (type_node), allocatable     :: nodes(:) 
+type (type_node), allocatable     :: nodes_father(:)
 type (type_element)      :: element_father
-type (type_node)         :: nodes_father(n_vertex_max)
 type (type_bnd_node_list)    :: bnd_node_list
 type (type_bnd_element_list) :: bnd_elm_list
 
@@ -251,13 +252,16 @@ if (my_id == 0) then
   
   endif   !--- end type -1 (GS equilibrium)
   
+  ! --- Allocate nodes and nodes_father arrays before entering parallel region
+  allocate(nodes(n_vertex_max), nodes_father(n_vertex_max))
+
   !$omp parallel default(none) &
-  !$omp shared(node_list, element_list, refinement, itype, ivar_in, ivar_out, i_harm, psi_axis, psi_bnd, xpoint, xcase, Z_xpoint, psi_axis_kl, &
-  !$omp        psi_bnd_kl, newton_method_GS, treat_axis, ES, a_mat, rhs_vec, ilarge) &
-  !$omp private(element, inode, ife, i_father, element_father, iv, inode_father, ELM, RHS, ELM_axis, ELM_bnd, node_out, i, j, &
-  !$omp         i_tor, index_ij, index_large_i, k, l, knode, k_tor, index_kl, index_large_k)                                                       &
-  !$omp firstprivate(nodes, nodes_father) !< so that these nodes are unallocated at the start of the omp region and can be explicitly allocated/deallocated 
-  
+  !$omp shared(node_list, element_list, refinement, itype, ivar_in, ivar_out, i_harm, psi_axis, psi_bnd, xpoint, xcase, Z_xpoint, psi_axis_kl,  &
+  !$omp        psi_bnd_kl, newton_method_GS, treat_axis, ES, a_mat, rhs_vec, ilarge)                                                            &
+  !$omp private(element, inode, ife, i_father, element_father, iv, inode_father, ELM, RHS, ELM_axis, ELM_bnd, node_out, i, j,                   &
+  !$omp         i_tor, index_ij, index_large_i, k, l, knode, k_tor, index_kl, index_large_k)                                                    &
+  !$omp private(nodes, nodes_father) 
+
   do iv = 1, n_vertex_max
     call init_node(nodes(iv), n_var)
     call init_node(nodes_father(iv), n_var)
@@ -870,6 +874,8 @@ if (my_id == 0) then
   if (associated(a_mat%jcn)) call tr_deallocatep(a_mat%jcn,"a_mat_eq",CAT_DMATRIX)
   if (associated(a_mat%val)) call tr_deallocatep(a_mat%val,"a_mat_eq",CAT_DMATRIX)
   if (associated(rhs_vec%val)) call tr_deallocatep(rhs_vec%val,"rhs_eq",CAT_DMATRIX)
+
+  deallocate(nodes, nodes_father)
 
 end if ! my_id == 0
   
