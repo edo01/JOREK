@@ -321,9 +321,10 @@ subroutine construct_matrix(mhd_sim, local_elms, n_local_elms, a_mat, rhs_vec, h
     
   !--- Internal variables
   type (type_element)               :: element
-  type (type_node)                  :: nodes(n_vertex_max), aux_nodes(n_vertex_max)
+  ! Make it allocatable to fix nvfortran bug when entering in the parallel region
+  type (type_node),allocatable      :: nodes(:), aux_nodes(:)
+  type (type_node),allocatable      :: nodes_father(:)
   type (type_element)               :: element_father
-  type (type_node)                  :: nodes_father(n_vertex_max)
   real*8,              allocatable  :: rhs_local(:)
   integer                           :: i, ife, iv, iv2, inode, inode1, inode2, knode, j, k, l, index_ij, index_kl
   integer                           :: index_node1, index_node2, index_min_loc, index_max_loc
@@ -438,6 +439,9 @@ subroutine construct_matrix(mhd_sim, local_elms, n_local_elms, a_mat, rhs_vec, h
   endif
 
 
+  ! --- Allocate nodes, aux_nodes and nodes_father before omp parallel region
+  allocate(nodes(n_vertex_max), aux_nodes(n_vertex_max), nodes_father(n_vertex_max))
+
  
   ! --- Declare shared and private variables for omp
   !$omp parallel default(none) &
@@ -453,7 +457,7 @@ subroutine construct_matrix(mhd_sim, local_elms, n_local_elms, a_mat, rhs_vec, h
   !$omp           ivar, itor, jvertex, jorder, jvar, jtor, random_element, n_var_reduced, v1, v2, im,      &
   !$omp           index_ij_model400_e, index_kl_model400_e,  tmp_rhs, tmp_elm, tmp_elm_v2_8,    &
   !$omp           i_v, i_harm                                                                              ) &
-  !$omp  firstprivate(nodes, aux_nodes, nodes_father)
+  !$omp  private(nodes, aux_nodes, nodes_father)
 
 ! --- omp id
 #ifdef _OPENMP
@@ -721,6 +725,8 @@ subroutine construct_matrix(mhd_sim, local_elms, n_local_elms, a_mat, rhs_vec, h
     call dealloc_node(aux_nodes(iv))
   enddo
   !$omp end parallel
+
+  deallocate(nodes_father, nodes, aux_nodes)
  
   ! --- Memory tracking
   call tr_vnorms("cm_A_bef_bc", a_mat%val, a_mat%nnz)
