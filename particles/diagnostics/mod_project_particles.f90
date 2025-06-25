@@ -1154,7 +1154,7 @@ logical, intent(in), optional        :: skip_factorisation
 logical,intent(in),optional          :: apply_dirichlet_condition_in
 
 type (type_element)      :: element
-type (type_node)         :: nodes(n_vertex_max)
+type (type_node), allocatable :: nodes(:) ! Make it allocatable to fix nvfortran bug when entering in the parallel region
 
 real*8, allocatable      :: ELM(:,:)
 real*8     :: wgauss2(n_gauss)
@@ -1223,6 +1223,10 @@ if (my_id_n .eq. 0) then
 
   if (apply_dirichlet_condition) write(*,*) 'applying Dirichlet conditions'
 
+
+  !> Allocate the nodes array before the parallel region
+  allocate(nodes(n_vertex_max))
+
   !$omp parallel do default(none) &
   !$omp shared(element_list, node_list, n_tor_local, i_tor_local,                       &
   !$omp        H, H_s, H_t, H_ss, H_st, H_tt, Hz, Hz_p, a_mat, wgauss2,                 &
@@ -1236,7 +1240,7 @@ if (my_id_n .eq. 0) then
   !$omp         wst, xjac, xjac_x, xjac_y, psi_x, psi_y, BB2, Bgrad_p, Bgrad_v_star,  &
   !$omp         index_ij, index_kl, ilarge, in_index, im_index,                       &
   !$omp         inode, index_large_i, knode, index_large_k)                           &
-  !$omp firstprivate(nodes)                                                           & 
+  !$omp private(nodes)                                                                & 
   !$omp schedule(static) 
   do i_elm=1,element_list%n_elements
     
@@ -1458,6 +1462,8 @@ if (my_id_n .eq. 0) then
   !$omp end parallel do
   ilarge = nz_AA
 
+  deallocate(nodes)
+
   if (apply_dirichlet_condition) then
 
     do i=1,node_list%n_nodes
@@ -1540,7 +1546,7 @@ logical, intent(in), optional        :: apply_dirichlet_condition_in
 real*8, intent(out), dimension(:), allocatable :: integral_weights !< these will be filled with the volume of each basis function
 real*8, intent(out)                  :: area, volume
 type (type_element)      :: element
-type (type_node)         :: nodes(n_vertex_max)
+type (type_node), allocatable :: nodes(:)  ! Make it allocatable to fix nvfortran bug when entering in the parallel region
 
 real*8, allocatable      :: ELM(:,:)
 real*8     :: wgauss2(n_gauss)
@@ -1626,6 +1632,10 @@ if (my_id_n .eq. 0) then
     if (apply_zonal)               write(*,*) 'using n=0 zonal flow equations'
     if (apply_dirichlet_condition) write(*,*) 'applying Dirichlet conditions'
 
+
+    !> Allocate the nodes array before the parallel region
+    allocate(nodes(n_vertex_max))
+
   !$omp parallel do default(none) &
   !$omp shared(element_list, node_list, n_tor_local, i_tor_local,                       &
   !$omp        apply_dirichlet_condition, zonal_factor, apply_zonal,                    &
@@ -1641,7 +1651,7 @@ if (my_id_n .eq. 0) then
   !$omp         wst, xjac, xjac_x, xjac_y, psi_x, psi_y, BB2, Bgrad_p, Bgrad_v_star,    &
   !$omp         index_ij, index_kl, ilarge, in_index, im_index, basisfunction_volume,   &
   !$omp         inode, index_large_i, knode, index_large_k, index_rhs)                  &
-  !$omp firstprivate(nodes)                                                             & 
+  !$omp private(nodes)                                                                  & 
   !$omp reduction(+:area,volume) schedule(static)
   do i_elm=1,element_list%n_elements
     
@@ -1879,6 +1889,8 @@ if (my_id_n .eq. 0) then
     enddo
   enddo
   !$omp end parallel do
+
+  deallocate(nodes)
 
   ! boundary conditions 
 
