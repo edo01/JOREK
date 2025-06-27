@@ -176,6 +176,7 @@ call find_edge_domains(node_list,element_list, edge_domains)!, discont_corner=.t
 if (sim%my_id .eq. 0) write(*,*) "n_domains = ", size(edge_domains,1)
 call edge_elm_template%prepare(node_list, element_list, edge_domains, nsub=6, nsub_toroidal=1)!,wall_albedo=wall_albedo)
 
+#ifdef ENABLE
 ! getting the wall actions from the input
 wall_act_groups =  wall_actions_from_config(sim, edge_elm_template)
 n_wall_act_groups = size(wall_act_groups,1)
@@ -204,6 +205,8 @@ do group_num=1, n_part_groups
   endif
 
 enddo ! n_part_groups
+
+#endif
 
 ! --- Set up feedback to the plasma (does not currently include recombination)
 jorek_feedback = new_projection(sim%fields%node_list, sim%fields%element_list, &
@@ -358,7 +361,11 @@ call write_to_outputfile(sim%my_id, "End of simulation")
   
 call write_simulation_hdf5(sim, 'part_restart.h5')
 
+#ifdef ENABLE
+
 deallocate(recomb_groups)
+
+#endif
 
 call sim%finalize()
 
