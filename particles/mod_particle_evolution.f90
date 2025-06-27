@@ -63,7 +63,7 @@ contains
     allocate(feedback_rhs,source=jorek_feedback%rhs)
     feedback_nodelist => jorek_feedback%node_list
     feedback_element_list => jorek_feedback%element_list
-    feedback_rhs       = 0.d0
+    feedback_rhs       = 0.d0 ! TODO: not sure this is necessary.
     
     !> count number of particles in system
     call with(sim, counter)
@@ -150,9 +150,25 @@ contains
     real*8    :: cylindrical_velocity(3), cylindrical_momentum(3)
     real*8    :: v_par, v_perp, gamma_m, proj_factor
     integer   :: j, k, m, n, ifail, i_tor, n_lost
+    real*8    :: group_mass
+    real*8    :: sim_time
+    real*8, allocatable ::  feedback_rhs_particles(:,:,:,:,:)
 
+    ! TODO: not used
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * MASS_PROTON * n_norm                  ! rho_SI = rho_norm * rho
+
+    !> save the group mass
+    group_mass = sim%groups(group_num)%mass
+    !> save the simulation time
+    sim_time = sim%time
+
+#ifdef USE_GPU
+    !> allocate feedback_rhs_particles for GPU
+    allocate(feedback_rhs_particles(n_degrees+1, n_vertex_max, size(sim%groups(group_num)%particles,1), n_tor, n_aux_var))
+    feedback_rhs_particles = 0.d0 ! TODO: not sure this is necessary.
+#endif 
+
 
     ! Loop over all particle groups
     n_lost = 0
@@ -176,77 +192,101 @@ contains
       !$omp reduction(+:feedback_rhs)
 #else
 
-    ! TODO: what about other fields?
+    ! TODO: what about other fields? Hannes suggested to use jorek_fields_interp_linear
     select type (fields => sim%fields)
     type is (jorek_fields_interp_linear)
 
-      !allocate particles and fields on the gpu after select type
-      !$omp target data map(alloc: particles(:), fields)
+      ! TODO: PARTICLES are allocated on the GPU every time we evolve the REs! 
+      ! do we have a workaround for this? Is this a problem? 
 
+      !$omp target data map(alloc: HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,             & 
+      !$omp                        v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                 &
+      !$omp                        proj_factor, v_Ppar, v_Pperp, v_jPhi,                                    &
+      !$omp                        j, k, m, m, i_tor)                                                       &
+      !$omp map(tofrom: particles)                                                                          &
+      !$omp map(from: feedback_rhs_particles)                                                               &
+      !$omp map(to: fields, fields%element_list, fields%node_list, sim_time, group_mass, tstep_part_adj,    &
+      !$omp         nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                                   
 
-      !$omp target teams distribute parallel do map(tofrom: particles(:), fields)                            &
-      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, cylindrical_velocity,                          &
-      !$omp B_norm2, B, v_par, v_perp, gamma_m)
+      !> TODO: how is ifail handled ???
+      !> TODO: firstprivate or shared??
+
+      !$omp target teams distribute parallel do default(none)                               &
+      !$omp shared(particles, fields, feedback_rhs_particles)                               &
+      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,            &
+      !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                &
+      !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                   &
+      !$omp         j, k, m, n, i_tor)                                                      &
+      !$omp firstprivate(sim_time, group_mass, tstep_part_adj, nstep_particles,             &
+      !$omp              P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin, n_aux_var)  
 #endif
       do j=1,size(particles,1)
         do k=1,nstep_particles
-          if (particles(j)%i_elm .le. 0) exit ! MUST BE REMOVED!!!
+          if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
           call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
           call mode_moivre(particles(j)%x(3), HZ)
   
           ! Determines velocity in cylindrical coordinates
           cylindrical_momentum = vector_cartesian_to_cylindrical(particles(j)%x(3), particles(j)%p)
-          !> TODO: sim%groups(group_num)%mass should be declared above
+          !> TODO: group_mass should be declared above
           !> TODO: can dot_product and sqrt GPU implementation cause issues?
           cylindrical_velocity = cylindrical_momentum / &
-                                  sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + sim%groups(group_num)%mass**2)
+                                  sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
   
           ! Uncomment for PCS
 #ifdef USE_GPU
-          call calc_EBpsiU_linear(fields, sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+          call calc_EBpsiU_linear(fields, sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
 #else
-          call sim%fields%calc_EBpsiU(sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+          call sim%fields%calc_EBpsiU(sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
 #endif
           B_norm2 = B/norm2(B)
   
           v_par   = dot_product(cylindrical_velocity, B_norm2)
           v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
-#ifdef ENABLE
-  
+
           do n=1,n_degrees
             do m=1,n_vertex_max
-  
-              proj_factor = HH(m,n) * sim%fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight
-  
 
+#ifdef USE_GPU
+              proj_factor = HH(m,n) * fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight
+#else
+              proj_factor = HH(m,n) * sim%fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight
+#endif
               ! PCS for REs
               v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
               v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
   
               v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO
               
-              v_n     = proj_factor
-
+              !> TODO: v_n is not used
+              !v_n     = proj_factor
+              
               do i_tor = 1,n_tor
+
+#ifndef USE_GPU
                 feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
                 feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
                 feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
-
+#else
+                feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)   = feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+                feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)  = feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+                feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin)   = feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+#endif
                 !> inverse implementation from Hannes (TODO: reverse data structure of the projections generally)
                 ! feedback_rhs_inv(P_par_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(P_par_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_Ppar
                 ! feedback_rhs_inv(P_perp_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(P_perp_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_Pperp
                 ! feedback_rhs_inv(j_Phi_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(j_Phi_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_jPhi
 
               enddo
+
             enddo
           enddo
-#endif
 
 #ifdef USE_GPU
-          call volume_preserving_push_jorek(particles(j),fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
+          call volume_preserving_push_jorek(particles(j),fields,group_mass,sim_time,tstep_part_adj,ifail)
 #else 
-          call volume_preserving_push_jorek(particles(j),sim%fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
+          call volume_preserving_push_jorek(particles(j),sim%fields,group_mass,sim_time,tstep_part_adj,ifail)
 #endif
         end do !< steps
       end do !< particles
@@ -254,6 +294,26 @@ contains
       !$omp end parallel do 
 #else
       !$omp end target teams distribute parallel do
+
+      !!$omp target teams distribute parallel do default(none) &
+      !!$omp shared(particles, feedback_rhs_particles, feedback_rhs) &
+      !!$omp private(j, n, m, i_tor, P_par_idx_kin, P_perp_idx_kin, j_Phi_idx_kin)
+      !do j=1,size(particles,1)
+      !  do n=1,n_degrees
+      !    do m=1,n_vertex_max
+      !      do i_tor = 1,n_tor
+      !        !> copy feedback_rhs_particles to feedback_rhs
+!
+      !        !$omp atomic
+      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)
+      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin)  = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)
+      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin)
+      !        !$omp end atomic
+      !      enddo
+      !    enddo
+      !  enddo
+      !enddo
+      !!$omp end target teams distribute parallel do
 
       !$omp end target data
 
