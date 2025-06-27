@@ -1222,6 +1222,10 @@ real*8  :: HZ_coord(n_coord_tor), HZ_coord_p(n_coord_tor), HZ_coord_pp(n_coord_t
 real*8  :: xx1, xx2, ss
 integer :: kv, iv, kf, i_tor
 
+#ifdef USE_GPU
+!$omp declare target
+#endif
+
 ! Get toroidal and poloidal basis functions in (s, t, phi)
 call basisfunctions(s,t,G,G_s,G_t)
 HZ_coord(1)      = 1.d0

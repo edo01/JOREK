@@ -141,12 +141,12 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   ! calculate cylindrical coordinates from cartesian ones
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
-#ifdef ENABLE
+
   call find_RZ_nearby(fields%node_list,fields%element_list,particle%x(1),&
        particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
        half_position(4),half_position(5),particle%st(1),particle%st(2),&
        particle%i_elm,ifail)
-#endif
+
   ! check if the particle is lost, exit if it is the case
   if(particle%i_elm.le.0) return
   ! copy RZPHI coordinates in particles
@@ -169,12 +169,12 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   ! transform back from cartesian to cylindrical coordinates
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
-#ifdef ENABLE
+
   call find_RZ_nearby(fields%node_list,fields%element_list,particle%x(1), &
     particle%x(2),particle%st(1),particle%st(2),particle%i_elm,           &
     half_position(4),half_position(5),particle%st(1),particle%st(2),      &
     particle%i_elm,ifail)
-#endif
+
   ! copy new RZPHI position into particle
   particle%x = half_position(4:6)
 end subroutine volume_preserving_push_jorek

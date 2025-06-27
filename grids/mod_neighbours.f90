@@ -147,6 +147,10 @@ subroutine coord_in_neighbour(node_list,element_list,i_from,i_to,st)
   integer :: q_from, q_to !< Quadrants
   logical :: nb, co !< .true. if they have the same orientation (co or counter clockwise)
   real*8  :: x
+#ifdef USE_GPU
+  !$omp declare target
+#endif
+
 
   if (st(1) .gt. st(2)) then ! 1 or 2
     if (1.d0 - st(1) .gt. st(2)) then
@@ -168,7 +172,7 @@ subroutine coord_in_neighbour(node_list,element_list,i_from,i_to,st)
   ! Check once more that they are neighbours and determine the orientation
   call neighbours_side_co_counter(element_list,i_from,i_to,q_from,q_to,nb,co)
   if (.not. nb .or. q_to .eq. 0) then
-    write(*,"(A,i5,A,i5)") "ERROR IN element_list%element(", i_from, ")%neighbours to ", i_to
+    !write(*,"(A,i5,A,i5)") "ERROR IN element_list%element(", i_from, ")%neighbours to ", i_to
     i_to = 0
     return
   end if

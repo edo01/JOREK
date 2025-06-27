@@ -68,13 +68,21 @@ real*8  :: inv_st_jac_det, R_s, R_t, Z_s, Z_t
 real*8  :: st_step(2), x_step(2), x_tmp(2), st_new(2), x_new(2) ! x_step = (R,Z) of trial position
 real*8  :: err2, err2_old, dist(2), fact
 
+#ifdef USE_GPU
+!$omp declare target
+#endif
+
 ! Check if element is valid
 if (i_elm_old .lt. 1 .or. i_elm_old .gt. element_list%n_elements) then
 #if STELLARATOR_MODEL
   write(*,*) "ERROR: find_RZ is not implemented for stellarators"
   stop
 #else
-  call find_RZ(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+
+#ifndef USE_GPU
+  call find_RZ(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)  
+#endif
+
   return
 #endif
 end if
@@ -95,6 +103,7 @@ i_elm_new = i_elm_old ! start in the current element
 st_new = [s_old,t_old] ! start at the old position
 x_new = [R_new,Z_new]
 ! Find the jacobian at the current s and t position
+! secondo LUGR, questa funzione restituisce R_old e Z_old in x_step (quindi è inutile ma serve per R_s, R_t ecc..)
 call try_interp(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 err2 = dot_product(x_step-x_new,x_step-x_new)
 ifail=0
@@ -126,7 +135,11 @@ do newton_iter_number = 1, newton_iter_max
       write(*,*) "ERROR: find_RZ is not implemented for stellarators"
       stop
 #else
+
+#ifndef USE_GPU
       call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+#endif
+
       if (ifail .ne. 0) i_elm_new = 0
 #endif
     end if
@@ -151,7 +164,7 @@ do newton_iter_number = 1, newton_iter_max
       return
     end if
 #endif
-  else
+  else ! if not on the boundary
     st_new = st_new + st_step
     call try_interp(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
   end if
@@ -168,9 +181,13 @@ if (ieee_is_nan(err2)) then
   write(*,*) "ERROR: find_RZ is not implemented for stellarators"
   stop
 #else
+
+#ifndef USE_GPU
   !write(*,*) "WARNING: NaN encountered after newton iteration, using find_RZ"
   call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   if (ifail .eq. 0) ifail=2
+#endif
+
   return
 #endif
 endif
@@ -179,11 +196,15 @@ if (newton_iter_number .gt. newton_iter_max) then
   write(*,*) "ERROR: find_RZ is not implemented for stellarators"
   stop
 #else
+
+#ifndef USE_GPU
   !write(*,"(A,i4,A,i5,A,2g14.6,A,3g14.6)") "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
   !" using find_RZ", x_new, "err2(old)/convergence: ", err2, err2_old, err2_old/err2
     !write(*,"(A,2g16.8)") "Find_RZ at ", x_new
   call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   if (ifail .eq. 0) ifail=3
+#endif
+
   return
 #endif
 endif

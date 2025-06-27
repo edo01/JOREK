@@ -205,7 +205,7 @@ contains
       !$omp                        j, k, m, m, i_tor)                                                       &
       !$omp map(tofrom: particles)                                                                          &
       !$omp map(from: feedback_rhs_particles)                                                               &
-      !$omp map(to: fields, fields%element_list, fields%node_list, sim_time, group_mass, tstep_part_adj,    &
+      !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node, sim_time, group_mass, tstep_part_adj,    &
       !$omp         nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                                   
 
       !> TODO: how is ifail handled ???
@@ -235,6 +235,7 @@ contains
   
           ! Uncomment for PCS
 #ifdef USE_GPU
+          !> TODO: check if a function specific for the linear fields is needed  
           call calc_EBpsiU_linear(fields, sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
 #else
           call sim%fields%calc_EBpsiU(sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
@@ -265,9 +266,9 @@ contains
               do i_tor = 1,n_tor
 
 #ifndef USE_GPU
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+                feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
 #else
                 feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)   = feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
                 feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)  = feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
@@ -295,25 +296,25 @@ contains
 #else
       !$omp end target teams distribute parallel do
 
-      !!$omp target teams distribute parallel do default(none) &
-      !!$omp shared(particles, feedback_rhs_particles, feedback_rhs) &
-      !!$omp private(j, n, m, i_tor, P_par_idx_kin, P_perp_idx_kin, j_Phi_idx_kin)
-      !do j=1,size(particles,1)
-      !  do n=1,n_degrees
-      !    do m=1,n_vertex_max
-      !      do i_tor = 1,n_tor
-      !        !> copy feedback_rhs_particles to feedback_rhs
-!
-      !        !$omp atomic
-      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)
-      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin)  = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)
-      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin)
-      !        !$omp end atomic
-      !      enddo
-      !    enddo
-      !  enddo
-      !enddo
-      !!$omp end target teams distribute parallel do
+      !$omp target teams distribute parallel do default(none) &
+      !$omp shared(particles, feedback_rhs_particles, feedback_rhs) &
+      !$omp private(j, n, m, i_tor, P_par_idx_kin, P_perp_idx_kin, j_Phi_idx_kin)
+      do j=1,size(particles,1)
+        do n=1,n_degrees
+          do m=1,n_vertex_max
+            do i_tor = 1,n_tor
+              !> copy feedback_rhs_particles to feedback_rhs
+
+              !$omp atomic
+              feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)
+              feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin)  = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)
+              feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin)
+              !$omp end atomic
+            enddo
+          enddo
+        enddo
+      enddo
+      !$omp end target teams distribute parallel do
 
       !$omp end target data
 
