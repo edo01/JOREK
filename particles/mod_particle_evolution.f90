@@ -63,7 +63,7 @@ contains
     allocate(feedback_rhs,source=jorek_feedback%rhs)
     feedback_nodelist => jorek_feedback%node_list
     feedback_element_list => jorek_feedback%element_list
-    feedback_rhs       = 0.d0 ! TODO: not sure this is necessary.
+    feedback_rhs       = 0.d0
     
     !> count number of particles in system
     call with(sim, counter)
@@ -130,6 +130,9 @@ contains
 #ifdef USE_GPU
     use mod_fields_linear, only: jorek_fields_interp_linear
 #endif
+#ifdef USE_GPU_TEST
+    use hdf5_io_module
+#endif
     
     implicit none
     class(particle_sim), target, intent(inout)                :: sim
@@ -152,7 +155,19 @@ contains
     integer   :: j, k, m, n, ifail, i_tor, n_lost
     real*8    :: group_mass
     real*8    :: sim_time
-    real*8, allocatable ::  feedback_rhs_particles(:,:,:,:,:)
+#ifdef USE_GPU
+    !integer   :: batch_size
+    !real*8, allocatable ::  feedback_rhs_batch(:,:,:,:,:,:) ! batch_size ,n_aux, n_tor, n_vertex_max, n_degrees, i_elm last one must be aligned
+#endif
+#ifdef USE_GPU_TEST
+    real*8, allocatable :: feedback_rhs_linear(:)
+    integer(HID_T) fid
+    integer :: ierr
+#endif
+
+#ifdef USE_GPU
+    if (sim%my_id .eq. 0) write(*,*) 'INFO: REs evolution offloaded to GPU'
+#endif
 
     ! TODO: not used
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
@@ -164,16 +179,18 @@ contains
     sim_time = sim%time
 
 #ifdef USE_GPU
+    !batch_size = 1000
     !> allocate feedback_rhs_particles for GPU
-    allocate(feedback_rhs_particles(n_degrees+1, n_vertex_max, size(sim%groups(group_num)%particles,1), n_tor, n_aux_var))
-    feedback_rhs_particles = 0.d0 ! TODO: not sure this is necessary.
+    !> TODO: deallocate it!
+    !allocate(feedback_rhs_batch( n_degrees+1, n_vertex_max, size(sim%groups(group_num)%particles,1), n_tor, n_aux_var))
+    !feedback_rhs_batch = 0.d0 ! TODO: not sure this is necessary.
 #endif 
-
 
     ! Loop over all particle groups
     n_lost = 0
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
+
 
 #ifndef USE_GPU
       if(use_manual_random_seed) then
@@ -204,7 +221,7 @@ contains
       !$omp                        proj_factor, v_Ppar, v_Pperp, v_jPhi,                                    &
       !$omp                        j, k, m, m, i_tor)                                                       &
       !$omp map(tofrom: particles)                                                                          &
-      !$omp map(from: feedback_rhs_particles)                                                               &
+      !$omp map(from: feedback_rhs)                                                                         &
       !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node, sim_time, group_mass, tstep_part_adj,    &
       !$omp         nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                                   
 
@@ -212,7 +229,7 @@ contains
       !> TODO: firstprivate or shared??
 
       !$omp target teams distribute parallel do default(none)                               &
-      !$omp shared(particles, fields, feedback_rhs_particles)                               &
+      !$omp shared(particles, fields, feedback_rhs)                                         &
       !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,            &
       !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                &
       !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                   &
@@ -222,6 +239,7 @@ contains
 #endif
       do j=1,size(particles,1)
         do k=1,nstep_particles
+          if (sim%my_id .eq. 0 .and. j .eq. 1) write(*,*) 'time step: ', k
           if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
           call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
           call mode_moivre(particles(j)%x(3), HZ)
@@ -270,9 +288,11 @@ contains
                 feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
                 feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
 #else
-                feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)   = feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-                feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)  = feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-                feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin)   = feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+                !$omp atomic
+                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+                feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+                !$omp end atomic
 #endif
                 !> inverse implementation from Hannes (TODO: reverse data structure of the projections generally)
                 ! feedback_rhs_inv(P_par_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(P_par_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_Ppar
@@ -285,9 +305,9 @@ contains
           enddo
 
 #ifdef USE_GPU
-          call volume_preserving_push_jorek(particles(j),fields,group_mass,sim_time,tstep_part_adj,ifail)
+          !call volume_preserving_push_jorek(particles(j),fields,group_mass,sim_time,tstep_part_adj,ifail)
 #else 
-          call volume_preserving_push_jorek(particles(j),sim%fields,group_mass,sim_time,tstep_part_adj,ifail)
+          !call volume_preserving_push_jorek(particles(j),sim%fields,group_mass,sim_time,tstep_part_adj,ifail)
 #endif
         end do !< steps
       end do !< particles
@@ -296,32 +316,53 @@ contains
 #else
       !$omp end target teams distribute parallel do
 
-      !$omp target teams distribute parallel do default(none) &
-      !$omp shared(particles, feedback_rhs_particles, feedback_rhs) &
-      !$omp private(j, n, m, i_tor, P_par_idx_kin, P_perp_idx_kin, j_Phi_idx_kin)
-      do j=1,size(particles,1)
-        do n=1,n_degrees
-          do m=1,n_vertex_max
-            do i_tor = 1,n_tor
-              !> copy feedback_rhs_particles to feedback_rhs
-
-              !$omp atomic
-              feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_par_idx_kin)
-              feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin)  = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,P_perp_idx_kin)
-              feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)   = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + feedback_rhs_particles(n,m,j,i_tor,j_Phi_idx_kin)
-              !$omp end atomic
-            enddo
-          enddo
-        enddo
-      enddo
-      !$omp end target teams distribute parallel do
-
       !$omp end target data
 
     end select
 #endif
   
     end select
+
+#ifdef USE_GPU_TEST
+    !> save the feedback rhs to a file
+    allocate(feedback_rhs_linear(size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)* &
+                                 3),source=0.d0)
+
+    !> first we linearise the feedback_rhs  
+    do j=1,size(feedback_rhs,1)
+      do k=1,size(feedback_rhs,2)
+        do m=1,size(feedback_rhs,3)
+          do n=1,size(feedback_rhs,4)
+            feedback_rhs_linear((j-1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
+                                (k-1)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
+                                (m-1)*size(feedback_rhs,4) + n) = feedback_rhs(j,k,m,n,1) !< P_par
+            feedback_rhs_linear((j-1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
+                                (k-1)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
+                                (m-1)*size(feedback_rhs,4) + n + size(feedback_rhs_linear,1)/3) = feedback_rhs(j,k,m,n,2) !< P_perp
+            feedback_rhs_linear((j-1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
+                                (k-1)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
+                                (m-1)*size(feedback_rhs,4) + n + 2*size(feedback_rhs_linear,1)/3) = feedback_rhs(j,k,m,n,j_Phi_idx_kin)
+          enddo
+        enddo
+      enddo
+    enddo
+
+#ifdef USE_GPU
+    call HDF5_create(filename="rhs_gpu.h5",file_id=fid,ierr=ierr)
+#else
+    call HDF5_create(filename="rhs_cpu.h5",file_id=fid,ierr=ierr)
+#endif
+
+    if (ierr /= 0) then
+      write(*,*) "ERROR: Could not create HDF5 file for feedback rhs"
+      stop 1
+    endif
+
+    call HDF5_array1D_saving(fid, feedback_rhs_linear, size(feedback_rhs_linear), 'rhs')
+    call HDF5_close(fid)
+#endif 
+
+    
     
   end subroutine evolve_REs
 
