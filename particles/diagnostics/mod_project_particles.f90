@@ -500,8 +500,14 @@ function new_projection(node_list, element_list,                                
     new%i_tor_local = 2*i_tor(new%my_id+1) - 2       ! i_tor_local is the (starting) index in HZ
   endif
 
-  !< size of the node_list will be adjusted to fit rhs_f and rhs at the time of projection
-  allocate(new%node_list,    source=node_list)
+  !< size of the node_list will be adjusted to fit rhs_f and rhs at the time of projection  
+  !allocate(new%node_list, source=node_list) ! seems buggy
+  ! > TODO: find a different solution: if we change the structure of node_list, we need to
+  !> change the way we allocate it here
+  allocate(new%node_list)
+  allocate(new%node_list%node(node_list%n_nodes))
+  new%node_list%n_nodes = node_list%n_nodes
+  new%node_list%n_dof   = node_list%n_dof
   call make_deep_copy_node_list(node_list, new%node_list) 
 
   do inode = 1, new%node_list%n_nodes
