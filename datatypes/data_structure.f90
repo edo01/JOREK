@@ -45,12 +45,36 @@ module data_structure
   
 end type type_node
 
+  type type_node_gpu                             !< type definition of a node without allocatable arrays (for GPU)
+    real*8     :: x(n_coord_tor,n_degrees,n_dim)        !< x,y,z coordinates of points and additional nodal geometry
+    !> TODO: are we sure about n_var?
+    real*8     :: values(n_tor, n_degrees, n_var) !< Variable values and derivatives (contiguous)
+    real*8     :: deltas(n_tor, n_degrees, n_var) !< Change of variable values and derivatives in last timestep (contiguous)
+    integer    :: index(n_degrees)                !< index in the main matrix
+    integer    :: boundary                        !< = 1, 2 or 3 for boundary nodes.
+                                                  !< For wall-aligned grids, check routine update_boundary_types_final
+                                                  !< in grids/grid_utils/update_boundary_types.f90
+    integer    :: boundary_index                  !< index of the boundary node 
+    logical    :: axis_node                       !< Flag nodes that are on the axis (and can/need-to-be be stabilised)
+    integer    :: axis_dof                        !< which dof to enforce to zero
+    integer    :: parents(2)                      !< Parent nodes (used if node is constrained)"refinement"
+    integer    :: parent_elem                     !< which element do parent nodes belong to ? "refinement"
+    real*8     :: ref_lambda, ref_mu              !< Local coordinates of node inside the parent element. "refinement"
+    logical    :: constrained                     !< Constrained node or not..."refinement"
+  end type type_node_gpu  
+
   type type_node_list                                                        !< type definition of a list of nodes
     integer                                       :: n_nodes                 !< the number of nodes in the list
     integer                                       :: n_dof                   !< the total number of degrees of freedom
     type (type_node), dimension(:), allocatable   :: node                    !< an allocatable list of nodes
     
   end type type_node_list
+
+ type type_node_list_gpu                                                     !< type definition of a contiguous list of nodes for GPU
+    integer                                           :: n_nodes             !< the number of nodes in the list
+    integer                                           :: n_dof               !< the total number of degrees of freedom
+    type (type_node_gpu), dimension(:), allocatable   :: node                !< an allocatable list of nodes
+  end type type_node_list_gpu
 
   type type_element                               !< type definition for one elements
     integer :: vertex(n_vertex_max)               !< nodes of the corners
@@ -251,6 +275,23 @@ contains
 
   end subroutine init_node_list
 
+
+  !> TODO: is it possible to use a single subroutine for both CPU and GPU node lists? probably not
+  !> wrapper function for correctly initializing a node_list_gpu object
+  subroutine init_node_list_gpu(node_list_gpu, n_nodes, n_dof)
+    implicit none
+    type(type_node_list_gpu), intent(inout)  :: node_list_gpu
+    integer, intent(in)                      :: n_nodes
+    integer, intent(in)                      :: n_dof
+
+    node_list_gpu%n_nodes = n_nodes
+    node_list_gpu%n_dof = n_dof
+    
+    if (allocated(node_list_gpu%node)) call dealloc_node_list_gpu(node_list_gpu)
+    allocate(node_list_gpu%node(n_nodes))
+
+  end subroutine init_node_list_gpu
+
   !> wrapper function for correctly deallocating a node object
   subroutine dealloc_node(node)
     implicit none
@@ -272,6 +313,15 @@ contains
 
   end subroutine dealloc_node_list
 
+  !> wrapper function for correct deallocating a node_list_gpu object
+  subroutine dealloc_node_list_gpu(node_list_gpu)
+    implicit none
+    type(type_node_list_gpu), intent(inout)  :: node_list_gpu
+
+    deallocate(node_list_gpu%node)
+
+  end subroutine dealloc_node_list_gpu
+
   !> creates a deep copy of a node
   subroutine make_deep_copy_node(node_to_copy, node_copied_to)
     implicit none
@@ -287,6 +337,29 @@ contains
   end subroutine make_deep_copy_node
 
 
+  !> creates a deep copy of a node_gpu
+  subroutine make_deep_copy_node_to_gpu(node_to_copy, node_copied_to)
+    implicit none
+    type(type_node), intent(in)      :: node_to_copy
+    type(type_node_gpu), intent(inout)   :: node_copied_to
+
+    node_copied_to%x = node_to_copy%x
+    node_copied_to%values = node_to_copy%values
+    node_copied_to%deltas = node_to_copy%deltas
+    node_copied_to%index = node_to_copy%index
+    node_copied_to%boundary = node_to_copy%boundary
+    node_copied_to%boundary_index = node_to_copy%boundary_index
+    node_copied_to%axis_node = node_to_copy%axis_node
+    node_copied_to%axis_dof = node_to_copy%axis_dof
+    node_copied_to%parents = node_to_copy%parents
+    node_copied_to%parent_elem = node_to_copy%parent_elem
+    node_copied_to%ref_lambda = node_to_copy%ref_lambda
+    node_copied_to%ref_mu = node_to_copy%ref_mu
+    node_copied_to%constrained = node_to_copy%constrained
+
+  end subroutine make_deep_copy_node_to_gpu
+
+
   subroutine make_deep_copy_node_list(node_list_to_copy, node_list_copied_to)
     implicit none
     type(type_node_list), intent(in)      :: node_list_to_copy
@@ -298,6 +371,18 @@ contains
     enddo
 
   end subroutine make_deep_copy_node_list
+
+  subroutine make_deep_copy_node_list_to_gpu(node_list_to_copy, node_list_copied_to)
+    implicit none
+    type(type_node_list), intent(in)      :: node_list_to_copy
+    type(type_node_list_gpu), intent(inout)   :: node_list_copied_to
+    integer                               :: i
+
+    do i=1, node_list_to_copy%n_nodes
+      call make_deep_copy_node_to_gpu(node_list_to_copy%node(i), node_list_copied_to%node(i))
+    enddo
+
+  end subroutine make_deep_copy_node_list_to_gpu
 
 
   subroutine init_threads()

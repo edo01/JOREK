@@ -5,6 +5,7 @@ module mod_neighbours
   private
   public :: neighbours, update_neighbours
   public :: coord_in_neighbour
+  public :: coord_in_neighbour_gpu !> GPU version of coord_in_neighbour
 contains
 logical function neighbours(node_list,elm1,elm2,inb1,inb2)
 !-------------------------------------------------------
@@ -119,6 +120,73 @@ subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbo
   end if
 end subroutine neighbours_side_co_counter
 
+!> GPU version of coord_in_neighbour. Nothing changes except the
+!> declaration of the node_list type.
+subroutine coord_in_neighbour_gpu(node_list,element_list,i_from,i_to,st)
+  type (type_node_list_gpu),    intent(in)    :: node_list
+  type (type_element_list), intent(in) :: element_list
+  integer, intent(in)                  :: i_from
+  integer, intent(out)                 :: i_to !<  >0 if a neighbour exists on that side, -1 if search
+  real*8, intent(inout)                :: st(2)
+
+  integer :: q_from, q_to !< Quadrants
+  logical :: nb, co !< .true. if they have the same orientation (co or counter clockwise)
+  real*8  :: x
+#ifdef USE_GPU
+  !$omp declare target
+#endif
+
+
+  if (st(1) .gt. st(2)) then ! 1 or 2
+    if (1.d0 - st(1) .gt. st(2)) then
+      q_from = 1
+    else
+      q_from = 2
+    end if
+  else
+    if (1.d0 - st(1) .le. st(2)) then
+      q_from = 3
+    else
+      q_from = 4
+    end if
+  end if
+
+  i_to = element_list%element(i_from)%neighbours(q_from)
+  if (i_to .le. 0) return
+
+  ! Check once more that they are neighbours and determine the orientation
+  call neighbours_side_co_counter(element_list,i_from,i_to,q_from,q_to,nb,co)
+  if (.not. nb .or. q_to .eq. 0) then
+    !write(*,"(A,i5,A,i5)") "ERROR IN element_list%element(", i_from, ")%neighbours to ", i_to
+    i_to = 0
+    return
+  end if
+
+  ! x is the coordinate along the boundary from vertex i_side to i_side+1
+  select case (q_from)
+  case (1)
+    x = st(1)
+  case (2)
+    x = st(2)
+  case (3)
+    x = 1.d0 - st(1)
+  case (4)
+    x = 1.d0 - st(2)
+  end select
+
+  if (co) x = 1.d0-x ! if the vectors along the boundary are antiparallel
+
+  select case (q_to)
+  case (1)
+    st = [x,0.d0]
+  case (2)
+    st = [1.d0,x]
+  case (3)
+    st = [1.d0-x,1.d0]
+  case (4)
+    st = [0.d0,1.d0-x]
+  end select
+end subroutine coord_in_neighbour_gpu
 
 !> Convert s,t coordinates on the boundary of element i_from into s,t coordinates
 !> on the boundary of i_to.
@@ -147,9 +215,6 @@ subroutine coord_in_neighbour(node_list,element_list,i_from,i_to,st)
   integer :: q_from, q_to !< Quadrants
   logical :: nb, co !< .true. if they have the same orientation (co or counter clockwise)
   real*8  :: x
-#ifdef USE_GPU
-  !$omp declare target
-#endif
 
 
   if (st(1) .gt. st(2)) then ! 1 or 2

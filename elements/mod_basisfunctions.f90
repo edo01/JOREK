@@ -529,7 +529,11 @@ pure subroutine basisfunctions_2D_1_T(s, t, H, H_s, H_t)
   real*8, intent(out) :: H  (n_degrees,4)   !< Basis functions
   real*8, intent(out) :: H_s(n_degrees,4)   !< Basis functions derived with respect to s
   real*8, intent(out) :: H_t(n_degrees,4)   !< Basis functions derived with respect to t
-  
+#ifdef USE_GPU
+  !$omp declare target
+#endif
+
+
   ! --- CUBIC
   if (n_order .eq. 3) then
     !---------------------------------------------------------- vertex (1)

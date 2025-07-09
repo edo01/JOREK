@@ -1,7 +1,7 @@
 module mod_find_rz_nearby
   implicit none
   private
-  public :: find_rz_nearby
+  public :: find_rz_nearby, find_RZ_nearby_gpu
 contains
 !> Optimized subroutine to find st coordinates corresponding to x_new=[R_new, Z_new] using
 !! The previous values x_old=[R_old, Z_old], st_old(2), i_elm_old and checking adjacent elements first
@@ -68,21 +68,13 @@ real*8  :: inv_st_jac_det, R_s, R_t, Z_s, Z_t
 real*8  :: st_step(2), x_step(2), x_tmp(2), st_new(2), x_new(2) ! x_step = (R,Z) of trial position
 real*8  :: err2, err2_old, dist(2), fact
 
-#ifdef USE_GPU
-!$omp declare target
-#endif
-
 ! Check if element is valid
 if (i_elm_old .lt. 1 .or. i_elm_old .gt. element_list%n_elements) then
 #if STELLARATOR_MODEL
   write(*,*) "ERROR: find_RZ is not implemented for stellarators"
   stop
 #else
-
-#ifndef USE_GPU
-  call find_RZ(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)  
-#endif
-
+  call find_RZ(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   return
 #endif
 end if
@@ -103,7 +95,6 @@ i_elm_new = i_elm_old ! start in the current element
 st_new = [s_old,t_old] ! start at the old position
 x_new = [R_new,Z_new]
 ! Find the jacobian at the current s and t position
-! secondo LUGR, questa funzione restituisce R_old e Z_old in x_step (quindi è inutile ma serve per R_s, R_t ecc..)
 call try_interp(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 err2 = dot_product(x_step-x_new,x_step-x_new)
 ifail=0
@@ -135,11 +126,7 @@ do newton_iter_number = 1, newton_iter_max
       write(*,*) "ERROR: find_RZ is not implemented for stellarators"
       stop
 #else
-
-#ifndef USE_GPU
       call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
-#endif
-
       if (ifail .ne. 0) i_elm_new = 0
 #endif
     end if
@@ -164,7 +151,7 @@ do newton_iter_number = 1, newton_iter_max
       return
     end if
 #endif
-  else ! if not on the boundary
+  else
     st_new = st_new + st_step
     call try_interp(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
   end if
@@ -181,13 +168,9 @@ if (ieee_is_nan(err2)) then
   write(*,*) "ERROR: find_RZ is not implemented for stellarators"
   stop
 #else
-
-#ifndef USE_GPU
   !write(*,*) "WARNING: NaN encountered after newton iteration, using find_RZ"
   call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   if (ifail .eq. 0) ifail=2
-#endif
-
   return
 #endif
 endif
@@ -196,15 +179,11 @@ if (newton_iter_number .gt. newton_iter_max) then
   write(*,*) "ERROR: find_RZ is not implemented for stellarators"
   stop
 #else
-
-#ifndef USE_GPU
   !write(*,"(A,i4,A,i5,A,2g14.6,A,3g14.6)") "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
   !" using find_RZ", x_new, "err2(old)/convergence: ", err2, err2_old, err2_old/err2
     !write(*,"(A,2g16.8)") "Find_RZ at ", x_new
   call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   if (ifail .eq. 0) ifail=3
-#endif
-
   return
 #endif
 endif
@@ -235,4 +214,220 @@ else
   inv_st_jac_det = 1.d0/(jac)
 end if
 end subroutine try_interp
+
+subroutine find_RZ_nearby_gpu(node_list, element_list, R_old, Z_old, s_old, t_old, i_elm_old, &
+        R_new, Z_new, s_new, t_new, i_elm_new, ifail, phi)
+use data_structure
+use mod_neighbours
+use data_structure, only: type_node_list_gpu
+use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+implicit none
+!> Input parameters
+type (type_node_list_gpu),intent(in)    :: node_list
+type (type_element_list), intent(in)    :: element_list
+real*8,                   intent(in)    :: R_old, Z_old !< The old R,Z location
+real*8,                   intent(in)    :: R_new, Z_new !< The new R,Z location
+real*8,                   intent(in)    :: s_old, t_old !< The old st location (used to compute a guess)
+integer,                  intent(in)    :: i_elm_old
+real*8,                   intent(out)   :: s_new, t_new !< The found new coordinates
+integer,                  intent(out)   :: i_elm_new
+integer,                  intent(out)   :: ifail !< if ifail = -1 the position could not be found in the grid.
+!< ifail > 0 indicates various other cases
+real*8, optional,         intent(in)    :: phi
+
+!> Accuracy defaults (tolerances are squared!, units of element size)
+real*8,  parameter :: element_tolerance   = 1.d-24 !< Tolerance for finding a position inside an element
+integer, parameter :: newton_iter_max     = 8 !< Number of iterations to try
+
+!> Internal variables
+real*8  :: p              
+integer :: newton_iter_number, i_elm_tmp
+real*8  :: inv_st_jac_det, R_s, R_t, Z_s, Z_t
+real*8  :: st_step(2), x_step(2), x_tmp(2), st_new(2), x_new(2) ! x_step = (R,Z) of trial position
+real*8  :: err2, err2_old, dist(2), fact
+
+#ifdef USE_GPU
+!$omp declare target
+#endif
+
+! Check if element is valid
+if (i_elm_old .lt. 1 .or. i_elm_old .gt. element_list%n_elements) then
+#if STELLARATOR_MODEL
+  write(*,*) "ERROR: find_RZ is not implemented for stellarators"
+  stop
+#else
+
+#ifndef USE_GPU
+  call find_RZ(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)  
+#else
+  write(*,*) "WARNING: element not valid, but find_RZ is not implemented for GPU"
+  i_elm_new = 0
+#endif
+
+  return
+#endif
+end if
+
+if (present(phi)) then
+  p = phi
+else
+#if STELLARATOR_MODEL
+  write(*,*) "Toroidal angle phi must be defined for stellarator models"
+  stop
+#endif
+  p = 0.0
+endif
+
+! Setup initial values
+x_step = [R_old,Z_old] ! start at the current position
+i_elm_new = i_elm_old ! start in the current element
+st_new = [s_old,t_old] ! start at the old position
+x_new = [R_new,Z_new]
+! Find the jacobian at the current s and t position
+call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+err2 = dot_product(x_step-x_new,x_step-x_new)
+ifail=0
+
+
+! Newton iteration to find s and t in or out of this element
+do newton_iter_number = 1, newton_iter_max
+  ! Perform newton iteration by calculating the inverse of the jacobian matrix explicitly
+  err2_old = err2
+
+  ! Calculate the trial newton step
+  st_step(1) = ( Z_t * (x_new(1)-x_step(1)) - R_t * (x_new(2)-x_step(2))) * inv_st_jac_det
+  st_step(2) = (-Z_s * (x_new(1)-x_step(1)) + R_s * (x_new(2)-x_step(2))) * inv_st_jac_det
+
+  ! Limit this step if it goes outside of the element
+  dist = merge(1-st_new,st_new,st_step .gt. 0) ! dist = 1-s if step > 0, s if step < 0 (distance to 0 or 1)
+  fact = maxval(abs(st_step)/max(dist,1d-30)) ! if fact>=1 we are on the boundary
+  ! (it is the overshoot: i.e. how many times we overshoot the boundary with one st_step)
+
+  if (fact .ge. 1.d0-1d-12) then
+    st_new = st_new + st_step/fact
+#ifdef DEBUG
+    call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_tmp,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+#endif
+    i_elm_tmp = i_elm_new
+    call coord_in_neighbour_gpu(node_list,element_list,i_elm_tmp,i_elm_new,st_new)
+    if (i_elm_new .lt. 0) then
+#if STELLARATOR_MODEL
+      write(*,*) "ERROR: find_RZ is not implemented for stellarators"
+      stop
+#else
+
+#ifndef USE_GPU
+    call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+#else
+    write(*,*) "WARNING: impossible finding a neighbour, but find_RZ is not implemented for GPU"
+    i_elm_new = 0
+#endif
+
+      if (ifail .ne. 0) i_elm_new = 0
+#endif
+    end if
+    if (i_elm_new .eq. 0) then ! No element on that side, particle is lost
+      i_elm_new = - i_elm_tmp ! Save position of particle
+      ! Calculate new R and Z in x_new
+      call try_interp_gpu(node_list,element_list,i_elm_tmp,st_new,p,x_new,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+      ! Set new element-local coordinates for the point on the axis
+      s_new = st_new(1)
+      t_new = st_new(2)
+      ifail = -1
+      return
+    end if
+
+    call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+#ifdef DEBUG 
+    if (norm2(x_step-x_tmp) .gt. 1d-8) then
+      !write(*,*) "ERROR on element edge crossing", x_step, x_tmp, norm2(x_step-x_tmp), &
+      !i_elm_new, i_elm_old, i_elm_tmp, "deleting particle"
+      !call exit(1)
+      i_elm_new = 0
+      return
+    end if
+#endif
+  else ! if not on the boundary
+    st_new = st_new + st_step
+    call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+  end if
+  err2 = dot_product(x_step-x_new,x_step-x_new)
+  s_new = st_new(1)
+  t_new = st_new(2)
+
+  if (err2 < element_tolerance) exit
+enddo
+
+
+if (ieee_is_nan(err2)) then
+#if STELLARATOR_MODEL
+  write(*,*) "ERROR: find_RZ is not implemented for stellarators"
+  stop
+#else
+
+#ifndef USE_GPU
+  !write(*,*) "WARNING: NaN encountered after newton iteration, using find_RZ"
+  write(*,*) "WARNING: NaN encountered after newton iteration ", newton_iter_number, " and element ", i_elm_new
+  call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+  if (ifail .eq. 0) ifail=2
+#else
+  write(*,*) "WARNING: NaN encountered after newton iteration ", newton_iter_number, " and element ", i_elm_new
+  i_elm_new = 0
+#endif
+
+  return
+#endif
+endif
+if (newton_iter_number .gt. newton_iter_max) then
+#if STELLARATOR_MODEL
+  write(*,*) "ERROR: find_RZ is not implemented for stellarators"
+  stop
+#else
+
+#ifndef USE_GPU
+  !write(*,"(A,i4,A,i5,A,2g14.6,A,3g14.6)") "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
+  !" using find_RZ", x_new, "err2(old)/convergence: ", err2, err2_old, err2_old/err2
+    !write(*,"(A,2g16.8)") "Find_RZ at ", x_new
+  call find_RZ(node_list,element_list,x_new(1),x_new(2),x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+  if (ifail .eq. 0) ifail=3
+#else
+  write(*,*) "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
+              " using find_RZ, but find_RZ is not implemented for GPU"
+  i_elm_new = 0
+#endif
+
+  return
+#endif
+endif
+end subroutine find_RZ_nearby_gpu
+
+
+!> Auxiliary subroutine for find_RZ_nearby_gpu
+pure subroutine try_interp_gpu(node_list,element_list,i_elm,st,p,x,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+use data_structure
+use mod_interp
+use data_structure, only: type_node_list_gpu
+implicit none
+!> Input parameters
+type (type_node_list_gpu),intent(in) :: node_list
+type (type_element_list), intent(in)    :: element_list
+real*8,                   intent(in)    :: st(2), p
+integer,                  intent(in)    :: i_elm
+real*8,                   intent(out)   :: x(2), R_s, R_t, Z_s, Z_t, inv_st_jac_det
+
+real*8 :: R_p, Z_p
+real*8 :: jac
+#ifdef USE_GPU
+!$omp declare target
+#endif
+
+call interp_RZP_1_gpu(node_list,element_list,i_elm,st(1),st(2),p,x(1),R_s,R_t,R_p,x(2),Z_s,Z_t,Z_p)
+! Guard against the determinant being close to zero
+jac = R_s * Z_t - R_t * Z_s
+if (abs(jac) .lt. 1d-8) then
+  inv_st_jac_det = sign(1d8, jac) 
+else
+  inv_st_jac_det = 1.d0/(jac)
+end if
+end subroutine try_interp_gpu
 end module mod_find_rz_nearby

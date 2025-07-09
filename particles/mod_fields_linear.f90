@@ -9,9 +9,7 @@ use mod_interp
 implicit none
 private
 public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_before_time
-#ifdef USE_GPU
-public calc_EBpsiU_linear
-#endif
+public calc_EBpsiU_linear_gpu
 
 !> Action to read in the fields into sim%fields
 type, extends(action) :: read_jorek_fields_interp_linear
@@ -45,16 +43,20 @@ type, extends(fields_base) :: jorek_fields_interp_linear
 end type jorek_fields_interp_linear
 contains
 
-#ifdef USE_GPU
 !> Calculates the electric and magnetic fields at a specific position
 !> in the jorek element `i_elm` at `st`.
-pure subroutine calc_EBpsiU_linear(fields, time, i_elm, st, phi, E, B, psi, U)
-  use phys_module, only: F0, mode, central_mass, central_density
+pure subroutine calc_EBpsiU_linear_gpu(node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, E, B, psi, U)
+  use phys_module, only: F0, central_mass, central_density
   use constants, only: mu_zero, mass_proton
-  use mod_coordinate_transforms, only: transform_derivatives_st_to_RZ
-  use mod_chi
+  use data_structure, only: type_node_list_gpu
+
   ! Routine parameters
-  class(jorek_fields_interp_linear), intent(in) :: fields
+  type (type_node_list_gpu),intent(in)  :: node_list
+  type (type_element_list), intent(in)  :: element_list
+  real*8,                   intent(in)  :: time_now 
+  real*8,                   intent(in)  :: time_prev 
+  logical,                  intent(in)  :: static
+  logical,                  intent(in)  :: flag_zero_dpsidt
   real*8, intent(in)  :: time
   integer, intent(in) :: i_elm !< JOREK element index
   real*8, intent(in)  :: st(2) !< element-local coordinates
@@ -65,92 +67,55 @@ pure subroutine calc_EBpsiU_linear(fields, time, i_elm, st, phi, E, B, psi, U)
   real*8, intent(out) :: u !< velocity stream function in m/s
 
   ! Internal parameters
-#ifdef fullmhd
-  integer, parameter :: i_var(3) = [1,2,3]
-  real*8             :: P(3), P_s(3), P_t(3), P_phi(3), P_time(3) !Placeholders, differ in full MHD
-  real*8             :: A3, AR, AZ, A3_R, A3_Z, A3_t, AR_Z, AR_p, AR_t, AZ_R, AZ_P,AZ_t, Fprof
-#else
-  integer, parameter :: i_var(2) = [1,2]
+  !> Variab
+  !integer, parameter :: i_var(2) = [1,2]
+  integer            :: i_var(2)
   real*8             :: P(2), P_s(2), P_t(2), P_phi(2), P_time(2) ! Placeholder for evaluating variables and derivatives locally
-#endif
   ! Values
   real*8             :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
   ! Others
   real*8             :: inv_st_jac, R_inv
   real*8             :: psi_R, psi_Z, psi_phi, U_R, U_Z, U_phi, t_norm
-  real*8, dimension(0:n_order-1,0:n_order-1,0:n_order-1) :: chi
+#ifdef USE_GPU
   !$omp declare target 
+#endif
 
   t_norm  = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
 
   ! Interpolate the fields to get psi and U at the current position (and the
   ! changes u_n - u(n-1))
 
+  !> TODO: this is a workaround for the compiler not being able to handle the parameter array i_var.
+  i_var(1) = 1
+  i_var(2) = 2
 
-#ifdef fullmhd
-  call fields%calc_F_profile(i_elm,st(1),st(2),phi,Fprof)
-  !In full MHD equations are easier,
-  ! B = F/R e_\phi  + curl A
-  ! E=\partial_t A
-  !
-  !Interpolating A^3=psi=1, AR=2, AZ=3, including time derivatives
-  call fields%interp_PRZ(time, i_elm, i_var,3, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-
-  R_inv = 1.d0/R
-  inv_st_jac = 1.d0/(R_s * Z_t - R_t * Z_s)
-  A3=P(1)
-  AR=P(2)
-  AZ=P(3)
-  !Derivatives of A3
-  A3_R    = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
-  A3_Z    = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
-  A3_t    = P_time(1)
-  !Derivatives of AR
-  AR_Z    = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
-  AR_p    = P_phi(2)
-  AR_t    = P_time(2)
-  !Derivatives of AZ
-  AZ_R    = (  P_s(3) * Z_t - P_t(3) * Z_s ) * inv_st_jac
-  AZ_p    = P_phi(3)
-  AZ_t    = P_time(3)
-
-  B=[(A3_Z-AZ_p)*R_inv, (AR_p-A3_R)*R_inv, AZ_R-AR_Z + Fprof*R_inv]
-  E=[-AR_t, -AZ_t, -R_inv*A3_t]
-#else
-#if STELLARATOR_MODEL
-  call fields%interp_PRZP_1(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-#else
   R_phi = 0.0; Z_phi = 0.0
-  call fields%interp_PRZ(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-#endif
-  ! Calculate the derivatives to R and Z
 
+  call do_interp_PRZ_1_gpu(node_list, element_list, time_now, time_prev, static, &
+              time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+
+  !call do_interp_PRZ_1_gpu(node_list, fields%element_list, fields%time_now, fields%time_prev, fields%static, &
+  !            time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+  !call do_interp_PRZ_1(fields, time, i_elm, [1,2], 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+
+  ! Calculate the derivatives to R and Z
   R_inv = 1.d0/R
   inv_st_jac = 1.d0/(R_s * Z_t - R_t * Z_s)
+  
   psi_R    = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
   psi_Z    = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
   psi_phi  = P_phi(1) - R_phi*psi_R - Z_phi*psi_Z
   U_R      = (  P_s(2) * Z_t - P_t(2) * Z_s ) * inv_st_jac
   U_Z      = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
   U_phi    = P_phi(2) - R_phi*U_R - Z_phi*U_Z
-
+  
   ! Update psi and U
   psi = P(1)
   U   = P(2)/t_norm
 
   ! Set dpsi/dt to 0 if flag is true
-  if(fields%flag_zero_dpsidt) P_time(1) = 0.d0
+  if(flag_zero_dpsidt) P_time(1) = 0.d0
 
-#if STELLARATOR_MODEL
-  chi = get_chi(R,Z,phi,fields%node_list,fields%element_list,i_elm,st(1),st(2))
-
-  B = (/ chi(1,0,0)      + (psi_Z*chi(0,0,1) - psi_phi*chi(0,1,0))/(F0*R), &
-         chi(0,1,0)      - (psi_R*chi(0,0,1) - psi_phi*chi(1,0,0))/(F0*R), &
-         chi(0,0,1)/R    + (psi_R*chi(0,1,0) - psi_Z * chi(1,0,0))/F0         /)
-  
-  E     = [-U_R, -U_Z, -U_phi*R_inv]/t_norm
-  E     = E - P_time(1)/F0*(/ chi(1,0,0), chi(0,1,0), chi(0,0,1)*R_inv /) 
-#else
   ! Calculate the magnetic field (see http://jorek.eu/wiki/doku.php?id=reduced_mhd)
   B     = [+psi_Z, -psi_R, F0] * R_inv
 
@@ -158,14 +123,66 @@ pure subroutine calc_EBpsiU_linear(fields, time, i_elm, st, phi, E, B, psi, U)
   ! See http://jorek.eu/wiki/doku.php?id=u_phi
   E     = [-F0*U_R, -F0*U_Z, -F0*U_phi*R_inv]/t_norm
   E(3)  = E(3) - R_inv*P_time(1) ! because this is not normalized with t_norm
+
+end subroutine calc_EBpsiU_linear_gpu
+
+pure subroutine do_interp_PRZ_1_gpu(node_list, element_list, time_now, time_prev, static, &
+              time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+  use mod_interp, only: interp_PRZ_1_gpu
+  use constants, only: mu_zero, mass_proton
+  use phys_module, only: tstep, central_mass, central_density
+  use mod_linear, only: linear_interp_differentials
+  use mod_linear, only: linear_interp_differentials_dt
+
+
+  type (type_node_list_gpu),intent(in)  :: node_list
+  type (type_element_list), intent(in)  :: element_list
+  real*8,                   intent(in)  :: time_now 
+  real*8,                   intent(in)  :: time_prev 
+  logical,                  intent(in)  :: static
+
+  real*8,                   intent(in)  :: time !< Time at which to calculate this variable
+  integer,                  intent(in)  :: i_elm
+  integer,                  intent(in)  :: n_v, i_v(n_v)
+  real*8,                   intent(in)  :: s, t, phi
+  real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
+  real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
+
+  real*8                 :: df, dt
+  real*8, dimension(n_v) :: Pd, Pd_s, Pd_t, Pd_phi
+  real*8                 :: t_jorek
+#ifdef USE_GPU
+  !$omp declare target
 #endif
+  
+  ! JOREK time step in seconds
+  t_jorek = tstep*sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20)
 
-#endif
+  P_time = 0.d0
+  
+  !> interpolate values
+  call interp_PRZ_1_gpu(node_list,element_list,i_elm,i_v,n_v,s,t,phi,P,P_s,P_t,P_phi,R,R_s,R_t,Z,Z_s,Z_t)
 
-end subroutine calc_EBpsiU_linear
-
-#endif 
-
+  !> interpolate differentials
+  if(t_jorek .gt. 0.d0) then
+    call interp_PRZ_1_gpu(node_list,element_list,i_elm,i_v,n_v,s,t,phi, &
+      Pd,Pd_s,Pd_t,Pd_phi,R,R_s,R_t,Z,Z_s,Z_t,deltas=.true.)
+    if(abs(time_now-time_prev) .gt. 1d-10 .and. .not. static) then
+      !> compute time fraction df
+      dt = 1.d0/(time_now - time_prev)
+      df = (time_now - time)*dt
+      !> apply linear interpolation
+      P     = linear_interp_differentials(n_v,P,Pd,df)
+      P_s   = linear_interp_differentials(n_v,P_s,Pd_s,df)
+      P_t   = linear_interp_differentials(n_v,P_t,Pd_t,df)
+      P_phi = linear_interp_differentials(n_v,P_phi,Pd_phi,df)
+    else
+      dt = 1.d0/t_jorek
+    endif
+    !> compute time derivative
+    P_time = linear_interp_differentials_dt(n_v,Pd,dt) 
+  endif
+end subroutine do_interp_PRZ_1_gpu
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)

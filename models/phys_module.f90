@@ -10,8 +10,11 @@ module phys_module
   implicit none
 
 #ifdef USE_GPU
-  ! declare variables for calc_EBpsiU_linear 
+  ! declare variables for calc_EBpsiU_linear_gpu 
   !$omp declare target(F0, mode, central_mass, central_density)
+  
+  ! declare variables for do_interp_PRZ_1_gpu
+  !$omp declare target(tstep)
 #endif
 
   !> @name Various parameters

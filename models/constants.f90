@@ -33,4 +33,12 @@ module constants
   integer, parameter :: DOUBLE_NULL           = 3
   integer, parameter :: SYMMETRIC_XPOINT      = 100  ! Used for grid construction purposes; do not use as value for xcase in the input file!
 
+#ifdef USE_GPU
+  ! declare constants for do_interp_PRZ_1 
+  !$omp declare target (MASS_PROTON, MU_ZERO)
+
+  ! declare constants for evolve_REs
+  !$omp declare target (EL_CHG)
+#endif
+
 end module constants

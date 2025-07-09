@@ -11,6 +11,7 @@ implicit none
 
 private
 public :: volume_preserving_push_cartesian,volume_preserving_push_jorek
+public :: volume_preserving_push_jorek_gpu
 public :: volume_preserving_radiation_push_jorek
 public :: relativistic_kinetic_to_particle
 public :: gc_to_relativistic_kinetic
@@ -98,29 +99,30 @@ end subroutine volume_preserving_second_half_step_jorek
 !---------------------------------------------------------------------------
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA)
-subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail)
+subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, time_now, time_prev, static, flag_zero_dpsidt,mass,time,timestep,ifail)
   ! load functions
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
   use mod_coordinate_transforms, only: cylindrical_to_cartesian
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   use mod_fields
-  use mod_find_rz_nearby
-#ifdef USE_GPU
+  use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear
-#endif
+       calc_EBpsiU_linear_gpu
+  use data_structure, only: type_node_list_gpu, type_element_list
 
   ! declare input/output variables
   integer(kind=4),intent(inout) :: ifail
   class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
-#ifdef USE_GPU
-  ! TODO: what about other fields?
-  class(jorek_fields_interp_linear), intent(in) :: fields 
-#else
-  class(fields_base), intent(in) :: fields
-#endif
+  
+  type (type_node_list_gpu),intent(in)  :: node_list 
+  type (type_element_list), intent(in)  :: element_list
+  real*8,                   intent(in)  :: time_now 
+  real*8,                   intent(in)  :: time_prev 
+  logical,                  intent(in)  :: static
+  logical,                  intent(in)  :: flag_zero_dpsidt
+
   ! declare internal variables
   real(kind=8) :: psi, U
   real(kind=8),dimension(3) :: B, E
@@ -130,6 +132,84 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
 #ifdef USE_GPU
   !$omp declare target
 #endif
+
+  ! check if the particle is valid
+  if(particle%i_elm.le.0) return
+  ! transform the particle position from cylindrical to cartesian coordinates
+  half_position(1:3) = cylindrical_to_cartesian(particle%x)
+  ! compute first half-step
+  call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
+       mass,timestep,scaling_factor)
+       
+  ! calculate cylindrical coordinates from cartesian ones
+  half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+  ! find the (i_elm,s,t) coordinates
+
+  call find_RZ_nearby_gpu(node_list, element_list, particle%x(1),&
+       particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
+       half_position(4),half_position(5),particle%st(1),particle%st(2),&
+       particle%i_elm,ifail)
+  !call find_RZ_nearby_gpu(node_list,fields%element_list,particle%x(1),&
+  !     particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
+  !     half_position(4),half_position(5),particle%st(1),particle%st(2),&
+  !     particle%i_elm,ifail)
+
+  ! check if the particle is lost, exit if it is the case
+  if(particle%i_elm.le.0) return
+  ! copy RZPHI coordinates in particles
+  particle%x = half_position(4:6)
+  ! compute magnetic and electric fields
+
+  !call calc_EBpsiU_linear_gpu(fields, node_list, time+5.d-1*timestep,particle%i_elm,&
+  !     particle%st,particle%x(3),E,B,psi,U)
+  call calc_EBpsiU_linear_gpu(node_list, element_list, time_now, &
+                                      time_prev, static, flag_zero_dpsidt, &
+                                       time+5.d-1*timestep, particle%i_elm, particle%st, particle%x(3), E, B, psi, U)
+
+  ! compute the second half-step  
+  call volume_preserving_second_half_step_jorek(particle, &
+    half_position(1:3),scaling_factor,                    &
+    vector_cylindrical_to_cartesian(particle%x(3),E),     &
+    vector_cylindrical_to_cartesian(particle%x(3),B),     &
+    mass,timestep)
+  ! transform back from cartesian to cylindrical coordinates
+  half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+  ! find the (i_elm,s,t) coordinates
+
+  call find_RZ_nearby_gpu(node_list,element_list,particle%x(1), &
+    particle%x(2),particle%st(1),particle%st(2),particle%i_elm,           &
+    half_position(4),half_position(5),particle%st(1),particle%st(2),      &
+    particle%i_elm,ifail)
+
+  ! copy new RZPHI position into particle
+  particle%x = half_position(4:6)
+end subroutine volume_preserving_push_jorek_gpu
+
+
+!---------------------------------------------------------------------------
+!> This subroutine integrates a relativistic particle trajectory in JOREK
+!> fields using the Volume Preserving Algorithm (VPA)
+subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail)
+  ! load functions
+  use mod_coordinate_transforms, only: cartesian_to_cylindrical
+  use mod_coordinate_transforms, only: cylindrical_to_cartesian
+  use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
+  use mod_fields
+  use mod_find_rz_nearby
+
+  ! declare input/output variables
+  integer(kind=4),intent(inout) :: ifail
+  class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
+  ! declare input variables
+  real(kind=8),intent(in) :: mass, time, timestep
+
+  class(fields_base), intent(in) :: fields
+  ! declare internal variables
+  real(kind=8) :: psi, U
+  real(kind=8),dimension(3) :: B, E
+  ! half_position coordinates: 1:x, 2:y, 3:z, 4:R, 5:Z, 6:phi 
+  real(kind=8),dimension(6) :: half_position
+  real(kind=8) :: scaling_factor !< in [s^2*C/(kg*m)]
 
   ! check if the particle is valid
   if(particle%i_elm.le.0) return
@@ -152,13 +232,8 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   ! copy RZPHI coordinates in particles
   particle%x = half_position(4:6)
   ! compute magnetic and electric fields
-#ifdef USE_GPU
-  call calc_EBpsiU_linear(fields, time+5.d-1*timestep,particle%i_elm,&
-       particle%st,particle%x(3),E,B,psi,U)
-#else
   call fields%calc_EBpsiU(time+5.d-1*timestep,particle%i_elm,&
        particle%st,particle%x(3),E,B,psi,U)
-#endif
 
   ! compute the second half-step  
   call volume_preserving_second_half_step_jorek(particle, &

@@ -18,6 +18,10 @@ public :: interp_gvec !< interpolate equilibrium parameters imported from GVEC
 public :: sincosperiod_moivre, mode_moivre !< public for regtesting, used by interp_PRZ
 public :: interp_PRZ_combined !< same as interp, but for any variable, including R and Z
 
+!> TODO: make multiple versions of interp_PRZ_1
+public :: interp_PRZ_1_gpu !< GPU version of interp_PRZ_1
+public :: interp_RZP_1_gpu !< GPU version of interp_RZP_1
+
 interface interp
   module procedure interp_2,interp_1,interp_0_single_harmonic
 end interface interp
@@ -110,6 +114,88 @@ do kv = 1, n_vertex_max
   enddo
 enddo
 end subroutine interp_PRZ_0
+
+!> This subroutine interpolates some variables at a specific position within one element at a given position (s,t)
+pure subroutine interp_PRZ_1_gpu(node_list, element_list, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t, deltas)
+type (type_node_list_gpu),    intent(in)  :: node_list
+type (type_element_list), intent(in)  :: element_list
+integer,                  intent(in)  :: i_elm
+integer,                  intent(in)  :: n_v, i_v(n_v)
+real*8,                   intent(in)  :: s, t, phi
+real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
+real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
+logical, optional, intent(in)         :: deltas
+
+! --- Local variables
+real*8  :: H(n_degrees,4), H_s(n_degrees,4), H_t(n_degrees,4), HZ(n_tor), dHZ(n_tor)
+integer :: kv, iv, kf, i
+real*8  :: values(n_tor,n_degrees,n_v,n_vertex_max)
+real*8  :: xR(n_degrees,n_vertex_max), xZ(n_degrees,n_vertex_max)
+real*8  :: sizes(n_degrees), v, vp
+logical :: my_deltas
+#ifdef USE_GPU
+!$omp declare target
+#endif
+
+! 7% exec time
+call basisfunctions_T(s,t,H,H_s,H_t)
+
+P = 0.d0; P_s = 0.d0; P_t = 0.d0; P_phi = 0.d0
+
+! 7% exec time
+call sincosperiod_moivre(phi, HZ, dHZ)
+
+my_deltas = .false.
+if (present(deltas)) then
+  if (deltas) my_deltas = .true.
+end if
+
+! 30% exec time
+! Preload values and premultiply with sizes(:,kv)
+do kv = 1,n_vertex_max  ! 4 vertices
+  iv = element_list%element(i_elm)%vertex(kv)
+  sizes(:) = element_list%element(i_elm)%size(kv,:)
+
+  if (my_deltas) then
+    do i = 1, n_v
+      do kf=1,n_degrees
+        values(1:n_tor,kf,i,kv) = node_list%node(iv)%deltas(1:n_tor,kf,i_v(i)) * sizes(kf)
+      end do
+    end do
+  else
+    do i = 1, n_v
+      do kf=1,n_degrees
+        values(1:n_tor,kf,i,kv) = node_list%node(iv)%values(1:n_tor,kf,i_v(i)) * sizes(kf)
+      end do
+    end do
+  end if
+  xR(:,kv) = node_list%node(iv)%x(1,:,1) * sizes(:)
+  xZ(:,kv) = node_list%node(iv)%x(1,:,2) * sizes(:)
+end do
+
+! together 7%
+R   = sum(xR*H)
+R_s = sum(xR*H_s)
+R_t = sum(xR*H_t)
+Z   = sum(xZ*H)
+Z_s = sum(xZ*H_s)
+Z_t = sum(xZ*H_t)
+
+! 40% exec time
+do kv = 1, n_vertex_max
+  do i = 1, n_v
+    do kf = 1, n_degrees
+      v = dot_product(values(1:n_tor,kf,i,kv),HZ(1:n_tor))
+      P(i)     = P(i)     + v * H(kf, kv)
+      P_s(i)   = P_s(i)   + v * H_s(kf, kv)
+      P_t(i)   = P_t(i)   + v * H_t(kf, kv)
+      vp = dot_product(values(1:n_tor,kf,i,kv),dHZ(1:n_tor))
+      P_phi(i) = P_phi(i) + vp * H(kf, kv)
+    enddo
+  enddo
+enddo
+
+end subroutine interp_PRZ_1_gpu
 
 !> This subroutine interpolates some variables at a specific position within one element at a given position (s,t)
 pure subroutine interp_PRZ_1(node_list, element_list, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t, deltas)
@@ -595,6 +681,9 @@ pure subroutine sincosperiod_moivre(phi,HZ,dHZ)
   integer    :: i
   real*8     :: phase
   complex*16 :: H_complex
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
   HZ(1) = 1.d0
   dHZ(1) = 0.d0
@@ -1207,10 +1296,8 @@ pure subroutine interp_RZP_0(node_list,element_list,i_elm,s,t,phi,R,Z)
   end do
 end subroutine interp_RZP_0
 
-
-!> Calculates the interpolation within one element (i_elm) for a given position (s,t) in local coordinates
-pure subroutine interp_RZP_1(node_list,element_list,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
-type (type_node_list),    intent(in)  :: node_list
+pure subroutine interp_RZP_1_gpu(node_list,element_list,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
+type (type_node_list_gpu),    intent(in)  :: node_list
 type (type_element_list), intent(in)  :: element_list
 integer,                  intent(in)  :: i_elm
 real*8,                   intent(in)  :: s,t,phi
@@ -1225,6 +1312,56 @@ integer :: kv, iv, kf, i_tor
 #ifdef USE_GPU
 !$omp declare target
 #endif
+
+! Get toroidal and poloidal basis functions in (s, t, phi)
+call basisfunctions(s,t,G,G_s,G_t)
+HZ_coord(1)      = 1.d0
+HZ_coord_p(1)    = 0.d0
+do i_tor=1,(n_coord_tor-1)/2
+  HZ_coord(2*i_tor)        = + cos(mode_coord(2*i_tor)  *phi)
+  HZ_coord_p(2*i_tor)      = - float(mode_coord(2*i_tor))      * sin(mode_coord(2*i_tor)  *phi)
+  HZ_coord(2*i_tor+1)      = - sin(mode_coord(2*i_tor+1)*phi)
+  HZ_coord_p(2*i_tor+1)    = - float(mode_coord(2*i_tor+1))    * cos(mode_coord(2*i_tor+1)*phi)
+enddo
+
+R = 0.d0; R_s = 0.d0; R_t = 0.d0; R_p = 0.d0
+Z = 0.d0; Z_s = 0.d0; Z_t = 0.d0; Z_p = 0.d0
+
+do kv = 1,n_vertex_max  ! 4 vertices
+  iv = element_list%element(i_elm)%vertex(kv)  ! the node number
+  do kf = 1, n_degrees       ! 4 basis functions
+    do i_tor=1, n_coord_tor
+      xx1 = node_list%node(iv)%x(i_tor,kf,1)
+      xx2 = node_list%node(iv)%x(i_tor,kf,2)
+      ss  = element_list%element(i_elm)%size(kv,kf)
+      
+      R    = R    + xx1 * ss * G(kv,kf)    * HZ_coord(i_tor)
+      R_s  = R_s  + xx1 * ss * G_s(kv,kf)  * HZ_coord(i_tor)
+      R_t  = R_t  + xx1 * ss * G_t(kv,kf)  * HZ_coord(i_tor)
+      R_p  = R_p  + xx1 * ss * G(kv,kf)    * HZ_coord_p(i_tor)
+
+      Z    = Z    + xx2 * ss * G(kv,kf)    * HZ_coord(i_tor)
+      Z_s  = Z_s  + xx2 * ss * G_s(kv,kf)  * HZ_coord(i_tor)
+      Z_t  = Z_t  + xx2 * ss * G_t(kv,kf)  * HZ_coord(i_tor)
+      Z_p  = Z_p  + xx2 * ss * G(kv,kf)    * HZ_coord_p(i_tor)
+    end do
+  end do
+end do
+end subroutine interp_RZP_1_gpu
+
+!> Calculates the interpolation within one element (i_elm) for a given position (s,t) in local coordinates
+pure subroutine interp_RZP_1(node_list,element_list,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
+type (type_node_list),    intent(in)  :: node_list
+type (type_element_list), intent(in)  :: element_list
+integer,                  intent(in)  :: i_elm
+real*8,                   intent(in)  :: s,t,phi
+real*8,                   intent(out) :: R, R_s, R_t, R_p, Z, Z_s, Z_t, Z_p
+
+! --- Local variables
+real*8  :: G(4,n_degrees), G_s(4,n_degrees), G_t(4,n_degrees)
+real*8  :: HZ_coord(n_coord_tor), HZ_coord_p(n_coord_tor), HZ_coord_pp(n_coord_tor)
+real*8  :: xx1, xx2, ss
+integer :: kv, iv, kf, i_tor
 
 ! Get toroidal and poloidal basis functions in (s, t, phi)
 call basisfunctions(s,t,G,G_s,G_t)

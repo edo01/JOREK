@@ -120,15 +120,38 @@ contains
     
   end subroutine evolve_particle_group
 
+  !> Parallelization strategies to handle the feedback accumulation:
+  !> 1) Subdivide the particles into small batches and execute the loop over the batches sequentially. 
+  !>    Inside a batch the feedback_rhs array is replicated among the threads, and the accumulation is done completely in parallel.
+  !>    This new data structure has the following structure: (n_particles_batch, n_aux, n_tor, n_vertex_max, n_degrees +1, i_elm) in order to maximize the memory access efficiency.
+  !>    a) The batch data structure is resident in the GPU memory and accumulated FULLY in parallel inside a batch, but sequentially between batches. NO ATOMIC
+  !>    b) A final reduction is required to collapse the first dimension of the batch data structure.
+  !>    c) If inside a batch the particles start from the same element, a coalesced access to the feedback_rhs array can be achieved. Please note that this does not mean that 
+  !>       coalesced access to the feedback_rhs array is always achieved, since the particles may move to different elements during the evolution.
+  !>    d) Dimensional analysis: 16 poloidal dofs * 10^2 elements * 10 toroidal modes * 3 aux * 8 Bytes = 3.84*10^5 B = 384 kB per particle. Using a batch size of 10^5 particles, 
+  !>       the total memory footprint is 38.4 GB, which is still acceptable for the GPU memory. We can avoid to launch 10^7/10^5 = 100 batches, which is a lot of overhead, by cycling 
+  !>       over the batches, INSIDE THE KERNEL. 
+  !>    e) Is 10^5 particles per batch too small to occupy the GPU?
+  !>
+  !> 2) Same as 1, but now the feedback_rhs array is not replicated for the number of the particles in a batch, but for the number of batches. Each batch
+  !>    is processed in parallel, and the feedback_rhs array is accumulated in parallel between batches. Inside the batch, the accumulation still needs to be done with ATOMIC operations.
+  !>    At the end of the kernel, a final reduction is required to collapse the first dimension.
+  !>    a) Coalesced access to the feedback_rhs array may not be possible, since now we want to avoid the particles to start from the same element.
+  !>    b) To avoid cuncurrent access to the feedback_rhs array, we may want to put particles belonging to the same element in different batches. Please note that this does not mean that 
+  !>       cuncurrent access to the feedback_rhs array is not possible, since the particles may move to different elements during the evolution.
+  !>    c) Dimensional analysis: 16 poloidal dofs * 10^2 elements * 10 toroidal modes * 3 aux * 8 Bytes = 3.84*10^5 B = 384 kB per batch -> we can launch a thread for each particle!
+
   subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
     use mod_basisfunctions
-    use mod_particle_types, only: copy_particle_kinetic_leapfrog
+    use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
 #ifdef USE_GPU
     use mod_fields_linear, only: jorek_fields_interp_linear
+    use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
+    use phys_module, only: F0, mode, central_mass, central_density, tstep
 #endif
 #ifdef USE_GPU_TEST
     use hdf5_io_module
@@ -156,8 +179,7 @@ contains
     real*8    :: group_mass
     real*8    :: sim_time
 #ifdef USE_GPU
-    !integer   :: batch_size
-    !real*8, allocatable ::  feedback_rhs_batch(:,:,:,:,:,:) ! batch_size ,n_aux, n_tor, n_vertex_max, n_degrees, i_elm last one must be aligned
+    type(type_node_list_gpu) :: node_list_gpu
 #endif
 #ifdef USE_GPU_TEST
     real*8, allocatable :: feedback_rhs_linear(:)
@@ -166,7 +188,9 @@ contains
 #endif
 
 #ifdef USE_GPU
-    if (sim%my_id .eq. 0) write(*,*) 'INFO: REs evolution offloaded to GPU'
+    if (sim%my_id .eq. 0) write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
+    if (sim%my_id .eq. 0) write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
+    if( sim%my_id .eq. 0) write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
 #endif
 
     ! TODO: not used
@@ -179,17 +203,23 @@ contains
     sim_time = sim%time
 
 #ifdef USE_GPU
-    !batch_size = 1000
-    !> allocate feedback_rhs_particles for GPU
-    !> TODO: deallocate it!
-    !allocate(feedback_rhs_batch( n_degrees+1, n_vertex_max, size(sim%groups(group_num)%particles,1), n_tor, n_aux_var))
-    !feedback_rhs_batch = 0.d0 ! TODO: not sure this is necessary.
+    !> allocate node_list_linear
+    call init_node_list_gpu(node_list_gpu, sim%fields%node_list%n_nodes, sim%fields%node_list%n_dof)
+    !> copy the node_list to the GPU
+    call make_deep_copy_node_list_to_gpu(sim%fields%node_list, node_list_gpu)
 #endif 
 
     ! Loop over all particle groups
     n_lost = 0
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
+
+    !> Loop over all particles in the group and set the weight to 1
+    !> TODO: REMOVE THIS PART
+    do j=1,size(particles,1)
+      particles(j)%weight = 1.0
+      particles(j)%q = -1.0 !> default charge of the runaway electrons
+    enddo
 
 
 #ifndef USE_GPU
@@ -216,20 +246,25 @@ contains
       ! TODO: PARTICLES are allocated on the GPU every time we evolve the REs! 
       ! do we have a workaround for this? Is this a problem? 
 
-      !$omp target data map(alloc: HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,             & 
-      !$omp                        v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                 &
-      !$omp                        proj_factor, v_Ppar, v_Pperp, v_jPhi,                                    &
-      !$omp                        j, k, m, m, i_tor)                                                       &
-      !$omp map(tofrom: particles)                                                                          &
-      !$omp map(from: feedback_rhs)                                                                         &
-      !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node, sim_time, group_mass, tstep_part_adj,    &
-      !$omp         nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                                   
+      !!$omp  map(alloc: HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,             & 
+      !!$omp                        v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                 &
+      !!$omp                        proj_factor, v_Ppar, v_Pperp, v_jPhi,                                    &
+      !!$omp                        j, k, m, m, i_tor)                                                       &
+      !!$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node, sim_time,        &
+      
+      !$omp target data                                                                                     &
+      !$omp map(tofrom: particles, feedback_rhs)                                                            &
+      !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
+      !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)
+      
+      !> TODO: these are constanst, no need to move it every time. Move this map in the main
+      !$omp target update to(F0, mode, central_mass, central_density, tstep)                                   
 
       !> TODO: how is ifail handled ???
       !> TODO: firstprivate or shared??
 
       !$omp target teams distribute parallel do default(none)                               &
-      !$omp shared(particles, fields, feedback_rhs)                                         &
+      !$omp shared(particles, fields, feedback_rhs, node_list_gpu)                          &
       !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,            &
       !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                &
       !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                   &
@@ -239,7 +274,6 @@ contains
 #endif
       do j=1,size(particles,1)
         do k=1,nstep_particles
-          if (sim%my_id .eq. 0 .and. j .eq. 1) write(*,*) 'time step: ', k
           if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
           call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
           call mode_moivre(particles(j)%x(3), HZ)
@@ -254,12 +288,18 @@ contains
           ! Uncomment for PCS
 #ifdef USE_GPU
           !> TODO: check if a function specific for the linear fields is needed  
-          call calc_EBpsiU_linear(fields, sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+          !> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
+          !> TODO: a lot of computation is done in this function, can we optimize it? 
+          !> TODO: linearize values and deltas. now they are allocatables in an array so not contiguous
+          !call calc_EBpsiU_linear_gpu(fields, node_list_gpu, sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+          call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                                       sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
 #else
           call sim%fields%calc_EBpsiU(sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
 #endif
           B_norm2 = B/norm2(B)
-  
+
           v_par   = dot_product(cylindrical_velocity, B_norm2)
           v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
@@ -268,16 +308,31 @@ contains
             do m=1,n_vertex_max
 
 #ifdef USE_GPU
-              proj_factor = HH(m,n) * fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight
+              proj_factor = HH(m,n) * fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight ! TODO: not initialized correctly
 #else
               proj_factor = HH(m,n) * sim%fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight
 #endif
               ! PCS for REs
               v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
               v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-  
-              v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO
-              
+              v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO !> TODO: q is not initialized correctly
+              !> print all the variables
+              !write(*,*) "DEBUG: particle ", j, " step ", k, " i_elm ", particles(j)%i_elm
+              !write(*,*) "DEBUG: B = ", B(1), B(2), B(3)
+              !write(*,*) "DEBUG: B_norm2 = ", B_norm2(1), B_norm2(2), B_norm2(3)
+              !write(*,*) "DEBUG: norm2(B) = ", norm2(B)
+              !write(*,*) "DEBUG: cylindrical_velocity = ", cylindrical_velocity(1), cylindrical_velocity(2), cylindrical_velocity(3)
+              !write(*,*) "DEBUG: v_par = ", v_par
+              !write(*,*) "DEBUG: v_Ppar = ", v_Ppar
+              !write(*,*) "DEBUG: proj_factor = ", proj_factor
+              !write(*,*) "DEBUG: v_Pperp = ", v_Pperp
+              !write(*,*) "DEBUG: v_jPhi = ", v_jPhi
+              !write(*,*) "DEBUG: gamma_m = ", gamma_m
+              !write(*,*) "DEBUG: v_perp = ", v_perp
+              !write(*,*) "DEBUG: real(particles(j)%q, 8) = ", real(particles(j)%q, 8)
+              !write(*,*) "DEBUG: EL_CHG = ", EL_CHG
+              !write(*,*) "DEBUG: particles(j)%x(1) = ", particles(j)%x(1)
+
               !> TODO: v_n is not used
               !v_n     = proj_factor
               
@@ -300,14 +355,17 @@ contains
                 ! feedback_rhs_inv(j_Phi_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(j_Phi_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_jPhi
 
               enddo
-
             enddo
           enddo
-
+          
+          !> TODO: I have to decide if duplicate the methods is the best way to go or changing the signature with an ifdef 
 #ifdef USE_GPU
-          !call volume_preserving_push_jorek(particles(j),fields,group_mass,sim_time,tstep_part_adj,ifail)
+          !call volume_preserving_push_jorek_gpu(particles(j),fields,node_list_gpu,group_mass,sim_time,tstep_part_adj,ifail)
+          call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                                      group_mass, sim_time, tstep_part_adj, ifail)
 #else 
-          !call volume_preserving_push_jorek(particles(j),sim%fields,group_mass,sim_time,tstep_part_adj,ifail)
+          call volume_preserving_push_jorek(particles(j),sim%fields,group_mass,sim_time,tstep_part_adj,ifail)
 #endif
         end do !< steps
       end do !< particles
@@ -324,24 +382,26 @@ contains
     end select
 
 #ifdef USE_GPU_TEST
-    !> save the feedback rhs to a file
-    allocate(feedback_rhs_linear(size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)* &
-                                 3),source=0.d0)
 
-    !> first we linearise the feedback_rhs  
-    do j=1,size(feedback_rhs,1)
-      do k=1,size(feedback_rhs,2)
-        do m=1,size(feedback_rhs,3)
-          do n=1,size(feedback_rhs,4)
-            feedback_rhs_linear((j-1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
-                                (k-1)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
-                                (m-1)*size(feedback_rhs,4) + n) = feedback_rhs(j,k,m,n,1) !< P_par
-            feedback_rhs_linear((j-1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
-                                (k-1)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
-                                (m-1)*size(feedback_rhs,4) + n + size(feedback_rhs_linear,1)/3) = feedback_rhs(j,k,m,n,2) !< P_perp
-            feedback_rhs_linear((j-1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
-                                (k-1)*size(feedback_rhs,3)*size(feedback_rhs,4) + &
-                                (m-1)*size(feedback_rhs,4) + n + 2*size(feedback_rhs_linear,1)/3) = feedback_rhs(j,k,m,n,j_Phi_idx_kin)
+  if (sim%my_id .eq. 0) then
+    !check for NaNs in the feedback_rhs
+    if (any(feedback_rhs(:,:,:,:,:) /= feedback_rhs(:,:,:,:,:))) then
+      write(*,*) "ERROR: NaN found in feedback rhs"
+      !stop 1
+    endif
+
+    !> save the feedback rhs to a file
+    allocate(feedback_rhs_linear(size(feedback_rhs,3)*3))
+
+    !> Collapse on the element dimension and accumulate all the other dimensions
+    feedback_rhs_linear = 0.d0
+    do m=1,size(feedback_rhs,3)
+      do n=1,size(feedback_rhs,4)
+        do j=1,size(feedback_rhs,1)
+          do k=1,size(feedback_rhs,2)
+            feedback_rhs_linear((m-1)*3 + 1) = feedback_rhs_linear((m-1)*3 + 1) + feedback_rhs(j,k,m,n,1) !< P_par
+            feedback_rhs_linear((m-1)*3 + 2) = feedback_rhs_linear((m-1)*3 + 2) + feedback_rhs(j,k,m,n,2) !< P_perp
+            feedback_rhs_linear((m-1)*3 + 3) = feedback_rhs_linear((m-1)*3 + 3) + feedback_rhs(j,k,m,n,3) !< j_Phi
           enddo
         enddo
       enddo
@@ -360,7 +420,15 @@ contains
 
     call HDF5_array1D_saving(fid, feedback_rhs_linear, size(feedback_rhs_linear), 'rhs')
     call HDF5_close(fid)
+
+    deallocate(feedback_rhs_linear)
+    endif
 #endif 
+
+#ifdef USE_GPU
+    !> deallocate the node_list_gpu
+    call dealloc_node_list_gpu(node_list_gpu)
+#endif
 
     
     

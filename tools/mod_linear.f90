@@ -23,6 +23,9 @@ contains
     real(kind=8), dimension(n), intent(in) :: y_new, dy_new
     !> declare output variables
     real(kind=8), dimension(n) :: y
+#ifdef USE_GPU
+    !$omp declare target
+#endif
 
     !> compute linear interpolation
     y = y_new - df*dy_new
@@ -44,6 +47,9 @@ contains
     real(kind=8), intent(in)               :: inverse_dt
     !> declare output variables
     real(kind=8), dimension(n) :: dydt
+#ifdef USE_GPU
+    !$omp declare target
+#endif
 
     !> compute derivatives
     dydt = dy_new*inverse_dt
