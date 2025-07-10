@@ -14,7 +14,7 @@ module phys_module
   !$omp declare target(F0, mode, central_mass, central_density)
   
   ! declare variables for do_interp_PRZ_1_gpu
-  !$omp declare target(tstep)
+  !$omp declare target(tstep, mode_coord)
 #endif
 
   !> @name Various parameters
