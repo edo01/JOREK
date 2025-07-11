@@ -145,10 +145,11 @@ subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, tim
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu(node_list, element_list, particle%x(1),&
+  call find_RZ_nearby_gpu_inlined(node_list, element_list, particle%x(1),&
        particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
        half_position(4),half_position(5),particle%st(1),particle%st(2),&
        particle%i_elm,ifail)
+  
   !call find_RZ_nearby_gpu(node_list,fields%element_list,particle%x(1),&
   !     particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
   !     half_position(4),half_position(5),particle%st(1),particle%st(2),&
@@ -176,7 +177,7 @@ subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, tim
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_rz_nearby_gpu(node_list,element_list,particle%x(1), &
+  call find_RZ_nearby_gpu_inlined(node_list,element_list,particle%x(1), &
     particle%x(2),particle%st(1),particle%st(2),particle%i_elm,           &
     half_position(4),half_position(5),particle%st(1),particle%st(2),      &
     particle%i_elm,ifail)

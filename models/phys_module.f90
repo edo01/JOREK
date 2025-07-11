@@ -1123,5 +1123,12 @@ module phys_module
 
 
   contains
+
+  !> update the target physical module variables
+  subroutine update_target_phys_module_kinetic()
+#ifdef USE_GPU
+    !$omp target update to(F0, mode, central_mass, central_density, tstep, mode_coord)
+#endif
+  end subroutine update_target_phys_module_kinetic
   
 end module phys_module

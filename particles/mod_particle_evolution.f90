@@ -548,7 +548,7 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) 
       
       !> TODO: these are constanst, no need to move it every time. Move this update in the main (map or update??)
-      !$omp target update to(F0, mode, central_mass, central_density, tstep)                                   
+      !!$omp target update to(F0, mode, central_mass, central_density, tstep)                                   
 
       !>------------------------------
       !> STEP 1: Push the particles
@@ -557,15 +557,12 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !$omp target teams distribute parallel do default(none)             &
       !$omp shared(particles, fields, node_list_gpu,                      &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles) & 
-      !$omp private(ifail, j, k)                                                                          
+      !$omp private(ifail, j, k)                                          &
+      !$omp device(sim%gpu_id)                                                                    
       do j=1,size(particles,1)
         do k=1,nstep_particles
           if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
 
-          !write(*,*) "DEBUG: particle ", j, " step ", k, " i_elm ", particles(j)%i_elm
-          !write(*,*) "DEBUG: particles(j)%x = ", particles(j)%x(1), particles(j)%x(2), particles(j)%x(3)
-          !write(*,*) "DEBUG: particles(j)%p = ", particles(j)%p(1), particles(j)%p(2), particles(j)%p(3)
-          !write(*,*) "DEBUG: particles(j)%st = ", particles(j)%st(1), particles(j)%st(2)
           call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
                         fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
@@ -578,13 +575,14 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !> STEP 2: Accumulate the feedback rhs
       !>------------------------------
 
-      !$omp target teams distribute parallel do default(none)                               &
-      !$omp shared(particles, fields, feedback_rhs, node_list_gpu)                          &
-      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,            &
-      !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m,                &
-      !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                   &
-      !$omp         j, k, m, n, i_tor)                                                      &
-      !$omp firstprivate(sim_time, group_mass, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)  
+      !$omp target teams distribute parallel do default(none)                                 &
+      !$omp shared(particles, fields, feedback_rhs, node_list_gpu)                            &
+      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,              &
+      !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m,                         &
+      !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                     &
+      !$omp         j, k, m, n, i_tor)                                                        &
+      !$omp firstprivate(sim_time, group_mass, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)  &
+      !$omp device(sim%gpu_id)
       do j=1,size(particles,1)
         if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
         call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)

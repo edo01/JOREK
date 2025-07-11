@@ -55,6 +55,7 @@ type :: particle_sim
   integer :: my_id = 0
   integer :: n_mpi = 1 ! if not initialized, act as if there is no mpi
   real*8  :: wtime_start !< Clock time at the start of the program
+  integer :: gpu_id = -1 !< GPU id, if using OpenMP with GPUs, -1 if not using GPUs
 contains
   procedure,pass(sim) :: finalize
   procedure,pass(sim) :: initialize
@@ -189,6 +190,9 @@ subroutine initialize(sim,skip_jorek2help,my_id,n_mpi,do_jorek_init_in,skip_grou
   else
     if (.not. skip_group_config) call configure_particle_groups(sim)
   endif
+
+  !> GPU initialisation (after initialise_and_broadcast_parameters)
+  call init_gpu(sim%my_id, sim%gpu_id)
 
 end subroutine
 
@@ -370,5 +374,56 @@ function config_num_from_id(id) result(config_num)
   write(*,"(3A)") "ERROR: id ",id," not found among part_group_configs(:)%id (config_num_from_id)"
 
 end function config_num_from_id
+
+subroutine init_gpu(my_id, gpu_id)
+  use phys_module, only: update_target_phys_module_kinetic
+  use mpi, only: MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, MPI_INFO_NULL
+  !$ use omp_lib, only: omp_get_num_devices, omp_set_default_device
+  integer, intent(in) :: my_id
+  integer, intent(out) :: gpu_id 
+  
+  !> local variables
+  integer :: node_rank, node_size
+  integer :: node_comm, ierr
+
+#ifdef USE_GPU
+  ! --- Set the default device for OpenMP
+  ! --- Determine the 'node local' ID of each MPI proc
+  call MPI_COMM_SPLIT_TYPE(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,&
+                            MPI_INFO_NULL, node_comm, ierr)
+  
+  call MPI_COMM_RANK(node_comm, node_rank, ierr)
+  call MPI_COMM_SIZE(node_comm, node_size, ierr)
+  
+  if (my_id .eq. 0) then
+    write(*,*) "INFO: GPU initialisation"
+    write(*,*) "INFO: Number of GPUs available on the node: ", omp_get_num_devices()
+    write(*,*) "INFO: Number of MPI tasks on the node: ", node_size
+  end if
+
+  if (my_id .eq. 0) then
+    if (node_size .gt. omp_get_num_devices()) then 
+      write(*,*)  "Warning: More tasks than GPUs."
+      write(*,*)  "Tasks per node: ", node_size
+      write(*,*)  "GPUs per node: ", omp_get_num_devices()
+      write(*,*)  "Oversubscribing GPUs"
+    elseif(node_size .lt. omp_get_num_devices()) then
+      write(*,*)  "Warning: More GPUs than tasks."
+      write(*,*)  "Tasks per node: ", node_size
+      write(*,*)  "GPUs per node: ", omp_get_num_devices()
+      write(*,*)  "Not all GPUs will be used"
+    endif
+  endif
+
+  gpu_id = mod(node_rank, omp_get_num_devices())
+
+  ! --- Set the appropriate GPU as device 
+  call omp_set_default_device(gpu_id)
+  write(*,*) "Using GPU device ", gpu_id, " for MPI rank ", my_id
+#endif
+
+  call update_target_phys_module_kinetic()
+
+end subroutine init_gpu
 
 end module mod_particle_sim
