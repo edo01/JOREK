@@ -39,6 +39,9 @@ module constants
 
   ! declare constants for evolve_REs
   !$omp declare target (EL_CHG)
+
+  ! declare constants for volume_preserving_first_half_step_jorek
+  !$omp declare target (ATOMIC_MASS_UNIT,SPEED_OF_LIGHT)
 #endif
 
 end module constants

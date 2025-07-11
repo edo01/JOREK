@@ -86,7 +86,7 @@ contains
       call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, imp_q_idx)
       case ('rep')
 #ifdef USE_GPU
-      call evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+      call evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #else
       call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
@@ -455,16 +455,26 @@ contains
 !> 2) The second loop accumulates the feedback rhs
 !> This is done to avoid atomic operations on the feedback rhs array, which can be a bottleneck for performance.
 !> However, we are not accumulating the feedback rhs at every particle step, but only at the end of the evolution.
-subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
-    use mod_fields_linear, only: jorek_fields_interp_linear
+    use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu
     use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
     use phys_module, only: F0, mode, central_mass, central_density, tstep
+    !inlining
+    use mod_coordinate_transforms, only: cartesian_to_cylindrical
+    use mod_coordinate_transforms, only: cylindrical_to_cartesian
+    use mod_find_rz_nearby, only: find_RZ_nearby_gpu, find_RZ_nearby_gpu_inlined
+    use mod_pusher_tools, only: cayley_transform !< use full Cayley transform
+    ! timing
+    use mpi
+
+
+
 #ifdef USE_GPU_TEST
     use hdf5_io_module
 #endif
@@ -492,7 +502,22 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     real*8    :: group_mass
     real*8    :: sim_time
     type(type_node_list_gpu) :: node_list_gpu
-
+    !> inline
+    real*8 :: half_position(6)
+    real*8 :: B_cartesian(3), E_cartesian(3)
+    real*8 :: scaling_factor !< in [s^2*C/(kg*m)]
+    real*8 :: cayley_transform_mat_tmp(3,3) !< temporary matrix for the Cayley transform
+    !> SoA
+    real*8, allocatable           :: p_x(:,:)   !< particle position in real space
+    real*8, allocatable           :: p_p(:,:)   !< particle momentum in real space
+    real*8, allocatable           :: p_st(:,:)  !< particle position in the element
+    real*8, allocatable           :: p_weight(:) !< particle weight (i.e. number of particles)
+    integer, allocatable          :: p_i_elm(:) !< index in element_list. Negative indices indicate lost particles on the edge of - that element.
+    integer, allocatable          :: p_i_life(:) !< particle lifetime index (i.e. is this still the same particle?)
+    real*8, allocatable           :: p_t_birth(:) !< birth time of this particle
+    integer(kind=1),allocatable   :: p_q(:) !< charge [e]
+    real*8 :: start_time, end_time !< timing variables
+    
 #ifdef USE_GPU_TEST
     real*8, allocatable :: feedback_rhs_linear(:)
     integer(HID_T) fid
@@ -502,7 +527,7 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #ifdef USE_GPU
     if (sim%my_id .eq. 0) then
       write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
-      write(*,*) 'INFO: Using 2 LOOPS FOR REs kernel'
+      write(*,*) 'INFO: Using SoA 2 LOOPS FOR REs kernel'
       write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
       write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
       write(*,*) 'INFO: dimension of feedback_rhs: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
@@ -518,12 +543,13 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> save the simulation time
     sim_time = sim%time
 
-#ifdef USE_GPU
+    !> PREPARING GPU DATA STRUCTUREs
+    if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
+
     !> allocate node_list_linear
     call init_node_list_gpu(node_list_gpu, sim%fields%node_list%n_nodes, sim%fields%node_list%n_dof)
     !> copy the node_list to the GPU
     call make_deep_copy_node_list_to_gpu(sim%fields%node_list, node_list_gpu)
-#endif 
 
     ! Loop over all particle groups
     n_lost = 0
@@ -537,13 +563,43 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       particles(j)%q = -1.0 !> default charge of the runaway electrons
     enddo
 
+    !> Start timing the section
+    start_time = MPI_WTIME()
+
+    !> allocate the SoA data structures
+    allocate(p_x(size(particles,1),3))
+    allocate(p_p(size(particles,1),3))
+    allocate(p_st(size(particles,1),2))
+    allocate(p_weight(size(particles,1)))
+    allocate(p_i_elm(size(particles,1)))
+    allocate(p_i_life(size(particles,1)))
+    allocate(p_t_birth(size(particles,1)))
+    allocate(p_q(size(particles,1)))
+
+    !> copy the particles data to the SoA data structures
+    do j=1,size(particles,1)
+      p_x(j,:) = particles(j)%x
+      p_p(j,:) = particles(j)%p
+      p_st(j,:) = particles(j)%st
+      p_weight(j) = particles(j)%weight
+      p_i_elm(j) = particles(j)%i_elm
+      p_i_life(j) = particles(j)%i_life
+      p_t_birth(j) = particles(j)%t_birth
+      p_q(j) = particles(j)%q
+    enddo
+
+    end_time = MPI_WTIME()
+    if (sim%my_id .eq. 0) write(*,*) "Time taken by the initialization: ", end_time - start_time, " seconds"
+
+
     select type (fields => sim%fields)
     type is (jorek_fields_interp_linear)
       
       !> TODO: the optimal way would be to allocate the particles in the main, and update them before and after
       !>       the kernel execution. 
       !$omp target data                                                                                     &
-      !$omp map(tofrom: particles, feedback_rhs)                                                            &
+      !$omp map(tofrom: feedback_rhs,                                                                       &
+      !$omp             p_x, p_p, p_st, p_weight, p_i_elm, p_i_life, p_t_birth, p_q)                        &
       !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
       !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) 
       
@@ -554,18 +610,99 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !> STEP 1: Push the particles
       !>------------------------------
 
-      !$omp target teams distribute parallel do default(none)             &
-      !$omp shared(particles, fields, node_list_gpu,                      &
-      !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles) & 
-      !$omp private(ifail, j, k)                                          &
+      !$omp target teams distribute parallel do default(none)                       &
+      !$omp shared(p_x, p_p, p_st, p_weight, p_i_elm, p_i_life, p_t_birth, p_q,     &
+      !$omp        fields, node_list_gpu,                                           &
+      !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles)           & 
+      !$omp private(ifail, j, k)                                                    &
+      !$omp private(half_position, E, B, E_cartesian, B_cartesian, scaling_factor,  &
+      !$omp         psi, U, cayley_transform_mat_tmp)                               &
       !$omp device(sim%gpu_id)                                                                    
-      do j=1,size(particles,1)
+      do j=1,size(p_x,1)
         do k=1,nstep_particles
-          if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
+          if (p_i_elm(j) .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
 
-          call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
-                        fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-                        group_mass, sim_time, tstep_part_adj, ifail)
+          !
+          !call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
+          !              fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+          !              group_mass, sim_time, tstep_part_adj, ifail)
+
+          half_position(1:3) = cylindrical_to_cartesian(p_x(j,:))
+          
+          ! compute first half-step
+          !call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
+          !    mass,timestep,scaling_factor)
+          !> volume_preserving_first_half_step_jorek {
+          
+          scaling_factor = 5.d-1*tstep_part_adj*p_q(j)*EL_CHG/(ATOMIC_MASS_UNIT*group_mass*SPEED_OF_LIGHT)
+          ! compute dimensionless momentum
+          p_p(j,:) = p_p(j,:)/(group_mass*SPEED_OF_LIGHT)
+          ! compute coordinates at half-step
+          half_position(1:3)  = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(j,:)) &
+                          /(sqrt(1.d0+dot_product(p_p(j,:),p_p(j,:))))
+
+          !> volume_preserving_first_half_step_jorek }
+
+          ! calculate cylindrical coordinates from cartesian ones
+          half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+
+          call find_RZ_nearby_gpu(node_list_gpu, fields%element_list, p_x(j,1),&
+            p_x(j,2),p_st(j,1),p_st(j,2),p_i_elm(j),&
+            half_position(4),half_position(5),p_st(j,1),p_st(j,2),&
+            p_i_elm(j),ifail)
+
+          if(p_i_elm(j) .le. 0) cycle
+
+          ! copy RZPHI coordinates in particles
+          p_x(j,:) = half_position(4:6)
+
+          call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                                      sim_time+5.d-1*tstep_part_adj, p_i_elm(j), &
+                                      p_st(j,:), p_x(j,3), E, B, psi, U)
+          
+          ! compute the second half-step  
+          !call volume_preserving_second_half_step_jorek(particle, &
+          !  half_position(1:3),scaling_factor,                    &
+          !  vector_cylindrical_to_cartesian(particle%x(3),E),     &
+          !  vector_cylindrical_to_cartesian(particle%x(3),B),     &
+          !  mass,timestep)
+          
+          E_cartesian = vector_cylindrical_to_cartesian(p_x(j,3),E)
+          B_cartesian = vector_cylindrical_to_cartesian(p_x(j,3),B)
+
+          !> volume_preserving_second_half_step_jorek {
+
+          ! compute momentum at t_(i+1/2)
+          p_p(j,:) = p_p(j,:) + scaling_factor*E_cartesian
+          ! rotate momentum with respect to the magnetic field
+          !p_p(j,:) = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+p_dot)), B_cartesian), p_p(j,:))
+          cayley_transform_mat_tmp = cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+dot_product(p_p(j,:), p_p(j,:)))), B_cartesian)
+          !p_p(j,:) = matmul(cayley_transform_mat_tmp, p_p(j,:))
+          p_p(j,1) = cayley_transform_mat_tmp(1,1) * p_p(j,1) + cayley_transform_mat_tmp(1,2) * p_p(j,2) + cayley_transform_mat_tmp(1,3) * p_p(j,3)
+          p_p(j,2) = cayley_transform_mat_tmp(2,1) * p_p(j,1) + cayley_transform_mat_tmp(2,2) * p_p(j,2) + cayley_transform_mat_tmp(2,3) * p_p(j,3)
+          p_p(j,3) = cayley_transform_mat_tmp(3,1) * p_p(j,1) + cayley_transform_mat_tmp(3,2) * p_p(j,2) + cayley_transform_mat_tmp(3,3) * p_p(j,3)
+          
+          ! compute momentum at t_(i+1)
+          p_p(j,:) = p_p(j,:) + scaling_factor*E_cartesian
+          ! update position at t_(i+1)
+          half_position(1:3) = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(j,:))/&
+            (sqrt(1.d0+dot_product(p_p(j,:),p_p(j,:))))
+          ! compute dimensional momentum
+          p_p(j,:) = p_p(j,:)*group_mass*SPEED_OF_LIGHT
+          
+          !> } volume_preserving_second_half_step_jorek 
+
+          ! transform back from cartesian to cylindrical coordinates
+          half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+          ! find the (i_elm,s,t) coordinates
+    
+          call find_RZ_nearby_gpu(node_list_gpu, fields%element_list, p_x(j,1),&
+            p_x(j,2),p_st(j,1),p_st(j,2),p_i_elm(j),&
+            half_position(4),half_position(5),p_st(j,1),p_st(j,2),&
+            p_i_elm(j),ifail)
+          ! copy new RZPHI position into particle
+          p_x(j,:) = half_position(4:6)
 
         end do !< steps
       end do !< particles
@@ -658,6 +795,373 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
 
 
+#ifdef USE_GPU_TEST
+
+  if (sim%my_id .eq. 0) then
+    !check for NaNs in the feedback_rhs
+    if (any(feedback_rhs(:,:,:,:,:) /= feedback_rhs(:,:,:,:,:))) then
+      write(*,*) "ERROR: NaN found in feedback rhs"
+      !stop 1
+    endif
+
+    !> save the feedback rhs to a file
+    allocate(feedback_rhs_linear(size(feedback_rhs,3)*3))
+
+    !> Collapse on the element dimension and accumulate all the other dimensions
+    feedback_rhs_linear = 0.d0
+    do m=1,size(feedback_rhs,3)
+      do n=1,size(feedback_rhs,4)
+        do j=1,size(feedback_rhs,1)
+          do k=1,size(feedback_rhs,2)
+            feedback_rhs_linear((m-1)*3 + 1) = feedback_rhs_linear((m-1)*3 + 1) + feedback_rhs(j,k,m,n,1) !< P_par
+            feedback_rhs_linear((m-1)*3 + 2) = feedback_rhs_linear((m-1)*3 + 2) + feedback_rhs(j,k,m,n,2) !< P_perp
+            feedback_rhs_linear((m-1)*3 + 3) = feedback_rhs_linear((m-1)*3 + 3) + feedback_rhs(j,k,m,n,3) !< j_Phi
+          enddo
+        enddo
+      enddo
+    enddo
+
+#ifdef USE_GPU
+    call HDF5_create(filename="rhs_gpu.h5",file_id=fid,ierr=ierr)
+#else
+    call HDF5_create(filename="rhs_cpu.h5",file_id=fid,ierr=ierr)
+#endif
+
+    if (ierr /= 0) then
+      write(*,*) "ERROR: Could not create HDF5 file for feedback rhs"
+      stop 1
+    endif
+
+    call HDF5_array1D_saving(fid, feedback_rhs_linear, size(feedback_rhs_linear), 'rhs')
+    call HDF5_close(fid)
+
+    deallocate(feedback_rhs_linear)
+    endif
+#endif 
+
+
+    !> deallocate the node_list_gpu
+    call dealloc_node_list_gpu(node_list_gpu)
+
+    deallocate(p_x)
+    deallocate(p_p)
+    deallocate(p_st)
+    deallocate(p_weight)
+    deallocate(p_i_elm)
+    deallocate(p_i_life)
+    deallocate(p_t_birth)
+    deallocate(p_q)
+    
+  end subroutine evolve_REs_2_loops_SoA
+
+
+  !> This kernel evolves the REs in 2 separate loops, following Guido solution:
+!> 1) The first loop pushes the particles
+!> 2) The second loop accumulates the feedback rhs
+!> This is done to avoid atomic operations on the feedback rhs array, which can be a bottleneck for performance.
+!> However, we are not accumulating the feedback rhs at every particle step, but only at the end of the evolution.
+subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+    use mod_project_particles
+    use mod_random_seed
+    use mod_interp, only: mode_moivre
+    use mod_basisfunctions
+    use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
+    use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
+    use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu
+    use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
+    use phys_module, only: F0, mode, central_mass, central_density, tstep
+    !inlining
+    use mod_coordinate_transforms, only: cartesian_to_cylindrical
+    use mod_coordinate_transforms, only: cylindrical_to_cartesian
+    use mod_find_rz_nearby, only: find_RZ_nearby_gpu, find_RZ_nearby_gpu_inlined
+    use mod_pusher_tools, only: cayley_transform !< use full Cayley transform
+
+
+
+#ifdef USE_GPU_TEST
+    use hdf5_io_module
+#endif
+    
+    implicit none
+    class(particle_sim), target, intent(inout)                :: sim
+    integer, intent(in)                                       :: group_num
+    real*8,allocatable,          intent(inout)                :: feedback_rhs(:,:,:,:,:)
+    type(count_action)                                        :: counter
+    type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
+    real*8, intent(in)                                        :: tstep_part_adj
+    
+    character(len=3) :: cs !> TODO: not used
+    integer :: particle_lost  
+  
+    !> RE specific variables
+    real*8    :: n_norm, rho_norm
+    real*8    :: HZ(n_tor), HH(4,4), HH_s(4,4), HH_t(4,4)
+    real*8    :: v_n, v_jR, v_jZ, v_jPhi, v_Ppar, v_Pperp
+
+    real*8    :: E(3), B(3), B_norm2(3), psi, U
+    real*8    :: cylindrical_velocity(3), cylindrical_momentum(3)
+    real*8    :: v_par, v_perp, gamma_m, proj_factor
+    integer   :: j, k, m, n, ifail, i_tor, n_lost
+    real*8    :: group_mass
+    real*8    :: sim_time
+    type(type_node_list_gpu) :: node_list_gpu
+    !> inline
+    real*8 :: half_position(6)
+    real*8 :: B_cartesian(3), E_cartesian(3)
+    real*8 :: scaling_factor !< in [s^2*C/(kg*m)]
+    real*8 :: psi, U ! not used 
+    
+#ifdef USE_GPU_TEST
+    real*8, allocatable :: feedback_rhs_linear(:)
+    integer(HID_T) fid
+    integer :: ierr
+#endif
+
+#ifdef USE_GPU
+    if (sim%my_id .eq. 0) then
+      write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
+      write(*,*) 'INFO: Using 2 LOOPS FOR REs kernel'
+      write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
+      write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
+      write(*,*) 'INFO: dimension of feedback_rhs: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+    endif
+#endif
+
+    ! TODO: not used
+    n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
+    rho_norm = CENTRAL_MASS * MASS_PROTON * n_norm                  ! rho_SI = rho_norm * rho
+
+    !> save the group mass
+    group_mass = sim%groups(group_num)%mass
+    !> save the simulation time
+    sim_time = sim%time
+
+    !> PREPARING GPU DATA STRUCTUREs
+    if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
+
+    !> allocate node_list_linear
+    call init_node_list_gpu(node_list_gpu, sim%fields%node_list%n_nodes, sim%fields%node_list%n_dof)
+    !> copy the node_list to the GPU
+    call make_deep_copy_node_list_to_gpu(sim%fields%node_list, node_list_gpu)
+
+    ! Loop over all particle groups
+    n_lost = 0
+    select type (particles => sim%groups(group_num)%particles)
+    type is (particle_kinetic_relativistic)
+
+
+    !> Loop over all particles in the group and set the weight to 1
+    !> TODO: REMOVE THIS PART
+    do j=1,size(particles,1)
+      particles(j)%weight = 1.0
+      particles(j)%q = -1.0 !> default charge of the runaway electrons
+    enddo
+
+    select type (fields => sim%fields)
+    type is (jorek_fields_interp_linear)
+      
+      !> TODO: the optimal way would be to allocate the particles in the main, and update them before and after
+      !>       the kernel execution. 
+      !$omp target data                                                                                     &
+      !$omp map(tofrom: particles, feedback_rhs)                                                            &
+      !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
+      !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) 
+      
+      !> TODO: these are constanst, no need to move it every time. Move this update in the main (map or update??)
+      !!$omp target update to(F0, mode, central_mass, central_density, tstep)                                   
+
+      !>------------------------------
+      !> STEP 1: Push the particles
+      !>------------------------------
+
+      !$omp target teams distribute parallel do default(none)                      &
+      !$omp shared(particles, fields, node_list_gpu,                               &
+      !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles)          & 
+      !$omp private(ifail, j, k)                                                   &
+      !$omp private(half_position, E, B, E_cartesian, B_cartesian, scaling_factor, &
+      !$omp         psi, U)                                                        &
+      !$omp device(sim%gpu_id)                                                                    
+      do j=1,size(particles,1)
+        do k=1,nstep_particles
+          if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
+
+          ! particle -> particles(j)
+          ! node_list -> node_list_gpu
+          ! element_list -> fields%element_list
+          ! time_now -> fields%time_now
+          ! time_prev -> fields%time_prev
+          ! static -> fields%static
+          ! flag_zero_dpsidt -> fields%flag_zero_dpsidt
+          ! time -> sim_time
+          ! timestep -> tstep_part_adj
+          ! ifail -> ifail
+          !
+          !call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
+          !              fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+          !              group_mass, sim_time, tstep_part_adj, ifail)
+
+          half_position(1:3) = cylindrical_to_cartesian(particles(j)%x)
+          
+          ! compute first half-step
+          !call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
+          !    mass,timestep,scaling_factor)
+          !> volume_preserving_first_half_step_jorek {
+          
+          scaling_factor = 5.d-1*tstep_part_adj*particles(j)%q*EL_CHG/(ATOMIC_MASS_UNIT*group_mass*SPEED_OF_LIGHT)
+          ! compute dimensionless momentum
+          particles(j)%p = particles(j)%p/(group_mass*SPEED_OF_LIGHT)
+          ! compute coordinates at half-step
+          half_position(1:3)  = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*particles(j)%p) &
+                          /(sqrt(1.d0+dot_product(particles(j)%p,particles(j)%p)))
+
+          !> volume_preserving_first_half_step_jorek }
+
+          ! calculate cylindrical coordinates from cartesian ones
+          half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+
+          call find_RZ_nearby_gpu(node_list_gpu, fields%element_list, particles(j)%x(1),&
+            particles(j)%x(2),particles(j)%st(1),particles(j)%st(2),particles(j)%i_elm,&
+            half_position(4),half_position(5),particles(j)%st(1),particles(j)%st(2),&
+            particles(j)%i_elm,ifail)
+
+          if(particles(j)%i_elm .le. 0) cycle
+
+          ! copy RZPHI coordinates in particles
+          particles(j)%x = half_position(4:6)
+
+          call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                                      sim_time+5.d-1*tstep_part_adj, particles(j)%i_elm, &
+                                      particles(j)%st, particles(j)%x(3), E, B, psi, U)
+          
+          ! compute the second half-step  
+          !call volume_preserving_second_half_step_jorek(particle, &
+          !  half_position(1:3),scaling_factor,                    &
+          !  vector_cylindrical_to_cartesian(particle%x(3),E),     &
+          !  vector_cylindrical_to_cartesian(particle%x(3),B),     &
+          !  mass,timestep)
+          
+          E_cartesian = vector_cylindrical_to_cartesian(particles(j)%x(3),E)
+          B_cartesian = vector_cylindrical_to_cartesian(particles(j)%x(3),B)
+
+          !> volume_preserving_second_half_step_jorek {
+
+          ! compute momentum at t_(i+1/2)
+          particles(j)%p = particles(j)%p + scaling_factor*E_cartesian
+          ! rotate momentum with respect to the magnetic field
+          particles(j)%p = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/&
+            (sqrt(1.d0+dot_product(particles(j)%p,particles(j)%p))),B_cartesian),particles(j)%p)
+          ! compute momentum at t_(i+1)
+          particles(j)%p = particles(j)%p + scaling_factor*E_cartesian
+          ! update position at t_(i+1)
+          half_position(1:3) = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*particles(j)%p)/&
+            (sqrt(1.d0+dot_product(particles(j)%p,particles(j)%p)))
+          ! compute dimensional momentum
+          particles(j)%p = particles(j)%p*group_mass*SPEED_OF_LIGHT
+          
+          !> } volume_preserving_second_half_step_jorek 
+
+          ! transform back from cartesian to cylindrical coordinates
+          half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+          ! find the (i_elm,s,t) coordinates
+    
+          call find_RZ_nearby_gpu(node_list_gpu, fields%element_list, particles(j)%x(1),&
+            particles(j)%x(2),particles(j)%st(1),particles(j)%st(2),particles(j)%i_elm,&
+            half_position(4),half_position(5),particles(j)%st(1),particles(j)%st(2),&
+            particles(j)%i_elm,ifail)
+
+          ! copy new RZPHI position into particle
+          particles(j)%x = half_position(4:6)
+
+        end do !< steps
+      end do !< particles
+      !$omp end target teams distribute parallel do
+
+      !>------------------------------
+      !> STEP 2: Accumulate the feedback rhs
+      !>------------------------------
+
+      !$omp target teams distribute parallel do default(none)                                 &
+      !$omp shared(particles, fields, feedback_rhs, node_list_gpu)                            &
+      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,              &
+      !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m,                         &
+      !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                     &
+      !$omp         j, k, m, n, i_tor)                                                        &
+      !$omp firstprivate(sim_time, group_mass, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)  &
+      !$omp device(sim%gpu_id)
+      do j=1,size(particles,1)
+        if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
+        call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
+        call mode_moivre(particles(j)%x(3), HZ)
+
+        ! Determines velocity in cylindrical coordinates
+        cylindrical_momentum = vector_cartesian_to_cylindrical(particles(j)%x(3), particles(j)%p)
+        !> TODO: group_mass should be declared above
+        !> TODO: can dot_product and sqrt GPU implementation cause issues?
+        cylindrical_velocity = cylindrical_momentum / &
+                                sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
+
+        ! Uncomment for PCS
+        !> TODO: check if a function specific for the linear fields is needed  
+        !> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
+        !> TODO: a lot of computation is done in this function, can we optimize it? 
+        call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
+                                    fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                                      sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
+
+        B_norm2 = B/norm2(B)
+
+        v_par   = dot_product(cylindrical_velocity, B_norm2)
+        v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
+        gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
+
+        do n=1,n_degrees
+          do m=1,n_vertex_max
+
+            proj_factor = HH(m,n) * fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight ! TODO: not initialized correctly
+
+            ! PCS for REs
+            v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
+            v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
+            v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO !> TODO: q is not initialized correctly
+
+
+            !> TODO: v_n is not used
+            !v_n     = proj_factor
+            
+            do i_tor = 1,n_tor
+
+              !$omp atomic
+              feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+              feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+              feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+              !$omp end atomic
+
+            enddo
+          enddo
+        enddo
+      end do !< particles
+
+      !$omp end target teams distribute parallel do
+
+
+      !$omp end target data
+
+    end select ! select type (fields)
+    
+    !> count the number of particles lost 
+    particle_lost = 0
+    do j=1,size(particles,1)
+      if (particles(j)%i_elm .le. 0) then
+        particle_lost = particle_lost + 1
+      endif
+    enddo
+    if (sim%my_id .eq. 0) then
+      write(*,*) "INFO: number of particles lost in group ", group_num, ": ", particle_lost
+    endif
+    
+    end select ! select type (particles)
+
 
 
 #ifdef USE_GPU_TEST
@@ -704,13 +1208,10 @@ subroutine evolve_REs_2_loops(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     endif
 #endif 
 
-#ifdef USE_GPU
+
     !> deallocate the node_list_gpu
     call dealloc_node_list_gpu(node_list_gpu)
-#endif
 
-    
-    
   end subroutine evolve_REs_2_loops
 
   !> Internal function for gathering the feedback rhs values when using the ncs or ics coupling scheme
