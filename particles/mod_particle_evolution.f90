@@ -511,6 +511,7 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
     real*8 :: B_cartesian(3), E_cartesian(3)
     real*8 :: scaling_factor !< in [s^2*C/(kg*m)]
     real*8 :: cayley_transform_mat_tmp(3,3) !< temporary matrix for the Cayley transform
+    real*8 :: dot_tmp !< temporary variable for the dot product
     !> SoA
     real*8, allocatable           :: p_x(:,:)   !< particle position in real space
     real*8, allocatable           :: p_p(:,:)   !< particle momentum in real space
@@ -624,7 +625,7 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
       !$omp         psi, U, cayley_transform_mat_tmp, HH, HH_s, HH_t, HZ,           &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
       !$omp         cylindrical_velocity, gamma_m, proj_factor, v_Ppar, v_Pperp,    &
-      !$omp         v_jPhi, m, n, i_tor)                                            &
+      !$omp         v_jPhi, m, n, i_tor, dot_tmp)                                   &
       !$omp device(sim%gpu_id)                                                                    
       do j=1,size(p_x,2)
         do k=1,nstep_particles
@@ -703,8 +704,13 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
           !              fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
           !              group_mass, sim_time, tstep_part_adj, ifail)
 
-          half_position(1:3) = cylindrical_to_cartesian(p_x(:,j))
-          
+          ! half_position(1:3) = cylindrical_to_cartesian(p_x(:,j))
+          !> cylindrical_to_cartesian {
+          half_position(1) = p_x(1,j) * cos(-p_x(3,j))
+          half_position(2) = p_x(1,j) * sin(-p_x(3,j))
+          half_position(3) = p_x(2,j)
+          !> } cylindrical_to_cartesian
+
           ! compute first half-step
           !call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
           !    mass,timestep,scaling_factor)
@@ -712,10 +718,18 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
           
           scaling_factor = 5.d-1*tstep_part_adj*p_q(j)*EL_CHG/(ATOMIC_MASS_UNIT*group_mass*SPEED_OF_LIGHT)
           ! compute dimensionless momentum
-          p_p(:,j) = p_p(:,j)/(group_mass*SPEED_OF_LIGHT)
+          ! p_p(:,j) = p_p(:,j)/(group_mass*SPEED_OF_LIGHT)
+          p_p(1,j) = p_p(1,j)/(group_mass*SPEED_OF_LIGHT)
+          p_p(2,j) = p_p(2,j)/(group_mass*SPEED_OF_LIGHT)
+          p_p(3,j) = p_p(3,j)/(group_mass*SPEED_OF_LIGHT)
+
           ! compute coordinates at half-step
-          half_position(1:3)  = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(:,j)) &
-                          /(sqrt(1.d0+dot_product(p_p(:,j),p_p(:,j))))
+          !half_position(1:3)  = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(:,j)) &
+          !                /(sqrt(1.d0+dot_product(p_p(:,j),p_p(:,j))))
+          dot_tmp = sqrt(1.d0 + p_p(1,j)*p_p(1,j) + p_p(2,j)*p_p(2,j) + p_p(3,j)*p_p(3,j))
+          half_position(1) = half_position(1) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(1,j))/dot_tmp
+          half_position(2) = half_position(2) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(2,j))/dot_tmp
+          half_position(3) = half_position(3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(3,j))/dot_tmp
 
           !> volume_preserving_first_half_step_jorek }
 
@@ -760,17 +774,33 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
           p_p(3,j) = cayley_transform_mat_tmp(3,1) * p_p(1,j) + cayley_transform_mat_tmp(3,2) * p_p(2,j) + cayley_transform_mat_tmp(3,3) * p_p(3,j)
           
           ! compute momentum at t_(i+1)
-          p_p(:,j) = p_p(:,j) + scaling_factor*E_cartesian
+          !p_p(:,j) = p_p(:,j) + scaling_factor*E_cartesian
+          p_p(1,j) = p_p(1,j) + scaling_factor*E_cartesian(1)
+          p_p(2,j) = p_p(2,j) + scaling_factor*E_cartesian(2)
+          p_p(3,j) = p_p(3,j) + scaling_factor*E_cartesian(3)
+
           ! update position at t_(i+1)
-          half_position(1:3) = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(:,j))/&
-            (sqrt(1.d0+dot_product(p_p(:,j),p_p(:,j))))
-          ! compute dimensional momentum
-          p_p(:,j) = p_p(:,j)*group_mass*SPEED_OF_LIGHT
+          !half_position(1:3) = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(:,j))/&
+          !  (sqrt(1.d0+dot_product(p_p(:,j),p_p(:,j))))
+          dot_tmp = sqrt(1.d0 + p_p(1,j)*p_p(1,j) + p_p(2,j)*p_p(2,j) + p_p(3,j)*p_p(3,j))
+          half_position(1) = half_position(1) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(1,j))/dot_tmp
+          half_position(2) = half_position(2) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(2,j))/dot_tmp
+          half_position(3) = half_position(3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(3,j))/dot_tmp
           
+          ! compute dimensional momentum
+          !p_p(:,j) = p_p(:,j)*group_mass*SPEED_OF_LIGHT
+          p_p(1,j) = p_p(1,j)*group_mass*SPEED_OF_LIGHT
+          p_p(2,j) = p_p(2,j)*group_mass*SPEED_OF_LIGHT
+          p_p(3,j) = p_p(3,j)*group_mass*SPEED_OF_LIGHT
+
           !> } volume_preserving_second_half_step_jorek 
 
           ! transform back from cartesian to cylindrical coordinates
-          half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+          !half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
+          half_position(4) = sqrt(half_position(1)**2 + half_position(2)**2)
+          half_position(5) = half_position(3)
+          half_position(6) = atan2(-half_position(2), half_position(1)) 
+
           ! find the (i_elm,s,t) coordinates
     
           call find_RZ_nearby_gpu_inlined(node_list_gpu, fields%element_list, p_x(1,j),&
@@ -778,7 +808,10 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
             half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
             p_i_elm(j),ifail)
           ! copy new RZPHI position into particle
-          p_x(:,j) = half_position(4:6)
+          !p_x(:,j) = half_position(4:6)
+          p_x(1,j) = half_position(4)
+          p_x(2,j) = half_position(5)
+          p_x(3,j) = half_position(6)
 
           ! print x and p after the push
           !write(*,*) "DEBUG: x = ", p_x(1,j), p_x(2,j), p_x(3,j)
