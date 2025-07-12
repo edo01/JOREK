@@ -322,6 +322,16 @@ contains
           v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
 
+          !write(*,*) "DEBUG: particle ", j, " step ", k, " i_elm ", particles(j)%i_elm
+          !write(*,*) "DEBUG: B = ", B(1), B(2), B(3)
+          !write(*,*) "DEBUG: B_norm2 = ", B_norm2(1), B_norm2(2), B_norm2(3)
+          !write(*,*) "DEBUG: norm2(B) = ", norm2(B)
+          !write(*,*) "DEBUG: cylindrical_velocity = ", cylindrical_velocity(1), cylindrical_velocity(2), cylindrical_velocity(3)
+          !write(*,*) "DEBUG: v_par = ", v_par
+          !write(*,*) "DEBUG: proj_factor = ", proj_factor
+          !write(*,*) "DEBUG: gamma_m = ", gamma_m
+          !write(*,*) "DEBUG: v_perp = ", v_perp
+
           do n=1,n_degrees
             do m=1,n_vertex_max
 
@@ -334,22 +344,13 @@ contains
               v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
               v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
               v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO !> TODO: q is not initialized correctly
-              !> print all the variables
-              !write(*,*) "DEBUG: particle ", j, " step ", k, " i_elm ", particles(j)%i_elm
-              !write(*,*) "DEBUG: B = ", B(1), B(2), B(3)
-              !write(*,*) "DEBUG: B_norm2 = ", B_norm2(1), B_norm2(2), B_norm2(3)
-              !write(*,*) "DEBUG: norm2(B) = ", norm2(B)
-              !write(*,*) "DEBUG: cylindrical_velocity = ", cylindrical_velocity(1), cylindrical_velocity(2), cylindrical_velocity(3)
-              !write(*,*) "DEBUG: v_par = ", v_par
-              !write(*,*) "DEBUG: v_Ppar = ", v_Ppar
-              !write(*,*) "DEBUG: proj_factor = ", proj_factor
-              !write(*,*) "DEBUG: v_Pperp = ", v_Pperp
-              !write(*,*) "DEBUG: v_jPhi = ", v_jPhi
-              !write(*,*) "DEBUG: gamma_m = ", gamma_m
-              !write(*,*) "DEBUG: v_perp = ", v_perp
-              !write(*,*) "DEBUG: real(particles(j)%q, 8) = ", real(particles(j)%q, 8)
-              !write(*,*) "DEBUG: EL_CHG = ", EL_CHG
-              !write(*,*) "DEBUG: particles(j)%x(1) = ", particles(j)%x(1)
+
+              !if (n .eq. 1 .and. m .eq. 1) then
+              !  write(*,*) "DEBUG: proj_factor = ", proj_factor
+              !  write(*,*) "DEBUG: v_Ppar = ", v_Ppar
+              !  write(*,*) "DEBUG: v_Pperp = ", v_Pperp
+              !  write(*,*) "DEBUG: v_jPhi = ", v_jPhi
+              !endif
 
               !> TODO: v_n is not used
               !v_n     = proj_factor
@@ -384,6 +385,9 @@ contains
                                       group_mass, sim_time, tstep_part_adj, ifail)
 #else 
           call volume_preserving_push_jorek(particles(j),sim%fields,group_mass,sim_time,tstep_part_adj,ifail)
+          ! print x and p after the push
+          !write(*,*) "DEBUG: x = ", particles(j)%x(1), particles(j)%x(2), particles(j)%x(3)
+          !write(*,*) "DEBUG: p = ", particles(j)%p(1), particles(j)%p(2), particles(j)%p(3)
 #endif
         end do !< steps
       end do !< particles
@@ -530,7 +534,7 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
       write(*,*) 'INFO: Using SoA 2 LOOPS FOR REs kernel'
       write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
       write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
-      write(*,*) 'INFO: dimension of feedback_rhs: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+      write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 #endif
 
@@ -545,6 +549,10 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
 
     !> PREPARING GPU DATA STRUCTUREs
     if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
+
+    !> -----------------------------------------
+    !> ---------- GPU DATA STRUCTURES ----------
+    !> -----------------------------------------
 
     !> allocate node_list_linear
     call init_node_list_gpu(node_list_gpu, sim%fields%node_list%n_nodes, sim%fields%node_list%n_dof)
@@ -567,14 +575,15 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
     start_time = MPI_WTIME()
 
     !> allocate the SoA data structures
+    !> TODO: move them in the main and update them before the kernel execution
     allocate(p_x(3,size(particles,1)))
     allocate(p_p(3,size(particles,1)))
     allocate(p_st(2,size(particles,1)))
     allocate(p_weight(size(particles,1)))
     allocate(p_i_elm(size(particles,1)))
-    allocate(p_i_life(size(particles,1)))
-    allocate(p_t_birth(size(particles,1)))
     allocate(p_q(size(particles,1)))
+    !allocate(p_i_life(size(particles,1)))
+    !allocate(p_t_birth(size(particles,1)))
 
     !> copy the particles data to the SoA data structures
     do j=1,size(particles,1)
@@ -583,13 +592,14 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
       p_st(:,j) = particles(j)%st
       p_weight(j) = particles(j)%weight
       p_i_elm(j) = particles(j)%i_elm
-      p_i_life(j) = particles(j)%i_life
-      p_t_birth(j) = particles(j)%t_birth
       p_q(j) = particles(j)%q
+      !p_i_life(j) = particles(j)%i_life
+      !p_t_birth(j) = particles(j)%t_birth
     enddo
 
     end_time = MPI_WTIME()
-    if (sim%my_id .eq. 0) write(*,*) "Time taken by the initialization: ", end_time - start_time, " seconds"
+
+    if (sim%my_id .eq. 0) write(*,*) "Time taken by the GPU data structure initialization: ", end_time - start_time, " seconds"
 
 
     select type (fields => sim%fields)
@@ -598,22 +608,14 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
       !> TODO: the optimal way would be to allocate the particles in the main, and update them before and after
       !>       the kernel execution. 
       !$omp target data                                                                                     &
-      !$omp map(tofrom: feedback_rhs,                                                                       &
-      !$omp             p_x, p_p, p_st, p_weight, p_i_elm, p_i_life, p_t_birth, p_q)                        &
+      !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                                              &
       !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
-      !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) 
-      
-      !> TODO: these are constanst, no need to move it every time. Move this update in the main (map or update??)
-      !!$omp target update to(F0, mode, central_mass, central_density, tstep)                                   
-
-      !>------------------------------
-      !> STEP 1: Push the particles
-      !>------------------------------
-
+      !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin,             &
+      !$omp         j_phi_idx_kin, p_weight, p_q)                                  
 
 
       !$omp target teams distribute parallel do default(none)                       &
-      !$omp shared(p_x, p_p, p_st, p_weight, p_i_elm, p_i_life, p_t_birth, p_q,     &
+      !$omp shared(p_x, p_p, p_st, p_weight, p_i_elm, p_q,                          &
       !$omp        fields, node_list_gpu,feedback_rhs,                              &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,           & 
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                    &
@@ -624,60 +626,77 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
       !$omp         cylindrical_velocity, gamma_m, proj_factor, v_Ppar, v_Pperp,    &
       !$omp         v_jPhi, m, n, i_tor)                                            &
       !$omp device(sim%gpu_id)                                                                    
-      do j=1,size(p_x,1)
+      do j=1,size(p_x,2)
         do k=1,nstep_particles
           if (p_i_elm(j) .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
           
-          call basisfunctions(p_st(1,j), p_st(2,j), HH, HH_s, HH_t)
-          call mode_moivre(p_x(3,j), HZ)
-
-          ! Determines velocity in cylindrical coordinates
-          cylindrical_momentum = vector_cartesian_to_cylindrical(p_x(3,j), p_p(:,j))
-          !> TODO: group_mass should be declared above
-          !> TODO: can dot_product and sqrt GPU implementation cause issues?
-          cylindrical_velocity = cylindrical_momentum / &
-                                  sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
-
-          ! Uncomment for PCS
-          !> TODO: check if a function specific for the linear fields is needed  
-          !> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
-          !> TODO: a lot of computation is done in this function, can we optimize it? 
-          call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-                                        sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
-
-          B_norm2 = B/norm2(B)
-
-          v_par   = dot_product(cylindrical_velocity, B_norm2)
-          v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
-          gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
-
-          do n=1,n_degrees
-            do m=1,n_vertex_max
-
-              proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j) ! TODO: not initialized correctly
-
-              ! PCS for REs
-              v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
-              v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-              v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO !> TODO: q is not initialized correctly
-
-
-              !> TODO: v_n is not used
-              !v_n     = proj_factor
-              
-              do i_tor = 1,n_tor
-
-                !> TODO: CACHE: optimization possible
-                !$omp atomic
-                feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-                feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-                feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
-                !$omp end atomic
-
-              enddo
-            enddo
-          enddo
+          !call basisfunctions(p_st(1,j), p_st(2,j), HH, HH_s, HH_t)
+          !call mode_moivre(p_x(3,j), HZ)
+!
+          !! Determines velocity in cylindrical coordinates
+          !cylindrical_momentum = vector_cartesian_to_cylindrical(p_x(3,j), p_p(:,j))
+          !!> TODO: group_mass should be declared above
+          !!> TODO: can dot_product and sqrt GPU implementation cause issues?
+          !cylindrical_velocity = cylindrical_momentum / &
+          !                        sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
+!
+          !! Uncomment for PCS
+          !!> TODO: check if a function specific for the linear fields is needed  
+          !!> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
+          !!> TODO: a lot of computation is done in this function, can we optimize it? 
+          !call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
+          !                            fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+          !                              sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
+!
+          !B_norm2 = B/norm2(B)
+!
+          !v_par   = dot_product(cylindrical_velocity, B_norm2)
+          !v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
+          !gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
+!
+          !! print all the variables
+          !!write(*,*) "DEBUG: particle ", j, " step ", k, " i_elm ", p_i_elm(j)
+          !!write(*,*) "DEBUG: B = ", B(1), B(2), B(3)
+          !!write(*,*) "DEBUG: B_norm2 = ", B_norm2(1), B_norm2(2), B_norm2(3)
+          !!write(*,*) "DEBUG: norm2(B) = ", norm2(B)
+          !!write(*,*) "DEBUG: cylindrical_velocity = ", cylindrical_velocity(1), cylindrical_velocity(2), cylindrical_velocity(3)
+          !!write(*,*) "DEBUG: v_par = ", v_par
+          !!write(*,*) "DEBUG: gamma_m = ", gamma_m
+          !!write(*,*) "DEBUG: v_perp = ", v_perp
+          !!write(*,*) "DEBUG: real(p_q(j), 8) = ", real(p_q(j), 8)
+         !
+          !do n=1,n_degrees
+          !  do m=1,n_vertex_max
+!
+          !    proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j) ! TODO: not initialized correctly
+!
+          !    ! PCS for REs
+          !    v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
+          !    v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
+          !    v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO !> TODO: q is not initialized correctly
+          !    
+          !    !if (n .eq. 1 .and. m .eq. 1) then
+          !    !  write(*,*) "DEBUG: proj_factor = ", proj_factor
+          !    !  write(*,*) "DEBUG: v_Ppar = ", v_Ppar
+          !    !  write(*,*) "DEBUG: v_Pperp = ", v_Pperp
+          !    !  write(*,*) "DEBUG: v_jPhi = ", v_jPhi
+          !    !endif
+!
+          !    !> TODO: v_n is not used
+          !    !v_n     = proj_factor
+          !    
+          !    do i_tor = 1,n_tor
+!
+          !      !> TODO: CACHE: optimization possible
+          !      !$omp atomic
+          !      feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+          !      feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+          !      feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+          !      !$omp end atomic
+!
+          !    enddo
+          !  enddo
+          !enddo
 
           !
           !call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
@@ -703,7 +722,7 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
           ! calculate cylindrical coordinates from cartesian ones
           half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
 
-          call find_RZ_nearby_gpu(node_list_gpu, fields%element_list, p_x(1,j),&
+          call find_RZ_nearby_gpu_inlined(node_list_gpu, fields%element_list, p_x(1,j),&
             p_x(2,j),p_st(1,j),p_st(2,j),p_i_elm(j),&
             half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
             p_i_elm(j),ifail)
@@ -754,105 +773,54 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
           half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
           ! find the (i_elm,s,t) coordinates
     
-          call find_RZ_nearby_gpu(node_list_gpu, fields%element_list, p_x(1,j),&
+          call find_RZ_nearby_gpu_inlined(node_list_gpu, fields%element_list, p_x(1,j),&
             p_x(2,j),p_st(1,j),p_st(2,j),p_i_elm(j),&
             half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
             p_i_elm(j),ifail)
           ! copy new RZPHI position into particle
           p_x(:,j) = half_position(4:6)
 
+          ! print x and p after the push
+          !write(*,*) "DEBUG: x = ", p_x(1,j), p_x(2,j), p_x(3,j)
+          !write(*,*) "DEBUG: p = ", p_p(1,j), p_p(2,j), p_p(3,j)
+
         end do !< steps
       end do !< particles
       !$omp end target teams distribute parallel do
-
-      !!>------------------------------
-      !!> STEP 2: Accumulate the feedback rhs
-      !!>------------------------------
-!
-      !!$omp target teams distribute parallel do default(none)                                 &
-      !!$omp shared(particles, fields, feedback_rhs, node_list_gpu)                            &
-      !!$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,              &
-      !!$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m,                         &
-      !!$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                     &
-      !!$omp         j, k, m, n, i_tor)                                                        &
-      !!$omp firstprivate(sim_time, group_mass, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)  &
-      !!$omp device(sim%gpu_id)
-      !do j=1,size(particles,1)
-      !  if (particles(j)%i_elm .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
-      !  call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
-      !  call mode_moivre(particles(j)%x(3), HZ)
-!
-      !  ! Determines velocity in cylindrical coordinates
-      !  cylindrical_momentum = vector_cartesian_to_cylindrical(particles(j)%x(3), particles(j)%p)
-      !  !> TODO: group_mass should be declared above
-      !  !> TODO: can dot_product and sqrt GPU implementation cause issues?
-      !  cylindrical_velocity = cylindrical_momentum / &
-      !                          sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
-!
-      !  ! Uncomment for PCS
-      !  !> TODO: check if a function specific for the linear fields is needed  
-      !  !> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
-      !  !> TODO: a lot of computation is done in this function, can we optimize it? 
-      !  call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
-      !                              fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-      !                                sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
-!
-      !  B_norm2 = B/norm2(B)
-!
-      !  v_par   = dot_product(cylindrical_velocity, B_norm2)
-      !  v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
-      !  gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
-!
-      !  do n=1,n_degrees
-      !    do m=1,n_vertex_max
-!
-      !      proj_factor = HH(m,n) * fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight ! TODO: not initialized correctly
-!
-      !      ! PCS for REs
-      !      v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
-      !      v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-      !      v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO !> TODO: q is not initialized correctly
-!
-!
-      !      !> TODO: v_n is not used
-      !      !v_n     = proj_factor
-      !      
-      !      do i_tor = 1,n_tor
-!
-      !        !$omp atomic
-      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-      !        feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
-      !        !$omp end atomic
-!
-      !      enddo
-      !    enddo
-      !  enddo
-      !end do !< particles
-!
-      !!$omp end target teams distribute parallel do
-
 
       !$omp end target data
 
     end select ! select type (fields)
     
+    
+    !> ------------------COPY BACK---------------------
+    !> copy the SoA data structures back to the particles
+    do j=1,size(particles,1)
+      particles(j)%x = p_x(:,j)
+      particles(j)%p = p_p(:,j)
+      particles(j)%st = p_st(:,j)
+      particles(j)%i_elm = p_i_elm(j)
+    enddo
+
+    end select ! select type (particles)
+
+
+
+#ifdef USE_GPU_TEST
+    !> ------------------TESTING---------------------
+    
     !> count the number of particles lost 
     particle_lost = 0
-    do j=1,size(particles,1)
-      if (particles(j)%i_elm .le. 0) then
+    do j=1,size(sim%groups(group_num)%particles,1)
+      if (sim%groups(group_num)%particles(j)%i_elm .le. 0) then
         particle_lost = particle_lost + 1
       endif
     enddo
     if (sim%my_id .eq. 0) then
       write(*,*) "INFO: number of particles lost in group ", group_num, ": ", particle_lost
     endif
-    
-    end select ! select type (particles)
 
-
-
-#ifdef USE_GPU_TEST
+  !> output the feedback_rhs to a file
 
   if (sim%my_id .eq. 0) then
     !check for NaNs in the feedback_rhs
@@ -897,6 +865,10 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
 #endif 
 
 
+
+
+    !> ------------------CLEANING---------------------
+
     !> deallocate the node_list_gpu
     call dealloc_node_list_gpu(node_list_gpu)
 
@@ -905,9 +877,9 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
     deallocate(p_st)
     deallocate(p_weight)
     deallocate(p_i_elm)
-    deallocate(p_i_life)
-    deallocate(p_t_birth)
     deallocate(p_q)
+    !deallocate(p_i_life)
+    !deallocate(p_t_birth)
     
   end subroutine evolve_REs_2_loops_SoA
 
