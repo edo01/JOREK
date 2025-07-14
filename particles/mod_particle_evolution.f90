@@ -466,7 +466,7 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
-    use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu
+    use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_inlined
     use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
     use phys_module, only: F0, mode, central_mass, central_density, tstep
     !inlining
@@ -631,78 +631,65 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
         do k=1,nstep_particles
           if (p_i_elm(j) .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
           
-          !call basisfunctions(p_st(1,j), p_st(2,j), HH, HH_s, HH_t)
-          !call mode_moivre(p_x(3,j), HZ)
-!
-          !! Determines velocity in cylindrical coordinates
+          call basisfunctions(p_st(1,j), p_st(2,j), HH, HH_s, HH_t)
+          call mode_moivre(p_x(3,j), HZ)
+
+          ! Determines velocity in cylindrical coordinates
           !cylindrical_momentum = vector_cartesian_to_cylindrical(p_x(3,j), p_p(:,j))
-          !!> TODO: group_mass should be declared above
-          !!> TODO: can dot_product and sqrt GPU implementation cause issues?
+          !> vector_cartesian_to_cylindrical {
+          cylindrical_momentum(1) = p_p(1,j)*cos(p_x(3,j)) - p_p(2,j)*sin(p_x(3,j))
+          cylindrical_momentum(2) = p_p(3,j)
+          cylindrical_momentum(3) = -1.d0*(p_p(1,j)*sin(p_x(3,j)) + p_p(2,j)*cos(p_x(3,j)))
+          !> } vector_cartesian_to_cylindrical
+
+          !> TODO: group_mass should be declared above
+          !> TODO: can dot_product and sqrt GPU implementation cause issues?
           !cylindrical_velocity = cylindrical_momentum / &
           !                        sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
-!
-          !! Uncomment for PCS
-          !!> TODO: check if a function specific for the linear fields is needed  
-          !!> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
-          !!> TODO: a lot of computation is done in this function, can we optimize it? 
-          !call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
-          !                            fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-          !                              sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
-!
-          !B_norm2 = B/norm2(B)
-!
-          !v_par   = dot_product(cylindrical_velocity, B_norm2)
-          !v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
-          !gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
-!
-          !! print all the variables
-          !!write(*,*) "DEBUG: particle ", j, " step ", k, " i_elm ", p_i_elm(j)
-          !!write(*,*) "DEBUG: B = ", B(1), B(2), B(3)
-          !!write(*,*) "DEBUG: B_norm2 = ", B_norm2(1), B_norm2(2), B_norm2(3)
-          !!write(*,*) "DEBUG: norm2(B) = ", norm2(B)
-          !!write(*,*) "DEBUG: cylindrical_velocity = ", cylindrical_velocity(1), cylindrical_velocity(2), cylindrical_velocity(3)
-          !!write(*,*) "DEBUG: v_par = ", v_par
-          !!write(*,*) "DEBUG: gamma_m = ", gamma_m
-          !!write(*,*) "DEBUG: v_perp = ", v_perp
-          !!write(*,*) "DEBUG: real(p_q(j), 8) = ", real(p_q(j), 8)
-         !
-          !do n=1,n_degrees
-          !  do m=1,n_vertex_max
-!
-          !    proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j) ! TODO: not initialized correctly
-!
-          !    ! PCS for REs
-          !    v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
-          !    v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-          !    v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO !> TODO: q is not initialized correctly
-          !    
-          !    !if (n .eq. 1 .and. m .eq. 1) then
-          !    !  write(*,*) "DEBUG: proj_factor = ", proj_factor
-          !    !  write(*,*) "DEBUG: v_Ppar = ", v_Ppar
-          !    !  write(*,*) "DEBUG: v_Pperp = ", v_Pperp
-          !    !  write(*,*) "DEBUG: v_jPhi = ", v_jPhi
-          !    !endif
-!
-          !    !> TODO: v_n is not used
-          !    !v_n     = proj_factor
-          !    
-          !    do i_tor = 1,n_tor
-!
-          !      !> TODO: CACHE: optimization possible
-          !      !$omp atomic
-          !      feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-          !      feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-          !      feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
-          !      !$omp end atomic
-!
-          !    enddo
-          !  enddo
-          !enddo
+          dot_tmp = sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
+          cylindrical_velocity(1) = cylindrical_momentum(1) / dot_tmp
+          cylindrical_velocity(2) = cylindrical_momentum(2) / dot_tmp
+          cylindrical_velocity(3) = cylindrical_momentum(3) / dot_tmp
 
-          !
+          ! Uncomment for PCS
+          !> TODO: check if a function specific for the linear fields is needed  
+          !> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
+          !> TODO: a lot of computation is done in this function, can we optimize it? 
+          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now, &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                                        sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
+
+          B_norm2 = B/norm2(B)
+
+          v_par   = dot_product(cylindrical_velocity, B_norm2)
+          v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
+          gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
+
+          do n=1,n_degrees
+            do m=1,n_vertex_max
+              proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j) ! TODO: not initialized correctly
+              ! PCS for REs
+              v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
+              v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
+              v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO !> TODO: q is not initialized correctly
+            
+              
+              do i_tor = 1,n_tor
+!                !> TODO: CACHE: optimization possible
+                !$omp atomic
+                feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+                feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+                feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+                !$omp end atomic
+              enddo
+            enddo
+          enddo
+          
           !call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
           !              fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
           !              group_mass, sim_time, tstep_part_adj, ifail)
+
+          !> volume_preserving_push_jorek_gpu {
 
           ! half_position(1:3) = cylindrical_to_cartesian(p_x(:,j))
           !> cylindrical_to_cartesian {
@@ -741,12 +728,12 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
             half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
             p_i_elm(j),ifail)
 
-          if(p_i_elm(j) .le. 0) cycle
+          !if(p_i_elm(j) .le. 0) cycle
 
           ! copy RZPHI coordinates in particles
           p_x(:,j) = half_position(4:6)
 
-          call calc_EBpsiU_linear_gpu(node_list_gpu, fields%element_list, fields%time_now, &
+          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now, &
                                       fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                                       sim_time+5.d-1*tstep_part_adj, p_i_elm(j), &
                                       p_st(:,j), p_x(3,j), E, B, psi, U)
@@ -801,21 +788,18 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
           half_position(5) = half_position(3)
           half_position(6) = atan2(-half_position(2), half_position(1)) 
 
-          ! find the (i_elm,s,t) coordinates
-    
           call find_RZ_nearby_gpu_inlined(node_list_gpu, fields%element_list, p_x(1,j),&
             p_x(2,j),p_st(1,j),p_st(2,j),p_i_elm(j),&
             half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
             p_i_elm(j),ifail)
+            
           ! copy new RZPHI position into particle
           !p_x(:,j) = half_position(4:6)
           p_x(1,j) = half_position(4)
           p_x(2,j) = half_position(5)
           p_x(3,j) = half_position(6)
 
-          ! print x and p after the push
-          !write(*,*) "DEBUG: x = ", p_x(1,j), p_x(2,j), p_x(3,j)
-          !write(*,*) "DEBUG: p = ", p_p(1,j), p_p(2,j), p_p(3,j)
+          !> } volume_preserving_push_jorek_gpu
 
         end do !< steps
       end do !< particles
