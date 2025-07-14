@@ -469,11 +469,6 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
     use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_inlined
     use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
     use phys_module, only: F0, mode, central_mass, central_density, tstep
-    !inlining
-    use mod_coordinate_transforms, only: cartesian_to_cylindrical
-    use mod_coordinate_transforms, only: cylindrical_to_cartesian
-    use mod_find_rz_nearby, only: find_RZ_nearby_gpu, find_RZ_nearby_gpu_inlined
-    use mod_pusher_tools, only: cayley_transform !< use full Cayley transform
     ! timing
     use mpi
 
@@ -506,12 +501,6 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
     real*8    :: group_mass
     real*8    :: sim_time
     type(type_node_list_gpu) :: node_list_gpu
-    !> inline
-    real*8 :: half_position(6)
-    real*8 :: B_cartesian(3), E_cartesian(3)
-    real*8 :: scaling_factor !< in [s^2*C/(kg*m)]
-    real*8 :: cayley_transform_mat_tmp(3,3) !< temporary matrix for the Cayley transform
-    real*8 :: dot_tmp !< temporary variable for the dot product
     !> SoA
     real*8, allocatable           :: p_x(:,:)   !< particle position in real space
     real*8, allocatable           :: p_p(:,:)   !< particle momentum in real space
@@ -621,35 +610,23 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,           & 
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)                    &
       !$omp private(ifail, j, k)                                                    &
-      !$omp private(half_position, E, B, E_cartesian, B_cartesian, scaling_factor,  &
-      !$omp         psi, U, cayley_transform_mat_tmp, HH, HH_s, HH_t, HZ,           &
+      !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                               &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
-      !$omp         cylindrical_velocity, gamma_m, proj_factor, v_Ppar, v_Pperp,    &
-      !$omp         v_jPhi, m, n, i_tor, dot_tmp)                                   &
+      !$omp         cylindrical_velocity, gamma_m, proj_factor,                     &
+      !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                           &
       !$omp device(sim%gpu_id)                                                                    
       do j=1,size(p_x,2)
         do k=1,nstep_particles
           if (p_i_elm(j) .le. 0) cycle ! exit ! TODO: MUST BE REMOVED!!!
           
+          ! HH_s and HH_t are not used
           call basisfunctions(p_st(1,j), p_st(2,j), HH, HH_s, HH_t)
           call mode_moivre(p_x(3,j), HZ)
 
           ! Determines velocity in cylindrical coordinates
-          !cylindrical_momentum = vector_cartesian_to_cylindrical(p_x(3,j), p_p(:,j))
-          !> vector_cartesian_to_cylindrical {
-          cylindrical_momentum(1) = p_p(1,j)*cos(p_x(3,j)) - p_p(2,j)*sin(p_x(3,j))
-          cylindrical_momentum(2) = p_p(3,j)
-          cylindrical_momentum(3) = -1.d0*(p_p(1,j)*sin(p_x(3,j)) + p_p(2,j)*cos(p_x(3,j)))
-          !> } vector_cartesian_to_cylindrical
-
-          !> TODO: group_mass should be declared above
-          !> TODO: can dot_product and sqrt GPU implementation cause issues?
-          !cylindrical_velocity = cylindrical_momentum / &
-          !                        sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
-          dot_tmp = sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
-          cylindrical_velocity(1) = cylindrical_momentum(1) / dot_tmp
-          cylindrical_velocity(2) = cylindrical_momentum(2) / dot_tmp
-          cylindrical_velocity(3) = cylindrical_momentum(3) / dot_tmp
+          cylindrical_momentum = vector_cartesian_to_cylindrical(p_x(3,j), p_p(:,j))
+          cylindrical_velocity = cylindrical_momentum / &
+                                  sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
 
           ! Uncomment for PCS
           !> TODO: check if a function specific for the linear fields is needed  
@@ -659,10 +636,16 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
                                       fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                                         sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
 
-          B_norm2 = B/norm2(B)
-
+          ! norm2 is really slow on GPU
+          !B_norm2 = B/norm2(B)
+          B_norm2  = B / sqrt(B(1)**2 + B(2)**2 + B(3)**2)
+          
+          !v_par   = dot_product(cylindrical_velocity, B_norm2)
           v_par   = dot_product(cylindrical_velocity, B_norm2)
-          v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
+          !v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
+          v_perp   = sqrt(((cylindrical_velocity(1))-v_par*B_norm2(1))**2 + &
+                          ((cylindrical_velocity(2))-v_par*B_norm2(2))**2 + &
+                          ((cylindrical_velocity(3))-v_par*B_norm2(3))**2)
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
 
           do n=1,n_degrees
@@ -672,10 +655,8 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
               v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
               v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
               v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO !> TODO: q is not initialized correctly
-            
               
               do i_tor = 1,n_tor
-!                !> TODO: CACHE: optimization possible
                 !$omp atomic
                 feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
                 feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
@@ -685,121 +666,9 @@ subroutine evolve_REs_2_loops_SoA(sim, group_num, feedback_rhs, rng, tstep_part_
             enddo
           enddo
           
-          !call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
-          !              fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-          !              group_mass, sim_time, tstep_part_adj, ifail)
-
-          !> volume_preserving_push_jorek_gpu {
-
-          ! half_position(1:3) = cylindrical_to_cartesian(p_x(:,j))
-          !> cylindrical_to_cartesian {
-          half_position(1) = p_x(1,j) * cos(-p_x(3,j))
-          half_position(2) = p_x(1,j) * sin(-p_x(3,j))
-          half_position(3) = p_x(2,j)
-          !> } cylindrical_to_cartesian
-
-          ! compute first half-step
-          !call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
-          !    mass,timestep,scaling_factor)
-          !> volume_preserving_first_half_step_jorek {
-          
-          scaling_factor = 5.d-1*tstep_part_adj*p_q(j)*EL_CHG/(ATOMIC_MASS_UNIT*group_mass*SPEED_OF_LIGHT)
-          ! compute dimensionless momentum
-          ! p_p(:,j) = p_p(:,j)/(group_mass*SPEED_OF_LIGHT)
-          p_p(1,j) = p_p(1,j)/(group_mass*SPEED_OF_LIGHT)
-          p_p(2,j) = p_p(2,j)/(group_mass*SPEED_OF_LIGHT)
-          p_p(3,j) = p_p(3,j)/(group_mass*SPEED_OF_LIGHT)
-
-          ! compute coordinates at half-step
-          !half_position(1:3)  = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(:,j)) &
-          !                /(sqrt(1.d0+dot_product(p_p(:,j),p_p(:,j))))
-          dot_tmp = sqrt(1.d0 + p_p(1,j)*p_p(1,j) + p_p(2,j)*p_p(2,j) + p_p(3,j)*p_p(3,j))
-          half_position(1) = half_position(1) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(1,j))/dot_tmp
-          half_position(2) = half_position(2) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(2,j))/dot_tmp
-          half_position(3) = half_position(3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(3,j))/dot_tmp
-
-          !> volume_preserving_first_half_step_jorek }
-
-          ! calculate cylindrical coordinates from cartesian ones
-          half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
-
-          call find_RZ_nearby_gpu_inlined(node_list_gpu, fields%element_list, p_x(1,j),&
-            p_x(2,j),p_st(1,j),p_st(2,j),p_i_elm(j),&
-            half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
-            p_i_elm(j),ifail)
-
-          !if(p_i_elm(j) .le. 0) cycle
-
-          ! copy RZPHI coordinates in particles
-          p_x(:,j) = half_position(4:6)
-
-          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now, &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-                                      sim_time+5.d-1*tstep_part_adj, p_i_elm(j), &
-                                      p_st(:,j), p_x(3,j), E, B, psi, U)
-          
-          ! compute the second half-step  
-          !call volume_preserving_second_half_step_jorek(particle, &
-          !  half_position(1:3),scaling_factor,                    &
-          !  vector_cylindrical_to_cartesian(particle%x(3),E),     &
-          !  vector_cylindrical_to_cartesian(particle%x(3),B),     &
-          !  mass,timestep)
-          
-          E_cartesian = vector_cylindrical_to_cartesian(p_x(3,j),E)
-          B_cartesian = vector_cylindrical_to_cartesian(p_x(3,j),B)
-
-          !> volume_preserving_second_half_step_jorek {
-
-          ! compute momentum at t_(i+1/2)
-          p_p(:,j) = p_p(:,j) + scaling_factor*E_cartesian
-          ! rotate momentum with respect to the magnetic field
-          !p_p(:,j) = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+p_dot)), B_cartesian), p_p(:,j))
-          cayley_transform_mat_tmp = cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+dot_product(p_p(:,j), p_p(:,j)))), B_cartesian)
-          !p_p(:,j) = matmul(cayley_transform_mat_tmp, p_p(:,j))
-          p_p(1,j) = cayley_transform_mat_tmp(1,1) * p_p(1,j) + cayley_transform_mat_tmp(1,2) * p_p(2,j) + cayley_transform_mat_tmp(1,3) * p_p(3,j)
-          p_p(2,j) = cayley_transform_mat_tmp(2,1) * p_p(1,j) + cayley_transform_mat_tmp(2,2) * p_p(2,j) + cayley_transform_mat_tmp(2,3) * p_p(3,j)
-          p_p(3,j) = cayley_transform_mat_tmp(3,1) * p_p(1,j) + cayley_transform_mat_tmp(3,2) * p_p(2,j) + cayley_transform_mat_tmp(3,3) * p_p(3,j)
-          
-          ! compute momentum at t_(i+1)
-          !p_p(:,j) = p_p(:,j) + scaling_factor*E_cartesian
-          p_p(1,j) = p_p(1,j) + scaling_factor*E_cartesian(1)
-          p_p(2,j) = p_p(2,j) + scaling_factor*E_cartesian(2)
-          p_p(3,j) = p_p(3,j) + scaling_factor*E_cartesian(3)
-
-          ! update position at t_(i+1)
-          !half_position(1:3) = half_position(1:3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(:,j))/&
-          !  (sqrt(1.d0+dot_product(p_p(:,j),p_p(:,j))))
-          dot_tmp = sqrt(1.d0 + p_p(1,j)*p_p(1,j) + p_p(2,j)*p_p(2,j) + p_p(3,j)*p_p(3,j))
-          half_position(1) = half_position(1) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(1,j))/dot_tmp
-          half_position(2) = half_position(2) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(2,j))/dot_tmp
-          half_position(3) = half_position(3) + (5.d-1*tstep_part_adj*SPEED_OF_LIGHT*p_p(3,j))/dot_tmp
-          
-          ! compute dimensional momentum
-          !p_p(:,j) = p_p(:,j)*group_mass*SPEED_OF_LIGHT
-          p_p(1,j) = p_p(1,j)*group_mass*SPEED_OF_LIGHT
-          p_p(2,j) = p_p(2,j)*group_mass*SPEED_OF_LIGHT
-          p_p(3,j) = p_p(3,j)*group_mass*SPEED_OF_LIGHT
-
-          !> } volume_preserving_second_half_step_jorek 
-
-          ! transform back from cartesian to cylindrical coordinates
-          !half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
-          half_position(4) = sqrt(half_position(1)**2 + half_position(2)**2)
-          half_position(5) = half_position(3)
-          half_position(6) = atan2(-half_position(2), half_position(1)) 
-
-          call find_RZ_nearby_gpu_inlined(node_list_gpu, fields%element_list, p_x(1,j),&
-            p_x(2,j),p_st(1,j),p_st(2,j),p_i_elm(j),&
-            half_position(4),half_position(5),p_st(1,j),p_st(2,j),&
-            p_i_elm(j),ifail)
-            
-          ! copy new RZPHI position into particle
-          !p_x(:,j) = half_position(4:6)
-          p_x(1,j) = half_position(4)
-          p_x(2,j) = half_position(5)
-          p_x(3,j) = half_position(6)
-
-          !> } volume_preserving_push_jorek_gpu
+          call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), node_list_gpu, fields%element_list, fields%time_now, &
+                        fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                        group_mass, sim_time, tstep_part_adj, ifail)
 
         end do !< steps
       end do !< particles

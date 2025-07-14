@@ -431,26 +431,17 @@ integer :: i, n1(2), n2(2)
 
 ! Check if element is valid
 if (i_elm_old .lt. 1 .or. i_elm_old .gt. element_list%n_elements) then
-#if STELLARATOR_MODEL
-  write(*,*) "ERROR: find_RZ is not implemented for stellarators"
-  stop
-#else
 
 #ifdef USE_GPU_TEST
-  write(*,*) "WARNING: element not valid, but find_RZ is not implemented for GPU"
+  !write(*,*) "WARNING: element not valid, but find_RZ is not implemented for GPU"
 #endif 
   i_elm_new = 0
   return
-#endif
 end if
 
 if (present(phi)) then
   p = phi
 else
-#if STELLARATOR_MODEL
-  write(*,*) "Toroidal angle phi must be defined for stellarator models"
-  stop
-#endif
   p = 0.0
 endif
 
@@ -572,18 +563,13 @@ do newton_iter_number = 1, newton_iter_max
     !> } coord_in_neighbour_gpu
 
     if (i_elm_new .lt. 0) then
-#if STELLARATOR_MODEL
-      write(*,*) "ERROR: find_RZ is not implemented for stellarators"
-      stop
-#else
 
 #ifdef USE_GPU_TEST
-    write(*,*) "WARNING: impossible finding a neighbour, but find_RZ is not implemented for GPU"
+    !write(*,*) "WARNING: impossible finding a neighbour, but find_RZ is not implemented for GPU"
 #endif
     i_elm_new = 0
 
     if (ifail .ne. 0) i_elm_new = 0
-#endif
     end if
     if (i_elm_new .eq. 0) then ! No element on that side, particle is lost
       i_elm_new = - i_elm_tmp ! Save position of particle
@@ -705,33 +691,23 @@ enddo
 
 
 if (ieee_is_nan(err2)) then
-#if STELLARATOR_MODEL
-  write(*,*) "ERROR: find_RZ is not implemented for stellarators"
-  stop
-#else
 
 #ifdef USE_GPU_TEST
-  write(*,*) "WARNING: NaN encountered after newton iteration ", newton_iter_number, " and element ", i_elm_new
+  !write(*,*) "WARNING: NaN encountered after newton iteration ", newton_iter_number, " and element ", i_elm_new
 #endif
   i_elm_new = 0
 
   return
-#endif
 endif
 if (newton_iter_number .gt. newton_iter_max) then
-#if STELLARATOR_MODEL
-  write(*,*) "ERROR: find_RZ is not implemented for stellarators"
-  stop
-#else
 
 #ifdef USE_GPU_TEST
-  write(*,*) "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
-              " using find_RZ, but find_RZ is not implemented for GPU"
+  !write(*,*) "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
+  !            " using find_RZ, but find_RZ is not implemented for GPU"
 #endif
   i_elm_new = 0
 
   return
-#endif
 endif
 end subroutine find_RZ_nearby_gpu_inlined
 
