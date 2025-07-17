@@ -106,7 +106,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   use mod_coordinate_transforms, only: cylindrical_to_cartesian
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   use mod_fields
-  use mod_find_rz_nearby, only: find_RZ_nearby_gpu, find_RZ_nearby_gpu_inlined
+  use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
        calc_EBpsiU_linear_gpu_inlined
   use data_structure, only: type_node_list_gpu, type_element_list
@@ -167,7 +167,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu_inlined(node_list, element_list, x(1),&
+  call find_RZ_nearby_gpu(node_list, element_list, x(1),&
        x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
        st(1),st(2), i_elm, ifail)
 
@@ -213,7 +213,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu_inlined(node_list, element_list, x(1),&
+  call find_RZ_nearby_gpu(node_list, element_list, x(1),&
        x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
        st(1),st(2), i_elm, ifail)
 
@@ -232,7 +232,7 @@ subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, tim
   use mod_coordinate_transforms, only: cylindrical_to_cartesian
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   use mod_fields
-  use mod_find_rz_nearby, only: find_RZ_nearby_gpu, find_RZ_nearby_gpu_inlined
+  use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
        calc_EBpsiU_linear_gpu
   use data_structure, only: type_node_list_gpu, type_element_list
@@ -276,19 +276,12 @@ subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, tim
        particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
        half_position(4),half_position(5),particle%st(1),particle%st(2),&
        particle%i_elm,ifail)
-  !call find_RZ_nearby_gpu(node_list,fields%element_list,particle%x(1),&
-  !     particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
-  !     half_position(4),half_position(5),particle%st(1),particle%st(2),&
-  !     particle%i_elm,ifail)
 
   ! check if the particle is lost, exit if it is the case
   if(particle%i_elm.le.0) return
   ! copy RZPHI coordinates in particles
   particle%x = half_position(4:6)
   ! compute magnetic and electric fields
-
-  !call calc_EBpsiU_linear_gpu(fields, node_list, time+5.d-1*timestep,particle%i_elm,&
-  !     particle%st,particle%x(3),E,B,psi,U)
   call calc_EBpsiU_linear_gpu(node_list, element_list, time_now, &
                                       time_prev, static, flag_zero_dpsidt, &
                                        time+5.d-1*timestep, particle%i_elm, particle%st, particle%x(3), E, B, psi, U)
