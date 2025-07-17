@@ -84,6 +84,9 @@ subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbo
   logical, intent(out)              :: co !< True if elements are both clockwise or
 !< counter-clockwise (i.e. they have the same direction)
   integer :: i, n1(2), n2(2)
+#ifdef USE_GPU
+  !$omp declare target
+#endif
 
   co = .false. ! does not mean anything if not neighbours
   neighbours = .false.
