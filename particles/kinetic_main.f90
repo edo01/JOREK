@@ -130,8 +130,6 @@ else
   call initialise_particles_for_sim(sim) !< initialise the particle positions for groups requiring it (e.g. REs)
 
   call write_simulation_hdf5(sim, 'part_restart_init.h5')
-  ! call initialise_markers_over_time(sim, 1.d-5, 1000000) 
-  ! call write_simulation_hdf5(sim, 'part_restart_init2.h5')
 
   if (init_particles_only) then
     call sim%finalize
