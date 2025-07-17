@@ -131,7 +131,7 @@ subroutine basic_initialization(sim, group_num, rng, init_pdf, energy, pitch, st
   type is (particle_kinetic_relativistic)
     !$omp parallel do default(none) &
     !$omp private(E, B, psi, U, B_cart, B_norm, e1, e2, gyro_angle, j) &
-    !$omp shared (sim, tstep_particles, p_par, p_perp, num_part)
+    !$omp shared (particles, sim, tstep_particles, p_par, p_perp, num_part)
     do j=1,num_part
 
       ! Extract magnetic field and convert to cartesian coordinates
