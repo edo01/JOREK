@@ -167,7 +167,7 @@ contains
       write(*,*) 'INFO: REs evolution executed on CPU'
       write(*,*) 'INFO: Using evolve_REs'
       write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
-      write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
+      write(*,*) 'INFO: number of timesteps: ', nstep_particles
       write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
@@ -329,7 +329,7 @@ contains
       write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
       write(*,*) 'INFO: Using evolve_REs_gpu'
       write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
-      write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
+      write(*,*) 'INFO: number of timesteps: ', nstep_particles
       write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
@@ -509,7 +509,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
       write(*,*) 'INFO: Using evolve_REs_gpu_SoA kernel'
       write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
-      write(*,*) 'INFO: number of particles per tstep: ', nstep_particles
+      write(*,*) 'INFO: number of timesteps: ', nstep_particles
       write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
@@ -632,13 +632,11 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
           ! norm2 is really slow on GPU
           !B_norm2 = B/norm2(B)
-          B_norm2  = B / sqrt(B(1)**2 + B(2)**2 + B(3)**2)
+          B_norm2  = B / sqrt(dot_product(B,B)) 
           
           v_par   = dot_product(cylindrical_velocity, B_norm2)
           !v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
-          v_perp   = sqrt(((cylindrical_velocity(1))-v_par*B_norm2(1))**2 + &
-                          ((cylindrical_velocity(2))-v_par*B_norm2(2))**2 + &
-                          ((cylindrical_velocity(3))-v_par*B_norm2(3))**2)
+          v_perp = sqrt(dot_product(cylindrical_velocity - v_par * B_norm2, cylindrical_velocity - v_par * B_norm2))
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
 
           do n=1,n_degrees
@@ -652,12 +650,15 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
               do i_tor = 1,n_tor
                 !$omp atomic update
                 feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+                !$omp end atomic
 
                 !$omp atomic update
                 feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+                !$omp end atomic
 
                 !$omp atomic update
                 feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+                !$omp end atomic
               enddo
             enddo
           enddo
