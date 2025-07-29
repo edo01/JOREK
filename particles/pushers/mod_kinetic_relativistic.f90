@@ -140,6 +140,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   ! volume_preserving_second_half_step_jorek
   real(kind=8) :: E_cartesian(3), B_cartesian(3)
   real*8 :: cayley_transform_mat_tmp(3,3) !< temporary matrix for the Cayley transform
+  real*8 :: p_old(3) !< old momentum to be used in the Cayley transform
 
 #ifdef USE_GPU
   !$omp declare target
@@ -192,10 +193,11 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   ! rotate momentum with respect to the magnetic field
   !p_p(:,j) = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+p_dot)), B_cartesian), p_p(:,j))
   cayley_transform_mat_tmp = cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+dot_product(p, p))), B_cartesian)
+  p_old = p
   !p_p(:,j) = matmul(cayley_transform_mat_tmp, p_p(:,j)) ! matmul seems not to work on GPU
-  p(1) = cayley_transform_mat_tmp(1,1) * p(1) + cayley_transform_mat_tmp(1,2) * p(2) + cayley_transform_mat_tmp(1,3) * p(3)
-  p(2) = cayley_transform_mat_tmp(2,1) * p(1) + cayley_transform_mat_tmp(2,2) * p(2) + cayley_transform_mat_tmp(2,3) * p(3)
-  p(3) = cayley_transform_mat_tmp(3,1) * p(1) + cayley_transform_mat_tmp(3,2) * p(2) + cayley_transform_mat_tmp(3,3) * p(3)
+  p(1) = cayley_transform_mat_tmp(1,1) * p_old(1) + cayley_transform_mat_tmp(1,2) * p_old(2) + cayley_transform_mat_tmp(1,3) * p_old(3)
+  p(2) = cayley_transform_mat_tmp(2,1) * p_old(1) + cayley_transform_mat_tmp(2,2) * p_old(2) + cayley_transform_mat_tmp(2,3) * p_old(3)
+  p(3) = cayley_transform_mat_tmp(3,1) * p_old(1) + cayley_transform_mat_tmp(3,2) * p_old(2) + cayley_transform_mat_tmp(3,3) * p_old(3)
   
   ! compute momentum at t_(i+1)
   p = p + scaling_factor*E_cartesian
