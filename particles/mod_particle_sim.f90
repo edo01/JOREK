@@ -396,7 +396,7 @@ subroutine init_gpu(my_id, gpu_id)
   call MPI_COMM_SIZE(node_comm, node_size, ierr)
   
   if (my_id .eq. 0) then
-    write(*,*) "INFO: GPU initialisation"
+    write(*,*) "-------------- GPU initialisation --------------"
     write(*,*) "INFO: Number of GPUs available on the node: ", omp_get_num_devices()
     write(*,*) "INFO: Number of MPI tasks on the node: ", node_size
   end if
@@ -413,13 +413,13 @@ subroutine init_gpu(my_id, gpu_id)
       write(*,*)  "GPUs per node: ", omp_get_num_devices()
       write(*,*)  "Not all GPUs will be used"
     endif
+    write(*,*) "------------------------------------------------"
   endif
 
   gpu_id = mod(node_rank, omp_get_num_devices())
 
   ! --- Set the appropriate GPU as device 
   call omp_set_default_device(gpu_id)
-  write(*,*) "Using GPU device ", gpu_id, " for MPI rank ", my_id
 #endif
 
   call update_target_phys_module_kinetic()
