@@ -1294,7 +1294,7 @@ module hdf5_io_module
   subroutine HDF5_array1D_saving(file_id,array1D,dim1,dsetname,start,compress_level,&
   use_hdf5_parallel_in,mpio_collective_in)
     use hdf5, only: H5P_DEFAULT_F
-    implicit none
+    implicit none 
     integer(HID_T)      , intent(in) :: file_id   ! file identifier
     real*8, dimension(:), intent(in) :: array1D
     integer             , intent(in) :: dim1
@@ -2447,7 +2447,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array1D(reqdims_in(1))); array1D = 0;
         call H5Screate_simple_f(rank,reqdims_in,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array1D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims_in, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_INTEGER,array1D,reqdims_in,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -2589,7 +2589,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array2D(reqdims(1),reqdims(2))); array2D = 0;
         call H5Screate_simple_f(rank,reqdims,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array2D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_INTEGER,array2D,reqdims,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -2917,7 +2917,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array1D(reqdims_in(1))); array1D = 0d0;
         call H5Screate_simple_f(rank,reqdims_in,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array1D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims_in, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_REAL,array1D,reqdims_in,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -2991,7 +2991,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array1D(reqdims_in(1))); array1D = 0d0;
         call H5Screate_simple_f(rank,reqdims_in,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array1D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims_in, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_DOUBLE,array1D,reqdims_in,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -3129,10 +3129,10 @@ end subroutine HDF5_array1D_reading_char_len
         enddo
         !*** load a data slab of size reqdims and start start ***
         !*** using default transfer properties ***
-        allocate(array2D(reqdims(1),reqdims(2))); array2D = 0d0;
+        allocate(array2D(reqdims(1),reqdims(2))); array2D = 0d0;        
         call H5Screate_simple_f(rank,reqdims,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array2D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_DOUBLE,array2D,reqdims,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -3278,7 +3278,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array3D(reqdims(1),reqdims(2),reqdims(3))); array3D = 0d0;
         call H5Screate_simple_f(rank,reqdims,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array3D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_DOUBLE,array3D,reqdims,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -3421,7 +3421,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array4D(reqdims(1),reqdims(2),reqdims(3),reqdims(4))); array4D = 0d0;
         call H5Screate_simple_f(rank,reqdims,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array4D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_DOUBLE,array4D,reqdims,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
@@ -3601,7 +3601,7 @@ end subroutine HDF5_array1D_reading_char_len
         allocate(array5D(reqdims(1),reqdims(2),reqdims(3),reqdims(4),reqdims(5))); 
         array5D = 0d0; call H5Screate_simple_f(rank,reqdims,dataspace_req_id,error)
         call H5Sselect_hyperslab_f(dataspace_id, H5S_SELECT_SET_F, &
-        start=start, count=shape(array5D,kind=HSIZE_T), hdferr=error)
+        start=start, count=reqdims, hdferr=error)
         call H5Dread_f(dataset_id,H5T_NATIVE_DOUBLE,array5D,reqdims,error, &
             file_space_id=dataspace_id, mem_space_id=dataspace_req_id)
         call H5Sclose_f(dataspace_req_id,error)       
