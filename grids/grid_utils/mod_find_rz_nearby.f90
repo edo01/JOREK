@@ -242,7 +242,7 @@ real*8, optional,         intent(in)    :: phi
 
 !> Accuracy defaults (tolerances are squared!, units of element size)
 real*8,  parameter :: element_tolerance   = 1.d-24 !< Tolerance for finding a position inside an element
-integer, parameter :: newton_iter_max     = 200 !< Number of iterations to try
+integer, parameter :: newton_iter_max     = 8 !< Number of iterations to try
 
 !> Internal variables
 real*8  :: p              
