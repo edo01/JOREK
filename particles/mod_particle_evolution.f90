@@ -98,7 +98,12 @@ contains
     !> End timing the section
     end_time = MPI_WTIME()
     if (sim%my_id .eq. 0) write(*,*) "Time taken for coupling scheme '", part_group%coupling_scheme, "' in group '", part_group%id, "': ", end_time - start_time, " seconds"
-    
+#ifdef USE_GPU_TEST
+    !> count number of particles in system
+    call with(sim, counter)
+    call gpu_test(sim, group_num, feedback_rhs)
+#endif
+
     ! ================================= CONSTRUCT PROJECTION RHS =======================================
     !> enter gathered rhs into jorek_feedback
     if (part_group%coupling_scheme == 'ncs' .or. part_group%coupling_scheme == 'ics') then
@@ -164,11 +169,10 @@ contains
     integer   :: j, k, m, n, ifail, i_tor, n_lost
     
     if (sim%my_id .eq. 0) then
-      write(*,*) 'INFO: REs evolution executed on CPU'
-      write(*,*) 'INFO: Using evolve_REs'
-      write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
-      write(*,*) 'INFO: number of timesteps: ', nstep_particles
-      write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+      write(*,*) 'INFO: REs evolution executed on     : CPU'
+      write(*,*) 'INFO: kernel                        : evolve_REs'
+      write(*,*) 'INFO: number of timesteps           : ', nstep_particles
+      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
@@ -261,10 +265,6 @@ contains
   
     end select
     
-#ifdef USE_GPU_TEST
-    call gpu_test(sim, group_num, feedback_rhs)
-#endif 
-
   end subroutine evolve_REs
 
   !> Parallelization strategies to handle the feedback accumulation:
@@ -326,11 +326,10 @@ contains
     type(type_node_list_gpu) :: node_list_gpu
 
     if (sim%my_id .eq. 0) then
-      write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
-      write(*,*) 'INFO: Using evolve_REs_gpu'
-      write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
-      write(*,*) 'INFO: number of timesteps: ', nstep_particles
-      write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+      write(*,*) 'INFO: REs evolution executed on     : GPU'
+      write(*,*) 'INFO: kernel                        : evolve_REs_gpu'
+      write(*,*) 'INFO: number of timesteps           : ', nstep_particles
+      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
     ! TODO: not used
@@ -447,9 +446,6 @@ contains
 
     end select !< particles
 
-#ifdef USE_GPU_TEST
-    call gpu_test(sim, group_num, feedback_rhs)
-#endif
 
     !> deallocate the node_list_gpu
     call dealloc_node_list_gpu(node_list_gpu)
@@ -503,14 +499,12 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     integer, allocatable          :: p_i_life(:) !< particle lifetime index (i.e. is this still the same particle?)
     real*8, allocatable           :: p_t_birth(:) !< birth time of this particle
     integer(kind=1),allocatable   :: p_q(:) !< charge [e]
-    real*8 :: start_time, end_time !< timing variables
 
     if (sim%my_id .eq. 0) then
-      write(*,*) 'INFO: REs evolution OFFLOADED to GPU'
-      write(*,*) 'INFO: Using evolve_REs_gpu_SoA kernel'
-      write(*,*) 'INFO: number of particles in group: ', size(sim%groups(group_num)%particles,1)
-      write(*,*) 'INFO: number of timesteps: ', nstep_particles
-      write(*,*) 'INFO: feedback_rhs dimension: ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+      write(*,*) 'INFO: REs evolution executed on     : GPU'
+      write(*,*) 'INFO: kernel                        : evolve_REs_gpu_SoA'
+      write(*,*) 'INFO: number of timesteps           : ', nstep_particles
+      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
     ! TODO: not used
@@ -551,9 +545,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       endif
     enddo
 
-    !> Start timing the section
-    start_time = MPI_WTIME()
-
     !> allocate the SoA data structures
     !> TODO: move them in the main and update them before the kernel execution
     allocate(p_x(3,size(particles,1)))
@@ -577,11 +568,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !p_i_life(j) = particles(j)%i_life
       !p_t_birth(j) = particles(j)%t_birth
     enddo
-
-    end_time = MPI_WTIME()
-
-    if (sim%my_id .eq. 0) write(*,*) "Time taken by the GPU data structure initialization: ", end_time - start_time, " seconds"
-
 
     select type (fields => sim%fields)
     type is (jorek_fields_interp_linear)
@@ -688,15 +674,13 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
     end select ! select type (particles)
 
-#ifdef USE_GPU_TEST
-    call gpu_test(sim, group_num, feedback_rhs)
-#endif
 
     !> ------------------CLEANING---------------------
 
     !> deallocate the node_list_gpu
     call dealloc_node_list_gpu(node_list_gpu)
 
+    ! not necessary
     deallocate(p_x)
     deallocate(p_p)
     deallocate(p_st)
@@ -1102,6 +1086,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
   subroutine gpu_test(sim, group_num, feedback_rhs)
     use hdf5_io_module
+    use mpi
 
     implicit none
     class(particle_sim), target, intent(inout)                :: sim
@@ -1110,19 +1095,19 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     real*8, allocatable :: feedback_rhs_linear(:)
     integer(HID_T) fid
     integer :: ierr
-    integer :: particle_lost
+    integer :: particle_lost, particle_lost_all
     integer :: j, m, n, k
 
     !> ------------------TESTING---------------------
-    
     particle_lost = 0
     do j=1,size(sim%groups(group_num)%particles,1)
       if (sim%groups(group_num)%particles(j)%i_elm .le. 0) then
         particle_lost = particle_lost + 1
       endif
-    enddo
+    enddo    
+    call MPI_REDUCE(particle_lost, particle_lost_all, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     if (sim%my_id .eq. 0) then
-      write(*,*) "INFO: number of particles lost in group", group_num, ": ", particle_lost
+      write(*,'(A,I0)') "INFO: number of particles lost in group : ", particle_lost_all
     endif
 
     particle_lost = 0
@@ -1131,8 +1116,9 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
         particle_lost = particle_lost + 1
       endif
     enddo
+    call MPI_REDUCE(particle_lost, particle_lost_all, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     if (sim%my_id .eq. 0) then
-      write(*,*) "INFO: number of particles lost in group NUMBER_OF_ITER", group_num, ": ", particle_lost
+      write(*,'(A,I0)') "INFO: number of particles lost in group NUMBER_OF_ITER : ", particle_lost_all
     endif
 
     particle_lost = 0
@@ -1141,8 +1127,9 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
         particle_lost = particle_lost + 1
       endif
     enddo
+    call MPI_REDUCE(particle_lost, particle_lost_all, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     if (sim%my_id .eq. 0) then
-      write(*,*) "INFO: number of particles lost in group NAN", group_num, ": ", particle_lost
+      write(*,'(A,I0)') "INFO: number of particles lost in group NAN : ", particle_lost_all
     endif
 
     particle_lost = 0
@@ -1151,50 +1138,9 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
         particle_lost = particle_lost + 1
       endif
     enddo
+    call MPI_REDUCE(particle_lost, particle_lost_all, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     if (sim%my_id .eq. 0) then
-      write(*,*) "INFO: number of particles lost in an element crossing the axis", group_num, ": ", particle_lost
-    endif
-  !> output the feedback_rhs to a file
-
-  if (sim%my_id .eq. 0) then
-    !check for NaNs in the feedback_rhs
-    if (any(feedback_rhs(:,:,:,:,:) /= feedback_rhs(:,:,:,:,:))) then
-      write(*,*) "ERROR: NaN found in feedback rhs"
-      !stop 1
-    endif
-
-    !> save the feedback rhs to a file
-    allocate(feedback_rhs_linear(size(feedback_rhs,3)*3))
-
-    !> Collapse on the element dimension and accumulate all the other dimensions
-    feedback_rhs_linear = 0.d0
-    do m=1,size(feedback_rhs,3)
-      do n=1,size(feedback_rhs,4)
-        do j=1,size(feedback_rhs,1)
-          do k=1,size(feedback_rhs,2)
-            feedback_rhs_linear((m-1)*3 + 1) = feedback_rhs_linear((m-1)*3 + 1) + feedback_rhs(j,k,m,n,1) !< P_par
-            feedback_rhs_linear((m-1)*3 + 2) = feedback_rhs_linear((m-1)*3 + 2) + feedback_rhs(j,k,m,n,2) !< P_perp
-            feedback_rhs_linear((m-1)*3 + 3) = feedback_rhs_linear((m-1)*3 + 3) + feedback_rhs(j,k,m,n,3) !< j_Phi
-          enddo
-        enddo
-      enddo
-    enddo
-
-#ifdef USE_GPU
-    call HDF5_create(filename="rhs_gpu.h5",file_id=fid,ierr=ierr)
-#else
-    call HDF5_create(filename="rhs_cpu.h5",file_id=fid,ierr=ierr)
-#endif
-
-    if (ierr /= 0) then
-      write(*,*) "ERROR: Could not create HDF5 file for feedback rhs"
-      stop 1
-    endif
-
-    call HDF5_array1D_saving(fid, feedback_rhs_linear, size(feedback_rhs_linear), 'rhs')
-    call HDF5_close(fid)
-
-    deallocate(feedback_rhs_linear)
+      write(*,'(A,I0)') "INFO: number of particles lost in an element crossing the axis: ", particle_lost_all
     endif
   end subroutine gpu_test
 
