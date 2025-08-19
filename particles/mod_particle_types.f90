@@ -687,11 +687,7 @@ Bn_k_arr,dBn_k_arr,Bnorm_k_arr,E_k_arr,dAstar_k_arr,particle_type_str)
     particle_type_str = "particle_gc_relativistic";
   end select
   !$omp parallel do default(none) private(ii) firstprivate(n_particles) & 
-  !$omp shared(x_arr,st_arr,t_birth_arr,weight_arr,i_elm_arr,i_life_arr,&
-  !$omp v_1d_arr,B_hat_prev_arr,E_arr,mu_arr,q_arr,vpar_arr,&
-  !$omp B_norm_arr,x_m_arr,vpar_m_arr,Astar_m_arr,Astar_k_arr,&
-  !$omp dAstar_k_arr,Bn_k_arr,dBn_k_arr,Bnorm_k_arr,E_k_arr,&
-  !$omp v_2d_arr,particle_list)
+  !$omp shared(x_arr,st_arr,t_birth_arr,weight_arr,i_elm_arr,i_life_arr,particle_list)
   do ii=1,n_particles
     x_arr(:,ii)             = particle_list(ii)%x 
     st_arr(:,ii)            = particle_list(ii)%st
@@ -699,48 +695,90 @@ Bn_k_arr,dBn_k_arr,Bnorm_k_arr,E_k_arr,dAstar_k_arr,particle_type_str)
     weight_arr(ii)          = particle_list(ii)%weight 
     i_elm_arr(ii)           = particle_list(ii)%i_elm
     i_life_arr(ii)          = particle_list(ii)%i_life
-    select type (p=>particle_list(ii))
-      type is (particle_fieldline)
-      v_1d_arr(ii)          = p%v
-      B_hat_prev_arr(:,ii)  = p%B_hat_prev
-      type is (particle_gc)
-      E_arr(ii)             = p%E; 
-      mu_arr(ii)            = p%mu; 
-      q_arr(ii)             = int(p%q);
-      type is (particle_gc_vpar)
-      vpar_arr(ii)          = p%vpar; 
-      mu_arr(ii)            = p%mu; 
-      B_norm_arr(ii)        = p%B_norm; 
-      q_arr(ii)             = int(p%q);
-      type is (particle_gc_Qin)
-      vpar_arr(ii)          = p%vpar; 
-      mu_arr(ii)            = p%mu; 
-      B_norm_arr(ii)        = p%B_norm; 
-      q_arr(ii)             = int(p%q);
-      x_m_arr(:,ii)         = p%x_m; 
-      vpar_m_arr(ii)        = p%vpar_m;
-      Astar_m_arr(:,ii)     = p%Astar_m;
-      Astar_k_arr(:,ii)     = p%Astar_k;
-      dAstar_k_arr(:,:,ii)  = p%dAstar_k;
-      Bn_k_arr(ii)          = p%Bn_k;
-      dBn_k_arr(:,ii)       = p%dBn_k;
-      Bnorm_k_arr(:,ii)     = p%Bnorm_k;
-      E_k_arr(:,ii)         = p%E_k;
-      type is (particle_kinetic)
-      v_2d_arr(:,ii)        = p%v
-      q_arr(ii)             = int(p%q)
-      type is (particle_kinetic_leapfrog)
-      v_2d_arr(:,ii)        = p%v
-      q_arr(ii)             = int(p%q)
-      type is (particle_kinetic_relativistic)
-      v_2d_arr(:,ii)        = p%p
-      q_arr(ii)             = int(p%q)
-      type is (particle_gc_relativistic)
-      v_2d_arr(:,ii)        = p%p
-      q_arr(ii)             = int(p%q)
-    end select
   enddo
   !$omp end parallel do
+
+  select type (p=>particle_list)
+    type is (particle_fieldline)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(v_1d_arr,B_hat_prev_arr,p)
+      do ii=1,n_particles
+        v_1d_arr(ii)         = p(ii)%v
+        B_hat_prev_arr(:,ii) = p(ii)%B_hat_prev
+      enddo
+      !$omp end parallel do
+    type is (particle_gc)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(E_arr,mu_arr,q_arr,p)
+      do ii=1,n_particles
+        E_arr(ii)  = p(ii)%E
+        mu_arr(ii) = p(ii)%mu
+        q_arr(ii)  = int(p(ii)%q)
+      enddo
+      !$omp end parallel do
+    type is (particle_gc_vpar)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(vpar_arr,mu_arr,B_norm_arr,q_arr,p)
+      do ii=1,n_particles
+        vpar_arr(ii)   = p(ii)%vpar
+        mu_arr(ii)     = p(ii)%mu
+        B_norm_arr(ii) = p(ii)%B_norm
+        q_arr(ii)      = int(p(ii)%q)
+      enddo
+      !$omp end parallel do
+    type is (particle_gc_Qin)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(vpar_arr,mu_arr,B_norm_arr,q_arr,x_m_arr,vpar_m_arr,Astar_m_arr,Astar_k_arr,dAstar_k_arr,Bn_k_arr,dBn_k_arr,Bnorm_k_arr,E_k_arr,p)
+      do ii=1,n_particles
+        vpar_arr(ii)      = p(ii)%vpar
+        mu_arr(ii)        = p(ii)%mu
+        B_norm_arr(ii)    = p(ii)%B_norm
+        q_arr(ii)         = int(p(ii)%q)
+        x_m_arr(:,ii)     = p(ii)%x_m
+        vpar_m_arr(ii)    = p(ii)%vpar_m
+        Astar_m_arr(:,ii) = p(ii)%Astar_m
+        Astar_k_arr(:,ii) = p(ii)%Astar_k
+        dAstar_k_arr(:,:,ii) = p(ii)%dAstar_k
+        Bn_k_arr(ii)      = p(ii)%Bn_k
+        dBn_k_arr(:,ii)   = p(ii)%dBn_k
+        Bnorm_k_arr(:,ii) = p(ii)%Bnorm_k
+        E_k_arr(:,ii)     = p(ii)%E_k
+      enddo
+      !$omp end parallel do
+    type is (particle_kinetic)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(v_2d_arr,q_arr,p)
+      do ii=1,n_particles
+        v_2d_arr(:,ii) = p(ii)%v
+        q_arr(ii)      = int(p(ii)%q)
+      enddo
+      !$omp end parallel do
+    type is (particle_kinetic_leapfrog)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(v_2d_arr,q_arr,p)
+      do ii=1,n_particles
+        v_2d_arr(:,ii) = p(ii)%v
+        q_arr(ii)      = int(p(ii)%q)
+      enddo
+      !$omp end parallel do
+    type is (particle_kinetic_relativistic)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(v_2d_arr,q_arr,p)
+      do ii=1,n_particles
+        v_2d_arr(:,ii) = p(ii)%p
+        q_arr(ii)      = int(p(ii)%q)
+      enddo
+      !$omp end parallel do
+    type is (particle_gc_relativistic)
+      !$omp parallel do default(none) private(ii) firstprivate(n_particles) &
+      !$omp shared(v_2d_arr,q_arr,p)
+      do ii=1,n_particles
+        v_2d_arr(:,ii) = p(ii)%p
+        q_arr(ii)      = int(p(ii)%q)
+      enddo
+      !$omp end parallel do
+  end select
+
 end subroutine particle_arrays_from_list
 
 ! initialise a particle list to 0
