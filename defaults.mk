@@ -223,7 +223,7 @@ ifeq (1, $(USE_FFTW))
 endif
 
 ifeq (1, $(USE_GPU))
-  FLAGS += -mp=gpu -Minfo=mp -gpu=cc90
+  FLAGS += -mp=gpu -Minfo=mp -gpu=cc90 -acc=gpu -target=gpu
   DEFINES  := $(DEFINES) -DUSE_GPU
 
   # Check for CuFFT Flag
@@ -241,6 +241,14 @@ endif
 ifeq (1, $(USE_GPU_TEST))
   DEFINES  := $(DEFINES) -DUSE_GPU_TEST
 endif
+
+ifeq (1, $(USE_RHS_INV))
+  DEFINES  := $(DEFINES) -DUSE_RHS_INV -DUSE_ORDERING
+endif
+
+ifeq (1, $(USE_ORDERING))
+  DEFINES  := $(DEFINES) -DUSE_ORDERING 
+endif 
 
 # polynomial order > 3 requires more Gauss points
 N_ORDER_PARAMETER = $(shell cat models/mod_settings.f90 |grep n_order |grep -v n_degrees | grep -v SETTINGS | awk '{print $$6}' | bc)
