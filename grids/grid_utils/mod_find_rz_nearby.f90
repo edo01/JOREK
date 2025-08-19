@@ -242,7 +242,7 @@ real*8, optional,         intent(in)    :: phi
 
 !> Accuracy defaults (tolerances are squared!, units of element size)
 real*8,  parameter :: element_tolerance   = 1.d-24 !< Tolerance for finding a position inside an element
-integer, parameter :: newton_iter_max     = 8 !< Number of iterations to try
+integer, parameter :: newton_iter_max     = 200 !< Number of iterations to try
 
 !> Internal variables
 real*8  :: p              
@@ -305,7 +305,8 @@ do newton_iter_number = 1, newton_iter_max
 #ifdef USE_GPU_TEST
 !    write(*,*) "WARNING: impossible finding a neighbour, but find_RZ is not implemented for GPU"
 #endif
-    i_elm_new = -3
+    !i_elm_new = -3
+    call find_RZ_gpu(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
     return 
     end if
     if (i_elm_new .eq. 0) then ! No element on that side, particle is lost
@@ -346,7 +347,8 @@ if (newton_iter_number .gt. newton_iter_max) then
   !write(*,*) "WARNING: iteration for st did not converge after", newton_iter_max, " tries in element ", i_elm_new, &
   !            " using find_RZ, but find_RZ is not implemented for GPU"
 #endif
-  i_elm_new = -1
+  !i_elm_new = -1
+  call find_RZ_gpu(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   return
 endif
 end subroutine find_RZ_nearby_gpu
