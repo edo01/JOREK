@@ -745,7 +745,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     
     !> ------------------COPY BACK---------------------
     !> copy the SoA data structures back to the particles
-    do j=1,size(particles,1)
+    do j=1,last_particle_alive_idx
 #ifdef USE_ORDERING
       particles(sorted_indices(j))%x = p_x(:,j)    
       particles(sorted_indices(j))%p = p_p(:,j)
