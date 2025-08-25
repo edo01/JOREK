@@ -482,6 +482,8 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu_inlined
     use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
     use phys_module, only: F0, mode, central_mass, central_density, tstep
+    use hdf5_io_module
+    use mod_particle_io
     ! timing
     use mpi
     
@@ -527,6 +529,25 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     real*8                        :: start_time, end_time, tot_time(3)
 #endif
 
+#ifdef USE_COUNTERS
+    !> jumps counter
+    integer, allocatable  :: jumps_counter(:)
+    real*8,  allocatable  :: v_par_counter(:), v_perp_counter(:)
+    real*8,  allocatable  :: v_counter(:,:)
+    integer              :: prev_elm
+    integer(HID_T) fid
+    integer :: ierr
+    character(len=20) :: myid_str
+
+
+    allocate(jumps_counter(size(sim%groups(group_num)%particles,1)))
+    allocate(v_par_counter(size(sim%groups(group_num)%particles,1)))
+    allocate(v_perp_counter(size(sim%groups(group_num)%particles,1)))
+    allocate(v_counter(3,size(sim%groups(group_num)%particles,1)))
+
+    jumps_counter = 0
+#endif
+
     if (sim%my_id .eq. 0) then
       write(*,*) 'INFO: REs evolution executed on     : GPU'
       write(*,*) 'INFO: kernel                        : evolve_REs_gpu_SoA'
@@ -566,17 +587,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
-
-    !> Loop over all particles in the group and set the weight to 1
-    !> TODO: REMOVE THIS PART
-    !do j=1,size(particles,1)
-    !  if(particles(j)%weight .eq. 0.0) then
-    !        particles(j)%weight = 1.0
-    !  endif
-    !  if(particles(j)%q .eq. 0.0) then
-    !        particles(j)%q = -1.0 !> default charge of the runaway electrons
-    !  endif
-    !enddo
 
 
 #ifdef USE_ORDERING
@@ -645,7 +655,11 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !> TODO: the optimal way would be to allocate the SoA structures in the main, and update them before and after
       !>       the kernel execution. 
       !$omp target data                                                                                     &
+#ifdef USE_COUNTERS
+      !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm, jumps_counter, v_par_counter, v_perp_counter)&
+#else 
       !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                                              &
+#endif
       !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
       !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin,             &
       !$omp         j_phi_idx_kin, p_weight, p_q)                                  
@@ -655,16 +669,24 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !$omp        fields, node_list_gpu,feedback_rhs,                              &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,           & 
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,                    &
+#ifdef USE_COUNTERS
+      !$omp        jumps_counter, v_par_counter, v_perp_counter,                    &
+#endif
       !$omp        last_particle_alive_idx, n_sort)                                 &
       !$omp private(ifail, j, k)                                                    &
       !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                               &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
       !$omp         cylindrical_velocity, gamma_m, proj_factor,                     &
+#ifdef USE_COUNTERS
+      !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor, prev_elm)                 &
+#else
       !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                           &
+#endif
       !$omp device(sim%gpu_id)                                                                    
 #endif
       do j=1, last_particle_alive_idx
         do k=1,nstep_particles/n_sort
+          !if (p_i_elm(j) .ge. 600) cycle
           if (p_i_elm(j) .le. 0) cycle
 
           ! HH_s and HH_t are not used
@@ -691,47 +713,67 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           v_par   = dot_product(cylindrical_velocity, B_norm2)
           !v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
           v_perp = sqrt(dot_product(cylindrical_velocity - v_par * B_norm2, cylindrical_velocity - v_par * B_norm2))
+
+#ifdef USE_COUNTERS
+          v_par_counter(j) = v_par
+          v_perp_counter(j) = v_perp
+#endif
+
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
+
+          v_Ppar  = gamma_m * v_par**2 * MU_ZERO
+          v_Pperp = gamma_m * v_perp**2 / 2.d0 * MU_ZERO
+          v_jPhi  = - real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO
+              
 
           do n=1,n_degrees
             do m=1,n_vertex_max
-              proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j) ! TODO: not initialized correctly
+              proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j)
               ! PCS for REs
-              v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
-              v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-              v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO !> TODO: q is not initialized correctly
-              
+              !v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
+              !v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
+              !v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO
+
               do i_tor = 1,n_tor
 #ifdef USE_RHS_INV
                 !$omp atomic update
-                feedback_rhs(P_par_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(P_par_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_Ppar
+                feedback_rhs(P_par_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(P_par_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_Ppar*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(P_perp_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(P_perp_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_Pperp
+                feedback_rhs(P_perp_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(P_perp_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_Pperp*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(j_phi_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(j_phi_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_jPhi
+                feedback_rhs(j_phi_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(j_phi_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_jPhi*proj_factor
                 !$omp end atomic
 #else
                 !$omp atomic update
-                feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
+                feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
+                feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
+                feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi*proj_factor
                 !$omp end atomic
 #endif
               enddo !< n_tor
             enddo !< n_vertex_max
           enddo !< degrees
 
+#ifdef USE_COUNTERS
+          prev_elm = p_i_elm(j)
+#endif
+
           call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), node_list_gpu, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
 
-          ! update i_elm
+#ifdef USE_COUNTERS
+          if (prev_elm /= p_i_elm(j)) then
+            jumps_counter(j) = jumps_counter(j) + 1
+          end if
+#endif
+
         end do !< steps
       end do !< particles
 #ifdef USE_GPU
@@ -761,8 +803,11 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
     enddo !< n_sort
 
-    end select ! select type (particles)
+#ifdef USE_COUNTERS
+    call write_simulation_counters_hdf5(sim, "sim_counters.h5", jumps_counter, v_perp_counter, v_par_counter, p_p, p_x)
+#endif 
 
+    end select ! select type (particles)
 
     !> ------------------CLEANING---------------------
 
@@ -779,7 +824,13 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     deallocate(sorted_indices)
 #endif
 
-  end subroutine evolve_REs_gpu_SoA 
+#ifdef USE_COUNTERS
+    deallocate(jumps_counter)
+    deallocate(v_par_counter)
+    deallocate(v_counter)
+#endif
+
+  end subroutine evolve_REs_gpu_SoA
 
 
   !> Internal function for gathering the feedback rhs values when using the ncs or ics coupling scheme

@@ -7,6 +7,7 @@ use phys_module, only: adas_dir
 implicit none
 private
 public write_simulation_hdf5,read_simulation_hdf5,get_simulation_hdf5_time
+public write_simulation_counters_hdf5
 
 !> Module wide variables
 integer,parameter :: master_task=0
@@ -793,5 +794,176 @@ mpi_comm_loc,mpi_info_loc,my_id,n_mpi) result(time)
   endif
   call HDF5_close(file_id)
 end function get_simulation_hdf5_time
+
+!> An utility function to write some counters for postprocessing
+! REMOVE BEFORE THE MERGE
+subroutine write_simulation_counters_hdf5(sim,filename, i_elm_arr, vperp_arr, vpar_arr, v_2d_arr, x_arr, &
+  file_access_in,use_native_hdf5_mpio_in,&
+  use_hdf5_access_properties,collective_mpio_in,mpi_comm_in,mpi_info_in)
+
+  use phys_module
+  use mpi
+  use hdf5,               only: HSIZE_T,HID_T,H5F_ACC_TRUNC_F
+  use hdf5,               only: H5Gcreate_f,H5Gclose_f
+  use hdf5_io_module,     only: HDF5_open_or_create,HDF5_close
+  use hdf5_io_module,     only: HDF5_integer_saving 
+  use hdf5_io_module,     only: HDF5_real_saving,HDF5_char_saving
+  use hdf5_io_module,     only: HDF5_array1D_saving_int_native_or_gatherv
+  use hdf5_io_module,     only: HDF5_array1D_saving_r4_native_or_gatherv
+  use hdf5_io_module,     only: HDF5_array1D_saving_native_or_gatherv
+  use hdf5_io_module,     only: HDF5_array2D_saving_native_or_gatherv
+  use hdf5_io_module,     only: HDF5_array3D_saving_native_or_gatherv
+  use hdf5_io_module,     only: HDF5_array1D_saving_char
+  use mod_particle_types, only: particle_arrays_from_list
+  use mod_particle_types, only: deallocate_particle_arrays
+  use mod_particle_sim,   only: particle_sim
+  implicit none
+  !> parameters
+  integer,parameter             :: master_rank=0
+  integer(HSIZE_T),parameter    :: i0_HSIZE_T=int(0,kind=HSIZE_T)
+  !> input variables
+  type(particle_sim),intent(in) :: sim
+  character(len=*),  intent(in) :: filename 
+  integer, intent(in), optional :: file_access_in,mpi_comm_in,mpi_info_in
+  logical, intent(in), optional :: use_native_hdf5_mpio_in
+  logical, intent(in), optional :: use_hdf5_access_properties,collective_mpio_in
+  integer, intent(in),  dimension(:),    allocatable :: i_elm_arr
+  real*8,  intent(in),  dimension(:),    allocatable :: vperp_arr
+  real*8,  intent(in),  dimension(:),    allocatable :: vpar_arr
+  real*8,  intent(in),  dimension(:,:),  allocatable :: v_2d_arr
+  real*8,  intent(in),  dimension(:,:),    allocatable :: x_arr
+  !> variables
+  integer                       :: file_access_loc
+  integer                       :: mpi_comm_loc,mpi_info_loc 
+  integer                       :: ii,jj,ierr,h5err,n_groups,n_particles
+  integer                       :: n_particles_per_group
+  integer(HID_T)                :: file_id,group_id
+  integer(HSIZE_T)              :: n_particles_offset
+  integer,  dimension(:),    allocatable :: n_particles_loc,particle_displacement
+  integer,  dimension(:),    allocatable :: i_life_arr
+  integer,  dimension(:,:),  allocatable :: n_particles_glob
+  logical                                :: use_hdf5_parallel,use_gatherv_mpio
+  logical                                :: create_access_plist,collective_mpio_loc
+  character(len=group_name_len)          :: group_name
+  character(len=:),          allocatable :: particle_type_str
+
+  !> preparation
+  h5err = 0; use_hdf5_parallel = .false.     !< do not use parallel HDF5 by default
+  use_gatherv_mpio  = .not.use_hdf5_parallel !< use MPI gatherv for collecting all data for writing
+  if(present(use_native_hdf5_mpio_in)) then 
+    use_hdf5_parallel = use_native_hdf5_mpio_in
+    use_gatherv_mpio  = .not.use_native_hdf5_mpio_in
+  endif
+  file_access_loc = H5F_ACC_TRUNC_F !< truncate the file by default
+  if(present(file_access_in)) file_access_loc = file_access_in;
+  create_access_plist = .false. !< serial access by default
+  if(present(use_hdf5_access_properties)) create_access_plist = .not.use_hdf5_access_properties
+  if(use_hdf5_parallel) create_access_plist = .true.
+  mpi_comm_loc = MPI_COMM_WORLD
+  if(present(mpi_comm_in)) mpi_comm_loc = mpi_comm_in
+  mpi_info_loc = MPI_INFO_NULL
+  if(present(mpi_info_in)) mpi_info_loc = mpi_info_in
+  collective_mpio_loc = .true. !< enable collective MPIO applications by default
+  if(present(collective_mpio_in)) collective_mpio_loc = collective_mpio_in
+  !> allocate the gatherv displacement array if required
+  if(use_gatherv_mpio) allocate(particle_displacement(sim%n_mpi),source=0) 
+  !> create the hdf5 file and the groups fields
+  if(use_gatherv_mpio.and.(sim%my_id.eq.master_rank)) call HDF5_open_or_create(&
+  trim(filename),file_id,ierr=h5err,file_access=file_access_loc)
+  if(use_hdf5_parallel) call HDF5_open_or_create(trim(filename),file_id,&
+  ierr=h5err,file_access=file_access_loc,create_access_plist_in=create_access_plist,& 
+  mpi_comm_in=mpi_comm_loc,mpi_info=mpi_info_loc)
+  if(h5err.gt.0) then
+    write(*,*) "Failed to create or open the ",filename," file: ",h5err,&
+    " MPI task: ",sim%my_id,", ABORT!"
+    call MPI_Abort(mpi_comm_loc,-1,ierr)
+  endif
+  if((use_gatherv_mpio.and.(sim%my_id.eq.master_rank)).or.use_hdf5_parallel) then
+    call H5Gcreate_f(file_id,"/groups",group_id,h5err) !< create particle groups
+    call H5Gclose_f(group_id,h5err)
+  endif
+  !> check if loops are allocated and loop on them
+  if(allocated(sim%groups)) then
+    !> it is assumed that all processors has the same number of groups but
+    !> different size of particle lists per each group so we gather the
+    !> particle list size for all groups firstly
+    n_groups = size(sim%groups,1); allocate(n_particles_loc(n_groups)); n_particles_loc=0;
+    do ii=1,n_groups
+      n_particles_loc(ii) = size(sim%groups(ii)%particles,1)
+    enddo
+    allocate(n_particles_glob(sim%n_mpi*n_groups,1)); n_particles_glob=0;
+    call MPI_Allgather(n_particles_loc,n_groups,MPI_INTEGER,n_particles_glob(:,1),n_groups,&
+    MPI_INTEGER,mpi_comm_loc,ierr)
+    n_particles_glob = transpose(reshape(n_particles_glob,(/n_groups,sim%n_mpi/)))
+    !> write particle list data into HDF5 file
+    do ii=1,n_groups
+      if(.not.allocated(sim%groups(ii)%particles)) then
+        if(sim%my_id.eq.master_task) write(*,*) "WARNING: particle list N# ",&
+        ii,"  not allocated: skip!"; cycle;
+      endif
+      !> number of total particles for the group
+      n_particles_per_group = sum(n_particles_glob(:,ii))
+      if(use_gatherv_mpio) then
+        n_particles_offset    = i0_HSIZE_T
+        particle_displacement(2:sim%n_mpi) = [(sum(n_particles_glob(1:jj,ii)),jj=1,sim%n_mpi-1)]
+      else
+        n_particles_offset  = int(sum(n_particles_glob(1:sim%my_id,ii)),kind=HSIZE_T)
+      endif
+      !> create the HDF5 group for the particle list
+      write(group_name,"(A,A,A)") "/groups/",trim(sim%groups(ii)%id),"/"
+      if((use_gatherv_mpio.and.(sim%my_id.eq.master_rank)).or.use_hdf5_parallel) then
+        call H5Gcreate_f(file_id,trim(group_name),group_id,h5err)
+        call H5Gclose_f(group_id,h5err)
+      endif
+
+      !> write data in HDF5 file
+      if(allocated(i_elm_arr)) call HDF5_array1D_saving_int_native_or_gatherv(&
+      file_id,i_elm_arr,n_particles_per_group,trim(trim(group_name)//"i_elm"),&
+      use_gatherv_mpio,dim1_all_tasks=n_particles_glob(:,ii),&
+      displs=particle_displacement,mpi_rank=sim%my_id,n_mpi=sim%n_mpi,&
+      mpi_comm_loc=mpi_comm_loc,start=[n_particles_offset],&
+      use_hdf5_parallel_in=use_hdf5_parallel,mpio_collective_in=collective_mpio_loc)
+
+      if(allocated(vpar_arr)) call HDF5_array1D_saving_native_or_gatherv(&
+      file_id,vpar_arr,n_particles_per_group,trim(group_name)//"Vpar",&
+      use_gatherv_mpio,dim1_all_tasks=n_particles_glob(:,ii),&
+      displs=particle_displacement,mpi_rank=sim%my_id,n_mpi=sim%n_mpi,&
+      mpi_comm_loc=mpi_comm_loc,start=[n_particles_offset],&
+      use_hdf5_parallel_in=use_hdf5_parallel,mpio_collective_in=collective_mpio_loc)
+
+      if(allocated(vperp_arr)) call HDF5_array1D_saving_native_or_gatherv(&
+      file_id,vperp_arr,n_particles_per_group,trim(group_name)//"Vperp",&
+      use_gatherv_mpio,dim1_all_tasks=n_particles_glob(:,ii),&
+      displs=particle_displacement,mpi_rank=sim%my_id,n_mpi=sim%n_mpi,&
+      mpi_comm_loc=mpi_comm_loc,start=[n_particles_offset],&
+      use_hdf5_parallel_in=use_hdf5_parallel,mpio_collective_in=collective_mpio_loc)
+      
+      if(allocated(v_2d_arr)) call HDF5_array2D_saving_native_or_gatherv(&
+      file_id,v_2d_arr, size(v_2d_arr,1), n_particles_per_group, &
+      trim(group_name)//"v",use_gatherv_mpio,&
+      dim2_all_tasks=n_particles_glob(:,ii),displs=particle_displacement,&
+      mpi_rank=sim%my_id,n_mpi=sim%n_mpi,mpi_comm_loc=mpi_comm_loc,&
+      start=[i0_HSIZE_T,n_particles_offset],use_hdf5_parallel_in=use_hdf5_parallel,&
+      mpio_collective_in=collective_mpio_loc) 
+
+      if(allocated(x_arr)) call HDF5_array2D_saving_native_or_gatherv(&
+      file_id,x_arr,size(x_arr,1),n_particles_per_group,trim(group_name)//"x",&
+      use_gatherv_mpio,dim2_all_tasks=n_particles_glob(:,ii),&
+      displs=particle_displacement,mpi_rank=sim%my_id,n_mpi=sim%n_mpi,&
+      mpi_comm_loc=mpi_comm_loc,start=[i0_HSIZE_T,n_particles_offset],&
+      use_hdf5_parallel_in=use_hdf5_parallel,mpio_collective_in=collective_mpio_loc)
+      
+    enddo
+  else
+    if(sim%my_id.eq.master_task) write(*,*) "WARNING: sim particle groups is not allocated!"
+  endif
+  !> cleanups
+  if((use_gatherv_mpio.and.(sim%my_id.eq.master_rank)).or.&
+  use_hdf5_parallel) call HDF5_close(file_id)
+  if(allocated(n_particles_loc))       deallocate(n_particles_loc)
+  if(allocated(n_particles_glob))      deallocate(n_particles_glob)
+  if(allocated(particle_displacement)) deallocate(particle_displacement)
+  if(allocated(particle_type_str))     deallocate(particle_type_str)
+end subroutine write_simulation_counters_hdf5
 
 end module mod_particle_io
