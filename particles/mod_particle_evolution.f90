@@ -71,7 +71,7 @@ contains
     feedback_rhs       = 0.d0
 
 #ifdef USE_RHS_INV
-    allocate(feedback_rhs_inv(3, n_tor, n_vertex_max, n_order+1,  sim%fields%element_list%n_elements), source=0.d0)
+    allocate(feedback_rhs_inv(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
 #endif
 
     !> count number of particles in system
@@ -117,7 +117,14 @@ contains
 #endif
 
 #ifdef USE_RHS_INV
-    feedback_rhs = reshape(feedback_rhs_inv, (/n_degrees, n_vertex_max, sim%fields%element_list%n_elements, n_tor, 3/), order=(/3,5,4,2,1/))
+    !feedback_rhs = reshape(feedback_rhs_inv, (/n_degrees, n_vertex_max, sim%fields%element_list%n_elements, n_tor, 3/), order=(/3,5,4,2,1/))
+    start_time = MPI_WTIME()
+    feedback_rhs = reshape(feedback_rhs_inv, (/n_degrees, n_vertex_max, sim%fields%element_list%n_elements, n_tor, 8/), order=(/1,2,4,5,3/))
+    end_time = MPI_WTIME()
+    tot_time = mpi_minmeanmax(end_time-start_time)
+    if (sim%my_id .eq. 0) then
+      write(*,"(A,3f10.3,A)") , "Time taken for reshape (min/mean/max): ", tot_time, " seconds"
+    endif
 
     deallocate(feedback_rhs_inv) 
 #endif
@@ -598,26 +605,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
 #endif
 
-    !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
-    n_sort = 1 !10
-
-    do s=1,n_sort
-
-#ifdef USE_ORDERING
-    !> Start timing the sorting section
-    start_time = MPI_WTIME()
-
-    call sort_indices_by_i_elm(particles(:)%i_elm, sorted_indices, sim%fields%element_list%n_elements, last_particle_alive_idx)
-
-    !> End timing the sorting section
-    end_time = MPI_WTIME()
-    tot_time = mpi_minmeanmax(end_time-start_time)
-    if (sim%my_id .eq. 0) then
-        write(*,"(A,3f10.3,A)") , "Time taken for ordering (min/mean/max): ", tot_time, " seconds"
-    endif
-
-#endif
-
     write(*,*) "INFO: last particle alive index = ", last_particle_alive_idx
 
     !> allocate the SoA data structures
@@ -628,6 +615,26 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     allocate(p_weight(last_particle_alive_idx))
     allocate(p_i_elm(last_particle_alive_idx))
     allocate(p_q(last_particle_alive_idx))
+
+    !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
+    n_sort = 1 !10
+
+    do s=1,n_sort
+
+#ifdef USE_ORDERING
+    !> Start timing the sorting section
+    start_time = MPI_WTIME()
+
+    call sort_indices_by_i_elm(sorted_indices, particles)
+
+    !> End timing the sorting section
+    end_time = MPI_WTIME()
+    tot_time = mpi_minmeanmax(end_time-start_time)
+    if (sim%my_id .eq. 0) then
+        write(*,"(A,3f10.3,A)") , "Time taken for ordering (min/mean/max): ", tot_time, " seconds"
+    endif
+
+#endif
 
     !> Populate the SoA data structures
     do j=1,last_particle_alive_idx
@@ -650,7 +657,10 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
     select type (fields => sim%fields)
     type is (jorek_fields_interp_linear)
-      
+
+    !> Start timing the kernel section
+    start_time = MPI_WTIME()
+
 #ifdef USE_GPU
       !> TODO: the optimal way would be to allocate the SoA structures in the main, and update them before and after
       !>       the kernel execution. 
@@ -686,7 +696,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
       do j=1, last_particle_alive_idx
         do k=1,nstep_particles/n_sort
-          !if (p_i_elm(j) .ge. 600) cycle
+        
           if (p_i_elm(j) .le. 0) cycle
 
           ! HH_s and HH_t are not used
@@ -725,25 +735,21 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           v_Pperp = gamma_m * v_perp**2 / 2.d0 * MU_ZERO
           v_jPhi  = - real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO
               
-
+              
           do n=1,n_degrees
             do m=1,n_vertex_max
               proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j)
-              ! PCS for REs
-              !v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
-              !v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-              !v_jPhi  = - proj_factor * real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO
 
               do i_tor = 1,n_tor
 #ifdef USE_RHS_INV
                 !$omp atomic update
-                feedback_rhs(P_par_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(P_par_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_Ppar*proj_factor
+                feedback_rhs(p_i_elm(j),P_par_idx_kin,i_tor,m,n) =  feedback_rhs(p_i_elm(j),P_par_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Ppar*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(P_perp_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(P_perp_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_Pperp*proj_factor
+                feedback_rhs(p_i_elm(j),P_perp_idx_kin,i_tor,m,n) =  feedback_rhs(p_i_elm(j),P_perp_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Pperp*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(j_phi_idx_kin,i_tor,m,n,p_i_elm(j)) =  feedback_rhs(j_phi_idx_kin,i_tor,m,n,p_i_elm(j)) + HZ(i_tor)*v_jPhi*proj_factor
+                feedback_rhs(p_i_elm(j),j_phi_idx_kin,i_tor,m,n) =  feedback_rhs(p_i_elm(j),j_phi_idx_kin,i_tor,m,n) + HZ(i_tor)*v_jPhi*proj_factor
                 !$omp end atomic
 #else
                 !$omp atomic update
@@ -781,6 +787,13 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
       !$omp end target data
 #endif
+    
+    !> End timing the sorting section
+    end_time = MPI_WTIME()
+    tot_time = mpi_minmeanmax(end_time-start_time)
+    if (sim%my_id .eq. 0) then
+        write(*,"(A,3f10.3,A)") , "Time taken for the kernel (min/mean/max): ", tot_time, " seconds"
+    endif
 
     end select ! select type (fields)
     
@@ -1285,87 +1298,88 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
   end subroutine gpu_test
 
 
-subroutine sort_indices_by_i_elm(i_elm, indices, n_elements, last_particle_alive_idx)
+subroutine sort_indices_by_i_elm(sorted_indices, particles)
   implicit none
+  integer, allocatable, intent(out) :: sorted_indices(:)
+  type(particle_kinetic_relativistic), intent(in) :: particles(:)
 
-  integer, intent(in)  :: i_elm(:)
-  integer, intent(in)  :: indices(:)
-  integer, intent(in)  :: n_elements
-  integer, intent(out) :: last_particle_alive_idx
+  integer :: i, n_particles
+  integer, allocatable :: field_values(:)
 
-  integer, allocatable :: field_values_elements(:,:)
-  integer, allocatable :: counter(:) !> n_particles for each row in field_values_elements
-  integer, allocatable  :: sizes(:) !> size of each row in field_values_elements
-  integer :: j, idx, idx_elm, global_idx
+  n_particles = size(particles, 1)
+  allocate(sorted_indices(n_particles))
+  allocate(field_values(n_particles))
 
-  allocate(field_values_elements(n_elements + 1, size(indices))) ! +1 to handle lost particles
-  field_values_elements = 0
-  allocate(counter(n_elements + 1))
-  counter = 0
-
-  if(size(i_elm) /= size(indices)) then
-    write(*,*) "Error: i_elm and indices arrays must have the same size."
-    return
-  end if
-  
-  ! for each i_elm we insert the index into the corresponding row
-  do idx = 1, size(i_elm)
-    idx_elm = i_elm(idx)
-    if (idx_elm > 0) then
-      counter(idx_elm) = counter(idx_elm) + 1
-      field_values_elements(idx_elm, counter(idx_elm)) = idx
-    else
-      ! Handle lost particles by placing them in the last row without ordering
-      counter(n_elements + 1) = counter(n_elements + 1) + 1
-      field_values_elements(n_elements + 1, counter(n_elements + 1)) = idx
-    end if
+  ! Initialize the indices and field_values
+  do i = 1, n_particles
+    sorted_indices(i) = i
+    field_values(i) = particles(i)%i_elm
   end do
 
-  global_idx = 0
-  ! Now we need to fill the indices array with the sorted indices
-  do idx = 1, n_elements + 1
-    ! save the last particle alive index
-    if (idx == n_elements + 1) then
-      last_particle_alive_idx = global_idx
-    end if
+  ! Sort the indices based on the i_elm field values
+  call sort_indices(field_values, sorted_indices)
 
-    if (counter(idx) > 0) then
-      do j = 1, counter(idx)
-        global_idx = global_idx + 1
-        indices(global_idx) = field_values_elements(idx, j)
-      end do
-    end if
-  end do
-  
-  deallocate(field_values_elements)
-  deallocate(counter)
-  
+  deallocate(field_values)
 end subroutine sort_indices_by_i_elm
 
-
-! A general-purpose subroutine to shuffle an integer array
-recursive subroutine shuffle_indices(arr)
+recursive subroutine sort_indices(field_values, indices)
   implicit none
-  integer, intent(inout) :: arr(:)
+  integer, intent(in) :: field_values(:)
+  integer, intent(inout) :: indices(:)
 
-  integer :: n, i, j, temp
-  real :: rand_val
+  integer :: pivot_index, pivot_value
+  integer :: i, j
+  integer, allocatable :: low_indices(:), high_indices(:)
+  integer :: low_count, high_count
 
-  n = size(arr)
+  if (size(indices) > 1) then
+    ! Choose pivot (simple choice: middle element)
+    pivot_index = indices(size(indices) / 2)
+    pivot_value = field_values(pivot_index)
 
-  ! It is good practice to seed the random number generator once
-  ! at the beginning of the program execution.
-  ! call random_seed()
+    ! Partitioning
+    low_count = count(field_values(indices) < pivot_value)
+    high_count = count(field_values(indices) > pivot_value)
 
-  ! Fisher-Yates shuffle algorithm
-  do i = n, 2, -1
-    call random_number(rand_val)
-    j = 1 + floor(rand_val * real(i))
-    temp = arr(i)
-    arr(i) = arr(j)
-    arr(j) = temp
-  end do
+    allocate(low_indices(low_count))
+    allocate(high_indices(high_count))
 
-end subroutine shuffle_indices
+    low_count = 0
+    high_count = 0
+    do i = 1, size(indices)
+      if (field_values(indices(i)) < pivot_value) then
+        low_count = low_count + 1
+        low_indices(low_count) = indices(i)
+      else if (field_values(indices(i)) > pivot_value) then
+        high_count = high_count + 1
+        high_indices(high_count) = indices(i)
+      end if
+    end do
+
+    ! Recursively sort the partitions
+    call sort_indices(field_values, low_indices)
+    call sort_indices(field_values, high_indices)
+
+    ! Combine the results
+    j = 0
+    do i = 1, low_count
+      j = j + 1
+      indices(j) = low_indices(i)
+    end do
+    do i = 1, size(indices)
+        if (field_values(indices(i)) == pivot_value) then
+          j = j + 1
+          indices(j) = indices(i)
+        end if
+    end do
+    do i = 1, high_count
+      j = j + 1
+      indices(j) = high_indices(i)
+    end do
+
+    deallocate(low_indices)
+    deallocate(high_indices)
+  end if
+end subroutine sort_indices
 
 end module mod_particle_evolution
