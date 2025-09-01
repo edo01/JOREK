@@ -363,10 +363,20 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     integer, allocatable          :: p_i_life(:) !< particle lifetime index (i.e. is this still the same particle?)
     real*8, allocatable           :: p_t_birth(:) !< birth time of this particle
     integer(kind=1),allocatable   :: p_q(:) !< charge [e]
+
+#ifdef CALC_EBPSIU_ENHANCED
+    !> enhanced calc_EBpsiU
+    integer, allocatable          :: elm_vertex(:,:)
+    integer, allocatable          :: elm_size(:,:,:)
+    real*8,  allocatable          :: nodes_x(:,:,:,:)
+    real*8,  allocatable          :: nodes_values(:,:,:,:) !< Variable values and derivatives (contiguous)
+    real*8,  allocatable          :: nodes_deltas(:,:,:,:) !< Change of variable values and derivatives in last timestep (contiguous)
+#endif
     
     !> sorting 
     integer                       :: n_sort, s !< Multiple sorting
     integer                       :: last_particle_alive_idx !< last particle alive index, used to avoid copying the whole array
+    real*8                        :: start_time, end_time, tot_time(3)
 #ifdef USE_ORDERING
     integer, allocatable          :: sorted_indices(:) !< indices of the particles sorted by i_elm
     integer                       :: ierr
@@ -397,11 +407,15 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       write(*,*) 'INFO: kernel                        : evolve_REs_gpu_SoA'
       write(*,*) 'INFO: number of timesteps           : ', nstep_particles
       write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+      write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
 #ifdef USE_ORDERING
       write(*,*) 'INFO: using particle ordering'
 #endif
 #ifdef USE_RHS_INV
       write(*,*) 'INFO: using feedback_rhs_inv'
+#endif
+#ifdef CALC_EBPSIU_ENHANCED
+      write(*,*) 'INFO: using enhanced calc_EBpsiU'
 #endif
     endif
 
@@ -429,17 +443,35 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> copy the node_list to the node_list_gpu
     call make_deep_copy_node_list_to_gpu(sim%fields%node_list, node_list_gpu)
 
+#ifdef CALC_EBPSIU_ENHANCED
+    allocate(elm_vertex(sim%fields%element_list%n_elements, n_vertex_max))
+    allocate(elm_size(n_vertex_max, n_degrees,sim%fields%element_list%n_elements))
+    ! copy the element vertex and element size into elm_vertex and elm_size
+    do j = 1,sim%fields%element_list%n_elements
+      elm_vertex(j,:) = sim%fields%element_list%element(j)%vertex(:)
+      elm_size(:,:,j) = sim%fields%element_list%element(j)%size(:,:)
+    enddo
+
+    allocate(nodes_x(n_coord_tor,n_degrees,n_dim,sim%fields%node_list%n_nodes))
+    allocate(nodes_values(n_tor,n_degrees,n_var,sim%fields%node_list%n_nodes))
+    allocate(nodes_deltas(n_tor,n_degrees,n_var,sim%fields%node_list%n_nodes))
+    ! copy the node x,values and deltas into nodes_x, nodes_values, nodes_deltas
+    do j = 1,sim%fields%node_list%n_nodes
+      nodes_x(:,:,:,j)       = sim%fields%node_list%node(j)%x(:,:,:)
+      nodes_values(:,:,:,j)  = sim%fields%node_list%node(j)%values(:,:,:)
+      nodes_deltas(:,:,:,j)  = sim%fields%node_list%node(j)%deltas(:,:,:)
+    enddo
+#endif
+
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
 
 
 #ifdef USE_ORDERING
-
     !> copy the particles data to the SoA data structures
     !> it can be parallelized with omp
     !> Reorder particles by i_elm before launching the kernel
     allocate(sorted_indices(size(particles,1)))
-
 #endif
 
     write(*,*) "INFO: last particle alive index = ", last_particle_alive_idx
@@ -509,6 +541,9 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
       !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
       !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin,             &
+#ifdef CALC_EBPSIU_ENHANCED
+      !$omp         elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,                              &
+#endif
       !$omp         j_phi_idx_kin, p_weight, p_q)                                  
 
       !$omp target teams distribute parallel do default(none)                       &
@@ -518,6 +553,9 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,                    &
 #ifdef USE_COUNTERS
       !$omp        jumps_counter, v_par_counter, v_perp_counter,                    &
+#endif
+#ifdef CALC_EBPSIU_ENHANCED
+      !$omp        elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,       &
 #endif
       !$omp        last_particle_alive_idx, n_sort)                                 &
       !$omp private(ifail, j, k)                                                    &
@@ -549,10 +587,15 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           !> TODO: check if a function specific for the linear fields is needed  
           !> TODO: when calling interp_PRZ, exp and complex builtins are called. some optimization?
           !> TODO: a lot of computation is done in this function, can we optimize it? 
-          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now, &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+#ifdef CALC_EBPSIU_ENHANCED
+          call calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, fields%time_now, &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt,                                    &
                                         sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
-
+#else
+          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now,  &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt,     &
+                                        sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
+#endif
           ! norm2 is really slow on GPU
           !B_norm2 = B/norm2(B)
           B_norm2  = B / sqrt(dot_product(B,B)) 
@@ -607,9 +650,18 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           prev_elm = p_i_elm(j)
 #endif
 
+
+#ifdef CALC_EBPSIU_ENHANCED
+          call volume_preserving_push_jorek_gpu_SoA_enhanced(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j),  nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, node_list_gpu, &
+                        fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
+                        group_mass, sim_time, tstep_part_adj, ifail)
+#else
           call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), node_list_gpu, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
+#endif
+
+
 
 #ifdef USE_COUNTERS
           if (prev_elm /= p_i_elm(j)) then
@@ -664,20 +716,20 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> deallocate the node_list_gpu
     call dealloc_node_list_gpu(node_list_gpu)
 
-    deallocate(p_x)
-    deallocate(p_p)
-    deallocate(p_st)
-    deallocate(p_weight)
-    deallocate(p_i_elm)
-    deallocate(p_q)
+    !> deallocate SoA data structures
+    deallocate(p_x);      deallocate(p_p);      deallocate(p_st)
+    deallocate(p_weight); deallocate(p_i_elm);  deallocate(p_q)
 #ifdef USE_ORDERING
     deallocate(sorted_indices)
 #endif
-
+#ifdef CALC_EBPSIU_ENHANCED
+     !> deallocate SoA 
+     deallocate(elm_vertex);  deallocate(elm_size)
+     deallocate(nodes_x);     deallocate(nodes_values); deallocate(nodes_deltas);
+#endif
 #ifdef USE_COUNTERS
-    deallocate(jumps_counter)
-    deallocate(v_par_counter)
-    deallocate(v_counter)
+    !> deallocate counters
+    deallocate(jumps_counter); deallocate(v_par_counter); deallocate(v_counter)
 #endif
 
   end subroutine evolve_REs_gpu_SoA
