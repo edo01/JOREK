@@ -17,7 +17,7 @@ module mod_particle_evolution
 
     implicit none
     private
-    public :: evolve_particle_group, evolve_REs, evolve_REs_gpu, evolve_REs_gpu_SoA
+    public :: evolve_particle_group, evolve_REs, evolve_REs_gpu_SoA
 contains
 
   !> For each particle group, this function does the following:
@@ -43,7 +43,9 @@ contains
     real*8, intent(in)                                        :: tstep_part_adj
     
     real*8,allocatable :: feedback_rhs(:,:,:,:,:)
+#ifdef USE_RHS_INV
     real*8,allocatable :: feedback_rhs_inv(:,:,:,:,:)
+#endif
     type (type_node_list),         pointer :: feedback_nodelist
     type (type_element_list),      pointer :: feedback_element_list
     type (particle_group),         pointer :: part_group
@@ -312,171 +314,6 @@ contains
   !>    b) To avoid cuncurrent access to the feedback_rhs array, we may want to put particles belonging to the same element in different batches. Please note that this does not mean that 
   !>       cuncurrent access to the feedback_rhs array is not possible, since the particles may move to different elements during the evolution.
   !>    c) Dimensional analysis: 16 poloidal dofs * 10^2 elements * 10 toroidal modes * 3 aux * 8 Bytes = 3.84*10^5 B = 384 kB per batch -> we can launch a thread for each particle!
-
-  subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
-    use mod_project_particles
-    use mod_random_seed
-    use mod_interp, only: mode_moivre
-    use mod_basisfunctions
-    use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
-    use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
-    !> gpu specific modules
-    use mod_fields_linear, only: jorek_fields_interp_linear
-    use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
-    use phys_module, only: F0, mode, central_mass, central_density, tstep
-    
-    implicit none
-    class(particle_sim), target, intent(inout)                :: sim
-    integer, intent(in)                                       :: group_num
-    real*8,allocatable,          intent(inout)                :: feedback_rhs(:,:,:,:,:)
-    type(count_action)                                        :: counter
-    type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
-    real*8, intent(in)                                        :: tstep_part_adj
-    
-    character(len=3) :: cs
-
-    !> RE specific variables
-    real*8    :: n_norm, rho_norm
-    real*8    :: HZ(n_tor), HH(4,4), HH_s(4,4), HH_t(4,4)
-    real*8    :: v_n, v_jR, v_jZ, v_jPhi, v_Ppar, v_Pperp
-
-    real*8    :: E(3), B(3), B_norm2(3), psi, U
-    real*8    :: cylindrical_velocity(3), cylindrical_momentum(3)
-    real*8    :: v_par, v_perp, gamma_m, proj_factor
-    integer   :: j, k, m, n, ifail, i_tor, n_lost
-    real*8    :: group_mass
-    real*8    :: sim_time
-
-    !> GPU specific variables
-    type(type_node_list_gpu) :: node_list_gpu
-
-    if (sim%my_id .eq. 0) then
-      write(*,*) 'INFO: REs evolution executed on     : GPU'
-      write(*,*) 'INFO: kernel                        : evolve_REs_gpu'
-      write(*,*) 'INFO: number of timesteps           : ', nstep_particles
-      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
-    endif
-
-    ! TODO: not used
-    n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
-    rho_norm = CENTRAL_MASS * MASS_PROTON * n_norm                  ! rho_SI = rho_norm * rho
-
-    !> save the group mass
-    group_mass = sim%groups(group_num)%mass
-    !> save the simulation time
-    sim_time = sim%time
-
-    !> allocate node_list_linear
-    call init_node_list_gpu(node_list_gpu, sim%fields%node_list%n_nodes, sim%fields%node_list%n_dof)
-    !> copy the node_list to the GPU
-    call make_deep_copy_node_list_to_gpu(sim%fields%node_list, node_list_gpu)
-
-    ! Loop over all particle groups
-    n_lost = 0
-    select type (particles => sim%groups(group_num)%particles)
-    type is (particle_kinetic_relativistic)
-
-    !> Loop over all particles in the group and set the weight to 1
-    !> TODO: REMOVE THIS PART
-    do j=1,size(particles,1)
-      if(particles(j)%weight .eq. 0.0) then
-            particles(j)%weight = 1.0
-      endif
-      if(particles(j)%q .eq. 0.0) then
-            particles(j)%q = -1.0 !> default charge of the runaway electrons
-      endif
-    enddo
-
-    ! TODO: what about other fields? Hannes suggested to use jorek_fields_interp_linear
-    select type (fields => sim%fields)
-    type is (jorek_fields_interp_linear)
-
-#ifdef USE_GPU      
-      !$omp target data                                                                                     &
-      !$omp map(tofrom: particles, feedback_rhs)                                                            &
-      !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
-      !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)
-      
-      !> TODO: these are constanst, no need to move it every time. Move this map in the main
-      !$omp target update to(F0, mode, central_mass, central_density, tstep)                                   
-
-      !> TODO: how is ifail handled ???
-      !> TODO: firstprivate or shared??
-
-      !$omp target teams distribute parallel do default(none)                               &
-      !$omp shared(particles, fields, feedback_rhs, node_list_gpu)                          &
-      !$omp private(HH, HH_s, HH_t, HZ, cylindrical_momentum, B, B_norm2, v_par,            &
-      !$omp         v_perp, cylindrical_velocity, E, psi, U, gamma_m, ifail,                &
-      !$omp         proj_factor, v_Ppar, v_Pperp, v_jPhi,                                   &
-      !$omp         j, k, m, n, i_tor)                                                      &
-      !$omp firstprivate(sim_time, group_mass, tstep_part_adj, nstep_particles,             &
-      !$omp              P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin)  
-#endif
-      do j=1,size(particles,1)
-        do k=1,nstep_particles
-          if (particles(j)%i_elm .le. 0) cycle
-          !write(*,*) "PARTICLE j = ", j, " k = ", k
-          call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
-          call mode_moivre(particles(j)%x(3), HZ)
-  
-          ! Determines velocity in cylindrical coordinates
-          cylindrical_momentum = vector_cartesian_to_cylindrical(particles(j)%x(3), particles(j)%p)
-          cylindrical_velocity = cylindrical_momentum / &
-                                  sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
-  
-          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now, &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-                                       sim_time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
-          B_norm2 = B/norm2(B)
-
-          v_par   = dot_product(cylindrical_velocity, B_norm2)
-          v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
-          gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
-
-          do n=1,n_degrees
-            do m=1,n_vertex_max
-
-              proj_factor = HH(m,n) * fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight ! TODO: not initialized correctly
-
-              ! PCS for REs
-              v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
-              v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-              v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO !> TODO: q is not initialized correctly
-              
-              do i_tor = 1,n_tor
-
-                !$omp atomic update
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-                !$omp atomic update
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-                !$omp atomic update
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
-
-              enddo
-            enddo
-          enddo
-          
-          call volume_preserving_push_jorek_gpu(particles(j), node_list_gpu, fields%element_list, fields%time_now, &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-                                      group_mass, sim_time, tstep_part_adj, ifail)
-        end do !< steps
-      end do !< particles
-#ifdef USE_GPU
-      !$omp end target teams distribute parallel do
-
-      !$omp end target data
-#endif
-
-    end select !< fields
-
-    end select !< particles
-
-
-    !> deallocate the node_list_gpu
-    call dealloc_node_list_gpu(node_list_gpu)
-
-  end subroutine evolve_REs_gpu
-
 
 !> This kernel uses SoA (Structure of Arrays) data structure to store the particles.
 subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
