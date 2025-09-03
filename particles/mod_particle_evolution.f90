@@ -13,6 +13,7 @@ module mod_particle_evolution
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
+    use mod_particle_sorting
     !$ use omp_lib
 
     implicit none
@@ -380,7 +381,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #ifdef USE_ORDERING
     integer, allocatable          :: sorted_indices(:) !< indices of the particles sorted by i_elm
     integer                       :: ierr
-    real*8                        :: start_time, end_time, tot_time(3)
 #endif
 
 #ifdef USE_COUNTERS
@@ -1185,90 +1185,5 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       write(*,'(A,I0)') "INFO: number of particles lost in an element crossing the axis: ", particle_lost_all
     endif
   end subroutine gpu_test
-
-
-subroutine sort_indices_by_i_elm(sorted_indices, particles)
-  implicit none
-  integer, allocatable, intent(out) :: sorted_indices(:)
-  type(particle_kinetic_relativistic), intent(in) :: particles(:)
-
-  integer :: i, n_particles
-  integer, allocatable :: field_values(:)
-
-  n_particles = size(particles, 1)
-  allocate(sorted_indices(n_particles))
-  allocate(field_values(n_particles))
-
-  ! Initialize the indices and field_values
-  do i = 1, n_particles
-    sorted_indices(i) = i
-    field_values(i) = particles(i)%i_elm
-  end do
-
-  ! Sort the indices based on the i_elm field values
-  call sort_indices(field_values, sorted_indices)
-
-  deallocate(field_values)
-end subroutine sort_indices_by_i_elm
-
-recursive subroutine sort_indices(field_values, indices)
-  implicit none
-  integer, intent(in) :: field_values(:)
-  integer, intent(inout) :: indices(:)
-
-  integer :: pivot_index, pivot_value
-  integer :: i, j
-  integer, allocatable :: low_indices(:), high_indices(:)
-  integer :: low_count, high_count
-
-  if (size(indices) > 1) then
-    ! Choose pivot (simple choice: middle element)
-    pivot_index = indices(size(indices) / 2)
-    pivot_value = field_values(pivot_index)
-
-    ! Partitioning
-    low_count = count(field_values(indices) < pivot_value)
-    high_count = count(field_values(indices) > pivot_value)
-
-    allocate(low_indices(low_count))
-    allocate(high_indices(high_count))
-
-    low_count = 0
-    high_count = 0
-    do i = 1, size(indices)
-      if (field_values(indices(i)) < pivot_value) then
-        low_count = low_count + 1
-        low_indices(low_count) = indices(i)
-      else if (field_values(indices(i)) > pivot_value) then
-        high_count = high_count + 1
-        high_indices(high_count) = indices(i)
-      end if
-    end do
-
-    ! Recursively sort the partitions
-    call sort_indices(field_values, low_indices)
-    call sort_indices(field_values, high_indices)
-
-    ! Combine the results
-    j = 0
-    do i = 1, low_count
-      j = j + 1
-      indices(j) = low_indices(i)
-    end do
-    do i = 1, size(indices)
-        if (field_values(indices(i)) == pivot_value) then
-          j = j + 1
-          indices(j) = indices(i)
-        end if
-    end do
-    do i = 1, high_count
-      j = j + 1
-      indices(j) = high_indices(i)
-    end do
-
-    deallocate(low_indices)
-    deallocate(high_indices)
-  end if
-end subroutine sort_indices
 
 end module mod_particle_evolution
