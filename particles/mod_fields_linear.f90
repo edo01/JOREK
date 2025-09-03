@@ -9,7 +9,7 @@ use mod_interp
 implicit none
 private
 public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_before_time
-public calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_inlined
+public calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_inlined, calc_EBpsiU_linear_gpu_inlined_enhanced
 
 !> Action to read in the fields into sim%fields
 type, extends(action) :: read_jorek_fields_interp_linear
@@ -42,6 +42,149 @@ type, extends(fields_base) :: jorek_fields_interp_linear
     procedure :: interp_PRZP_1  => do_interp_PRZP_1
 end type jorek_fields_interp_linear
 contains
+
+
+pure subroutine calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, &
+                                                        time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, &
+                                                        E, B, psi, U)
+  use phys_module,     only: F0, central_mass, central_density
+  use constants,       only: mu_zero, mass_proton
+  use mod_basisfunctions, only: basisfunctions_T
+  use mod_interp,      only: sincosperiod_moivre
+
+  ! Routine parameters
+  real*8,  allocatable, intent(in)  :: nodes_x(:,:,:,:)       ! node coordinates (SoA)
+  real*8,  allocatable, intent(in)  :: nodes_values(:,:,:,:)  ! variable values (SoA)
+  real*8,  allocatable, intent(in)  :: nodes_deltas(:,:,:,:)  ! variable deltas (SoA)
+  integer, allocatable, intent(in)  :: elm_vertex(:,:)        ! element vertices
+  integer, allocatable, intent(in)  :: elm_size(:,:,:)        ! element scaling factors
+  real*8, intent(in)  :: time_now, time_prev, time, phi
+  logical, intent(in) :: static, flag_zero_dpsidt
+  integer, intent(in) :: i_elm
+  real*8, intent(in)  :: st(2)
+  real*8, intent(out) :: E(3), B(3)
+  real*8, intent(out) :: psi, U
+
+  ! Internal variables
+  integer            :: kv, iv, kf
+  real*8             :: P(2), P_s(2), P_t(2), P_phi(2), P_time(2)
+  real*8             :: Pd(2), Pd_s(2), Pd_t(2), Pd_phi(2)
+  real*8             :: R, R_s, R_t, Z, Z_s, Z_t, R_inv, inv_st_jac
+  real*8             :: psi_R, psi_Z, U_R, U_Z, U_phi, t_norm
+  real*8             :: df, dt, v, vp
+  real*8             :: H(n_degrees,4), H_s(n_degrees,4), H_t(n_degrees,4)
+  real*8             :: HZ(n_tor), dHZ(n_tor)
+  real*8             :: xR(n_degrees,n_vertex_max), xZ(n_degrees,n_vertex_max)
+
+#ifdef USE_GPU
+  !$omp declare target 
+#endif
+
+  ! JOREK normalization factor
+  t_norm = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20)
+
+  P      = 0.d0;  P_s   = 0.d0;  P_t   = 0.d0;  P_phi  = 0.d0
+  P_time = 0.d0
+
+  call basisfunctions_T(st(1), st(2), H, H_s, H_t)
+  call sincosperiod_moivre(phi, HZ, dHZ)
+
+  ! --- Interpolation of values ---
+  do kv = 1, n_vertex_max
+    iv = elm_vertex(i_elm,kv)
+
+    do kf = 1, n_degrees
+      v  = dot_product(nodes_values(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), HZ)
+      P(1)   = P(1)   + v  * H(kf, kv)
+      P_s(1) = P_s(1) + v  * H_s(kf, kv)
+      P_t(1) = P_t(1) + v  * H_t(kf, kv)
+
+      vp     = dot_product(nodes_values(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), dHZ)
+      P_phi(1) = P_phi(1) + vp * H(kf, kv)
+
+      v  = dot_product(nodes_values(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), HZ)
+      P(2)   = P(2)   + v  * H(kf, kv)
+      P_s(2) = P_s(2) + v  * H_s(kf, kv)
+      P_t(2) = P_t(2) + v  * H_t(kf, kv)
+
+      vp     = dot_product(nodes_values(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), dHZ)
+      P_phi(2) = P_phi(2) + vp * H(kf, kv)
+    enddo
+
+    xR(:,kv) = nodes_x(1,:,1,iv) * elm_size(kv,:,i_elm)
+    xZ(:,kv) = nodes_x(1,:,2,iv) * elm_size(kv,:,i_elm)
+  enddo
+
+  R   = sum(xR*H);   R_s = sum(xR*H_s);   R_t = sum(xR*H_t)
+  Z   = sum(xZ*H);   Z_s = sum(xZ*H_s);   Z_t = sum(xZ*H_t)
+
+  ! --- Interpolation of differentials ---
+  if(t_norm > 0.d0) then
+    Pd    = 0.d0;  Pd_s = 0.d0;  Pd_t = 0.d0;  Pd_phi = 0.d0
+
+    do kv = 1, n_vertex_max
+      iv = elm_vertex(i_elm,kv)
+
+      do kf = 1, n_degrees
+        v  = dot_product(nodes_deltas(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), HZ)
+        Pd(1)   = Pd(1)   + v  * H(kf, kv)
+        Pd_s(1) = Pd_s(1) + v  * H_s(kf, kv)
+        Pd_t(1) = Pd_t(1) + v  * H_t(kf, kv)
+
+        vp      = dot_product(nodes_deltas(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), dHZ)
+        Pd_phi(1) = Pd_phi(1) + vp * H(kf, kv)
+
+        v  = dot_product(nodes_deltas(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), HZ)
+        Pd(2)   = Pd(2)   + v  * H(kf, kv)
+        Pd_s(2) = Pd_s(2) + v  * H_s(kf, kv)
+        Pd_t(2) = Pd_t(2) + v  * H_t(kf, kv)
+
+        vp      = dot_product(nodes_deltas(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), dHZ)
+        Pd_phi(2) = Pd_phi(2) + vp * H(kf, kv)
+      enddo
+    enddo
+
+    if(abs(time_now-time_prev) > 1d-10 .and. .not. static) then
+      dt = 1.d0/(time_now - time_prev)
+      df = (time_now - time) * dt
+      P     = P     - Pd    * df
+      P_s   = P_s   - Pd_s  * df
+      P_t   = P_t   - Pd_t  * df
+      P_phi = P_phi - Pd_phi* df
+    else
+      dt = 1.d0 / t_norm
+    endif
+
+    P_time = Pd * dt
+  endif
+
+  ! --- Derivatives in R,Z ---
+  R_inv     = 1.d0 / R
+  inv_st_jac = 1.d0 / (R_s * Z_t - R_t * Z_s)
+
+  psi_R = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
+  psi_Z = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
+  U_R   = (  P_s(2) * Z_t - P_t(2) * Z_s ) * inv_st_jac
+  U_Z   = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
+  U_phi = P_phi(2) - (0.d0*U_R + 0.d0*U_Z)  ! R_phi, Z_phi always 0
+
+  psi = P(1)
+  U   = P(2)/t_norm
+
+  if(flag_zero_dpsidt) P_time(1) = 0.d0
+
+  ! --- Magnetic field ---
+  B = [psi_Z, -psi_R, F0] * R_inv
+
+  ! --- Electric field ---
+  E = [-F0*U_R, -F0*U_Z, -F0*U_phi*R_inv] / t_norm
+  E(3) = E(3) - R_inv*P_time(1)
+
+  ! Projection to perpendicular component
+  E = E - E * B / sqrt(dot_product(B,B))
+
+end subroutine calc_EBpsiU_linear_gpu_inlined_enhanced
+
 
 !> Calculates the electric and magnetic fields at a specific position
 !> in the jorek element `i_elm` at `st`.
@@ -132,12 +275,11 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now
     sizes(:) = element_list%element(i_elm)%size(kv,:)
 
     ! running without deltas
-    !do i = 1, 2
+    do i = 1, 2
       do kf=1,n_degrees
-        values(1:n_tor,kf,1,kv) = node_list%node(iv)%values(1:n_tor,kf,i_var(1)) * sizes(kf)
-        values(1:n_tor,kf,2,kv) = node_list%node(iv)%values(1:n_tor,kf,i_var(2)) * sizes(kf)
+        values(1:n_tor,kf,i,kv) = node_list%node(iv)%values(1:n_tor,kf,i_var(i)) * sizes(kf)
       end do
-    !end do
+    end do
     
     xR(:,kv) = node_list%node(iv)%x(1,:,1) * sizes(:)
     xZ(:,kv) = node_list%node(iv)%x(1,:,2) * sizes(:)
@@ -192,14 +334,11 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now
     do kv = 1,n_vertex_max  ! 4 vertices
       iv = element_list%element(i_elm)%vertex(kv)
       sizes(:) = element_list%element(i_elm)%size(kv,:)
-      !do i = 1, n_v
+      do i = 1, 2
         do kf=1,n_degrees
-          !i = 1 
-          values(1:n_tor,kf,1,kv) = node_list%node(iv)%deltas(1:n_tor,kf,i_var(1)) * sizes(kf)
-          !i = 2
-          values(1:n_tor,kf,2,kv) = node_list%node(iv)%deltas(1:n_tor,kf,i_var(2)) * sizes(kf)
+          values(1:n_tor,kf,i,kv) = node_list%node(iv)%deltas(1:n_tor,kf,i_var(i)) * sizes(kf)
         end do
-      !end do
+      end do
       xR(:,kv) = node_list%node(iv)%x(1,:,1) * sizes(:)
       xZ(:,kv) = node_list%node(iv)%x(1,:,2) * sizes(:)
     end do
@@ -233,21 +372,25 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now
     enddo
 
     !> } interp_PRZ_1_gpu
-
     if(abs(time_now-time_prev) .gt. 1d-10 .and. .not. static) then
       !> compute time fraction df
       dt = 1.d0/(time_now - time_prev)
       df = (time_now - time)*dt
       !> apply linear interpolation
-      P     = linear_interp_differentials(2,P,Pd,df)
-      P_s   = linear_interp_differentials(2,P_s,Pd_s,df)
-      P_t   = linear_interp_differentials(2,P_t,Pd_t,df)
-      P_phi = linear_interp_differentials(2,P_phi,Pd_phi,df)
+      !P     = linear_interp_differentials(2,P,Pd,df)
+      P     = P-Pd*df
+      !P_s   = linear_interp_differentials(2,P_s,Pd_s,df)
+      P_s   = P_s-Pd_s*df
+      !P_t   = linear_interp_differentials(2,P_t,Pd_t,df)
+      P_t   = P_t-Pd_t*df
+      !P_phi = linear_interp_differentials(2,P_phi,Pd_phi,df)
+      P_phi = P_phi-Pd_phi*df
     else
       dt = 1.d0/t_norm
     endif
     !> compute time derivative
-    P_time = linear_interp_differentials_dt(2,Pd,dt) 
+    !P_time = linear_interp_differentials_dt(2,Pd,dt) 
+    P_time = Pd*dt
   endif
   !> } do_interp_PRZ_1_gpu
 
@@ -276,6 +419,9 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now
   ! See http://jorek.eu/wiki/doku.php?id=u_phi
   E     = [-F0*U_R, -F0*U_Z, -F0*U_phi*R_inv]/t_norm
   E(3)  = E(3) - R_inv*P_time(1) ! because this is not normalized with t_norm
+
+  E = E - E * B / sqrt(dot_product(B,B))
+  !E = 0
 
 end subroutine calc_EBpsiU_linear_gpu_inlined
 
