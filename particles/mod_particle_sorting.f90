@@ -16,12 +16,13 @@ contains
 !    grouping complexity to O(N).
 ! 3. The final 'sorted_indices' array contains these groups concatenated, followed by
 !    the indices of particles with negative 'i_elm'.
-subroutine sort_indices_by_i_elm_warped(sorted_indices, particles)
+subroutine sort_indices_by_i_elm_warped(sorted_indices, particles, last_particle_alive_idx)
   implicit none
 
   ! Arguments
   integer, allocatable, intent(out) :: sorted_indices(:)
   type(particle_kinetic_relativistic), intent(in) :: particles(:)
+  integer, optional, intent(out) :: last_particle_alive_idx
   ! Local constants
   integer :: GROUP_SIZE
   ! Use a sentinel value to sort particles with negative i_elm to the end
@@ -131,8 +132,10 @@ subroutine sort_indices_by_i_elm_warped(sorted_indices, particles)
 
   ! --- STEP 3: APPEND NEGATIVE PARTICLES ---
   ! The sort automatically placed the negative-i_elm particles at the end of temp_indices.
+  last_particle_alive_idx = n_particles
   if (n_pos < n_particles) then
     sorted_indices(n_pos + 1:n_particles) = temp_indices(n_pos + 1:n_particles)
+    last_particle_alive_idx = n_pos
   end if
 
   ! --- CLEANUP ---
