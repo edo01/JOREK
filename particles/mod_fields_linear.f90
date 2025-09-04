@@ -57,7 +57,7 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, n
   real*8,  allocatable, intent(in)  :: nodes_values(:,:,:,:)  ! variable values (SoA)
   real*8,  allocatable, intent(in)  :: nodes_deltas(:,:,:,:)  ! variable deltas (SoA)
   integer, allocatable, intent(in)  :: elm_vertex(:,:)        ! element vertices
-  integer, allocatable, intent(in)  :: elm_size(:,:,:)        ! element scaling factors
+  real*8, allocatable, intent(in)   :: elm_size(:,:,:)        ! element scaling factors
   real*8, intent(in)  :: time_now, time_prev, time, phi
   logical, intent(in) :: static, flag_zero_dpsidt
   integer, intent(in) :: i_elm

@@ -128,7 +128,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,node
   real*8,  allocatable     ,intent(in)  :: nodes_values(:,:,:,:) !< Variable values and derivatives (contiguous)
   real*8,  allocatable     ,intent(in)  :: nodes_deltas(:,:,:,:) !< Change of variable values and derivatives in last timestep (contiguous)
   integer, allocatable     ,intent(in)  :: elm_vertex(:,:) !> SoA
-  integer, allocatable     ,intent(in)  :: elm_size(:,:,:) !> SoA
+  real*8,  allocatable     ,intent(in)  :: elm_size(:,:,:) ! element scaling factors
   type (type_node_list_gpu),intent(in)  :: node_list 
   type (type_element_list), intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 

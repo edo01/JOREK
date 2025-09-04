@@ -4,6 +4,7 @@ use mod_particle_types
 implicit none
 private
 public sort_indices_by_i_elm_warped, sort_indices_by_i_elm, sort_indices_by_i_elm_batched, sort_indices_by_i_elm_batched_warped
+public sort_indices_by_i_elm_bucket
 
 contains
 ! This subroutine reorders particle indices into groups, in a highly optimized manner.
@@ -138,6 +139,132 @@ subroutine sort_indices_by_i_elm_warped(sorted_indices, particles)
   deallocate(temp_indices)
 
 end subroutine sort_indices_by_i_elm_warped
+
+subroutine sort_indices_by_i_elm_bucket(sorted_indices, particles)
+  implicit none
+  integer, allocatable, intent(out) :: sorted_indices(:)
+  type(particle_kinetic_relativistic), intent(in) :: particles(:)
+
+  integer :: i, j, n_particles, n_pos, bucket, group_size
+  integer, allocatable :: field_values(:)
+  integer, allocatable :: pos_indices(:), neg_indices(:)
+  integer, allocatable :: bucket_ids(:), bucket_counts(:), bucket_offsets(:)
+  integer :: n_buckets, max_bucket
+  integer :: idx
+
+  integer :: lo, hi, size_bucket, start, finish
+
+  n_particles = size(particles, 1)
+  allocate(sorted_indices(n_particles))
+  allocate(field_values(n_particles))
+
+  ! Warp size
+  group_size = 32
+
+  ! Gather i_elm values
+  do i = 1, n_particles
+    field_values(i) = particles(i)%i_elm
+  end do
+
+  ! Count positives vs negatives
+  n_pos = count(field_values >= 0)
+
+  allocate(pos_indices(n_pos))
+  allocate(neg_indices(n_particles - n_pos))
+  allocate(bucket_ids(n_pos))
+
+  j = 0
+  idx = 0
+  do i = 1, n_particles
+    if (field_values(i) >= 0) then
+      j = j + 1
+      pos_indices(j) = i
+      bucket_ids(j) = field_values(i) / group_size
+    else
+      idx = idx + 1
+      neg_indices(idx) = i
+    end if
+  end do
+
+  ! Determine max bucket ID
+  if (n_pos > 0) then
+    max_bucket = maxval(bucket_ids)
+  else
+    max_bucket = -1
+  end if
+  n_buckets = max_bucket + 1
+
+  ! Count number of entries per bucket
+  allocate(bucket_counts(n_buckets))
+  bucket_counts = 0
+  do i = 1, n_pos
+    bucket_counts(bucket_ids(i)+1) = bucket_counts(bucket_ids(i)+1) + 1
+  end do
+
+  ! Compute bucket offsets for stable placement
+  allocate(bucket_offsets(n_buckets))
+  bucket_offsets(1) = 1
+  do i = 2, n_buckets
+    bucket_offsets(i) = bucket_offsets(i-1) + bucket_counts(i-1)
+  end do
+
+  ! Place particles into buckets (stable ordering)
+  do i = 1, n_pos
+    bucket = bucket_ids(i)
+    idx = bucket_offsets(bucket+1)
+    sorted_indices(idx) = pos_indices(i)
+    field_values(idx) = particles(pos_indices(i))%i_elm
+    bucket_offsets(bucket+1) = bucket_offsets(bucket+1) + 1
+  end do
+
+ ! Within each bucket, sort by i_elm ascending and split into warps
+  do i = 0, n_buckets-1
+    if (bucket_counts(i+1) > 0) then
+      ! Compute range of this bucket
+      lo = sum(bucket_counts(1:i)) + 1
+      hi = sum(bucket_counts(1:i+1))
+      size_bucket = hi - lo + 1
+
+      ! Sort bucket by i_elm
+      if (size_bucket > 1) then
+        call sort_bucket(sorted_indices, field_values, lo, hi)
+      end if
+
+      ! (Optional) enforce warp chunking
+      ! Already sorted, just keep warps contiguous:
+      ! Fortran arrays are already ordered, so unlike Python
+      ! no explicit chunking loop is strictly necessary here.
+    end if
+  end do
+
+
+  ! Append negatives at the end
+  do i = 1, size(neg_indices)
+    sorted_indices(n_pos + i) = neg_indices(i)
+  end do
+
+  deallocate(pos_indices, neg_indices, bucket_ids, bucket_counts, bucket_offsets, field_values)
+contains
+  subroutine sort_bucket(indices, values, lo, hi)
+    integer, intent(inout) :: indices(:), values(:)
+    integer, intent(in) :: lo, hi
+    integer :: i, j, key_idx, key_val
+
+    ! Simple insertion sort for each bucket
+    do i = lo+1, hi
+      key_idx = indices(i)
+      key_val = values(i)
+      j = i - 1
+      do while (j >= lo .and. values(j) > key_val)
+        indices(j+1) = indices(j)
+        values(j+1) = values(j)
+        j = j - 1
+      end do
+      indices(j+1) = key_idx
+      values(j+1) = key_val
+    end do
+  end subroutine sort_bucket
+end subroutine sort_indices_by_i_elm_bucket
 
 subroutine sort_indices_by_i_elm(sorted_indices, particles)
   implicit none

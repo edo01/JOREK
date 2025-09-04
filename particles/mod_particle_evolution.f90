@@ -368,7 +368,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #ifdef CALC_EBPSIU_ENHANCED
     !> enhanced calc_EBpsiU
     integer, allocatable          :: elm_vertex(:,:)
-    integer, allocatable          :: elm_size(:,:,:)
+    real*8,  allocatable          :: elm_size(:,:,:)
     real*8,  allocatable          :: nodes_x(:,:,:,:)
     real*8,  allocatable          :: nodes_values(:,:,:,:) !< Variable values and derivatives (contiguous)
     real*8,  allocatable          :: nodes_deltas(:,:,:,:) !< Change of variable values and derivatives in last timestep (contiguous)
@@ -474,7 +474,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     allocate(sorted_indices(size(particles,1)))
 #endif
 
-    write(*,*) "INFO: last particle alive index = ", last_particle_alive_idx
 
     !> allocate the SoA data structures
     !> TODO: move them in the main and update them before the kernel execution
@@ -494,7 +493,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> Start timing the sorting section
     start_time = MPI_WTIME()
 
-    call sort_indices_by_i_elm(sorted_indices, particles)
+    call sort_indices_by_i_elm_warped(sorted_indices, particles)
 
     !> End timing the sorting section
     end_time = MPI_WTIME()
@@ -649,7 +648,6 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #ifdef USE_COUNTERS
           prev_elm = p_i_elm(j)
 #endif
-
 
 #ifdef CALC_EBPSIU_ENHANCED
           call volume_preserving_push_jorek_gpu_SoA_enhanced(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j),  nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, node_list_gpu, &
