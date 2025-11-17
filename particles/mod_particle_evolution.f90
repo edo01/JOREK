@@ -345,57 +345,32 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     integer   :: num_particles
     type(type_node_list_gpu) :: node_list_gpu
     !> SoA
-    real*8, allocatable           :: p_x(:,:)   !< particle position in real space
-    real*8, allocatable           :: p_p(:,:)   !< particle momentum in real space
-    real*8, allocatable           :: p_st(:,:)  !< particle position in the element
-    real*8, allocatable           :: p_weight(:) !< particle weight (i.e. number of particles)
-    integer, allocatable          :: p_i_elm(:) !< index in element_list. Negative indices indicate lost particles on the edge of - that element.
-    integer, allocatable          :: p_i_life(:) !< particle lifetime index (i.e. is this still the same particle?)
-    real*8, allocatable           :: p_t_birth(:) !< birth time of this particle
-    integer(kind=1),allocatable   :: p_q(:) !< charge [e]
+    real*8, allocatable           :: p_x(:,:), p_p(:,:), p_st(:,:), p_weight(:)
+    integer, allocatable          :: p_i_elm(:) 
+    integer(kind=1),allocatable   :: p_q(:)
 
 #ifdef CALC_EBPSIU_ENHANCED
     !> enhanced calc_EBpsiU
-    integer, allocatable          :: elm_vertex(:,:)
+    real*8,  allocatable          :: nodes_x(:,:,:,:), nodes_values(:,:,:,:), nodes_deltas(:,:,:,:)
+    integer, allocatable          :: elm_vertex(:,:), elm_neighbours(:,:)
     real*8,  allocatable          :: elm_size(:,:,:)
-    real*8,  allocatable          :: nodes_x(:,:,:,:)
-    real*8,  allocatable          :: nodes_values(:,:,:,:) !< Variable values and derivatives (contiguous)
-    real*8,  allocatable          :: nodes_deltas(:,:,:,:) !< Change of variable values and derivatives in last timestep (contiguous)
+    integer                       :: n_elements, n_nodes
 #endif
     
     !> sorting 
     integer                       :: n_sort, s !< Multiple sorting
-    integer                       :: n_alive_particles !< last particle alive index, used to avoid evolving dead particles
+    integer                       :: alive_particle_count !< last particle alive index, used to avoid evolving dead particles
     real*8                        :: start_time, end_time, tot_time(3)
 #ifdef USE_ORDERING
     integer, allocatable          :: sorted_indices(:) !< indices of the particles sorted by i_elm
     integer                       :: ierr
 #endif
 
-#ifdef USE_COUNTERS
-    !> jumps counter
-    integer, allocatable  :: jumps_counter(:)
-    real*8,  allocatable  :: v_par_counter(:), v_perp_counter(:)
-    real*8,  allocatable  :: v_counter(:,:)
-    integer              :: prev_elm
-    integer(HID_T) fid
-    integer :: ierr
-    character(len=20) :: myid_str
-
-
-    allocate(jumps_counter(size(sim%groups(group_num)%particles,1)))
-    allocate(v_par_counter(size(sim%groups(group_num)%particles,1)))
-    allocate(v_perp_counter(size(sim%groups(group_num)%particles,1)))
-    allocate(v_counter(3,size(sim%groups(group_num)%particles,1)))
-
-    jumps_counter = 0
-#endif
-
     if (sim%my_id .eq. 0) then
       write(*,*) 'INFO: REs evolution executed on     : GPU'
       write(*,*) 'INFO: kernel                        : evolve_REs_gpu_SoA'
       write(*,*) 'INFO: number of timesteps           : ', nstep_particles
-      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
+      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8.d0/(1024*1024) , ' MB'
       write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
 #ifdef USE_ORDERING
       write(*,*) 'INFO: using particle ordering'
@@ -417,10 +392,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     sim_time        = sim%time
     num_particles   = size(sim%groups(group_num)%particles,1)
     
-    !> last particle alive index, used to avoid copying the whole array
-    !> if the particles are not sorted, then the last particle alive index is the number of particles
-    n_alive_particles = num_particles 
-
+    !> if the particles are not sorted, then the number of alive particles is the total number of particles
+    alive_particle_count = num_particles 
 
     !> -----------------------------------------
     !> ---------- GPU DATA STRUCTURES ----------
@@ -455,23 +428,14 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
 
-
-#ifdef USE_ORDERING
-    !> copy the particles data to the SoA data structures
-    !> it can be parallelized with omp
-    !> Reorder particles by i_elm before launching the kernel
-    allocate(sorted_indices(size(particles,1)))
-#endif
-
-
     !> allocate the SoA data structures
     !> TODO: move them in the main and update them before the kernel execution
-    allocate(p_x(3,n_alive_particles))
-    allocate(p_p(3,n_alive_particles))
-    allocate(p_st(2,n_alive_particles)) 
-    allocate(p_weight(n_alive_particles))
-    allocate(p_i_elm(n_alive_particles))
-    allocate(p_q(n_alive_particles))
+    allocate(p_x(3,alive_particle_count))
+    allocate(p_p(3,alive_particle_count))
+    allocate(p_st(2,alive_particle_count)) 
+    allocate(p_weight(alive_particle_count))
+    allocate(p_i_elm(alive_particle_count))
+    allocate(p_q(alive_particle_count))
 
     !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
     n_sort = 1 !10
@@ -482,7 +446,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> Start timing the sorting section
     start_time = MPI_WTIME()
 
-    call i_elm_sort_global(sorted_indices, particles, n_alive_particles)
+    call i_elm_sort_global(sorted_indices, particles, alive_particle_count)
 
     !> End timing the sorting section
     end_time = MPI_WTIME()
@@ -494,7 +458,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
 
     !> Populate the SoA data structures
-    do j=1,n_alive_particles
+    do j=1,alive_particle_count
 #ifdef USE_ORDERING
       p_x(:,j) = particles(sorted_indices(j))%x
       p_p(:,j) = particles(sorted_indices(j))%p
@@ -522,11 +486,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !> TODO: the optimal way would be to allocate the SoA structures in the main, and update them before and after
       !>       the kernel execution. 
       !$omp target data                                                                                     &
-#ifdef USE_COUNTERS
-      !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm, jumps_counter, v_par_counter, v_perp_counter)&
-#else 
       !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                                              &
-#endif
       !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
       !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin,             &
 #ifdef CALC_EBPSIU_ENHANCED
@@ -539,25 +499,18 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !$omp        fields, node_list_gpu,feedback_rhs,                              &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,           & 
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,                    &
-#ifdef USE_COUNTERS
-      !$omp        jumps_counter, v_par_counter, v_perp_counter,                    &
-#endif
 #ifdef CALC_EBPSIU_ENHANCED
       !$omp        elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,       &
 #endif
-      !$omp        n_alive_particles, n_sort)                                 &
+      !$omp        alive_particle_count, n_sort)                                 &
       !$omp private(ifail, j, k)                                                    &
       !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                               &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
       !$omp         cylindrical_velocity, gamma_m, proj_factor,                     &
-#ifdef USE_COUNTERS
-      !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor, prev_elm)                 &
-#else
       !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                           &
-#endif
       !$omp device(sim%gpu_id)                                                                    
 #endif
-      do j=1, n_alive_particles
+      do j=1, alive_particle_count
         do k=1,nstep_particles/n_sort
         
           if (p_i_elm(j) .le. 0) cycle
@@ -591,12 +544,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           v_par   = dot_product(cylindrical_velocity, B_norm2)
           !v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
           v_perp = sqrt(dot_product(cylindrical_velocity - v_par * B_norm2, cylindrical_velocity - v_par * B_norm2))
-
-#ifdef USE_COUNTERS
-          v_par_counter(j) = v_par
-          v_perp_counter(j) = v_perp
-#endif
-
           gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
 
           v_Ppar  = gamma_m * v_par**2 * MU_ZERO
@@ -634,10 +581,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
             enddo !< n_vertex_max
           enddo !< degrees
 
-#ifdef USE_COUNTERS
-          prev_elm = p_i_elm(j)
-#endif
-
 #ifdef CALC_EBPSIU_ENHANCED
           call volume_preserving_push_jorek_gpu_SoA_enhanced(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j),  nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, node_list_gpu, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
@@ -646,14 +589,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), node_list_gpu, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
-#endif
-
-
-
-#ifdef USE_COUNTERS
-          if (prev_elm /= p_i_elm(j)) then
-            jumps_counter(j) = jumps_counter(j) + 1
-          end if
 #endif
 
         end do !< steps
@@ -676,7 +611,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     
     !> ------------------COPY BACK---------------------
     !> copy the SoA data structures back to the particles
-    do j=1,n_alive_particles
+    do j=1,alive_particle_count
 #ifdef USE_ORDERING
       particles(sorted_indices(j))%x = p_x(:,j)    
       particles(sorted_indices(j))%p = p_p(:,j)
@@ -691,10 +626,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     enddo !< copy
 
     enddo !< n_sort
-
-#ifdef USE_COUNTERS
-    call write_simulation_counters_hdf5(sim, "sim_counters.h5", jumps_counter, v_perp_counter, v_par_counter, p_p, p_x)
-#endif 
 
     end select ! select type (particles)
 
