@@ -223,7 +223,7 @@ ifeq (1, $(USE_FFTW))
 endif
 
 ifeq (1, $(USE_GPU))
-  FLAGS += -mp=gpu -Minfo=mp -gpu=cc90 -acc=gpu -target=gpu
+  FLAGS += -mp=gpu -Minfo=mp -gpu=cc90 #-acc=gpu #-target=gpu
   DEFINES  := $(DEFINES) -DUSE_GPU
 
   # Check for CuFFT Flag
@@ -239,7 +239,7 @@ ifeq (1, $(USE_GPU))
 endif
 
 ifeq (1, $(USE_GPU_TEST))
-  DEFINES  := $(DEFINES) -DUSE_GPU_TEST
+  DEFINES  := $(DEFINES) -DUSE_GPU_TEST -DUSE_ORDERING
 endif
 
 ifeq (1, $(USE_RHS_INV))
@@ -248,6 +248,10 @@ endif
 
 ifeq (1, $(USE_ORDERING))
   DEFINES  := $(DEFINES) -DUSE_ORDERING 
+endif 
+
+ifeq (1, $(USE_CALC_EBPSIU_ENHANCED))
+  DEFINES  := $(DEFINES) -DCALC_EBPSIU_ENHANCED
 endif 
 
 # polynomial order > 3 requires more Gauss points
