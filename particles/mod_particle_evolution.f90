@@ -376,7 +376,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     
     !> sorting 
     integer                       :: n_sort, s !< Multiple sorting
-    integer                       :: last_particle_alive_idx !< last particle alive index, used to avoid copying the whole array
+    integer                       :: n_alive_particles !< last particle alive index, used to avoid evolving dead particles
     real*8                        :: start_time, end_time, tot_time(3)
 #ifdef USE_ORDERING
     integer, allocatable          :: sorted_indices(:) !< indices of the particles sorted by i_elm
@@ -430,7 +430,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     
     !> last particle alive index, used to avoid copying the whole array
     !> if the particles are not sorted, then the last particle alive index is the number of particles
-    last_particle_alive_idx = num_particles 
+    n_alive_particles = num_particles 
 
 
     !> -----------------------------------------
@@ -477,12 +477,12 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 
     !> allocate the SoA data structures
     !> TODO: move them in the main and update them before the kernel execution
-    allocate(p_x(3,last_particle_alive_idx))
-    allocate(p_p(3,last_particle_alive_idx))
-    allocate(p_st(2,last_particle_alive_idx)) 
-    allocate(p_weight(last_particle_alive_idx))
-    allocate(p_i_elm(last_particle_alive_idx))
-    allocate(p_q(last_particle_alive_idx))
+    allocate(p_x(3,n_alive_particles))
+    allocate(p_p(3,n_alive_particles))
+    allocate(p_st(2,n_alive_particles)) 
+    allocate(p_weight(n_alive_particles))
+    allocate(p_i_elm(n_alive_particles))
+    allocate(p_q(n_alive_particles))
 
     !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
     n_sort = 1 !10
@@ -493,7 +493,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> Start timing the sorting section
     start_time = MPI_WTIME()
 
-    call sort_indices_by_i_elm_warped(sorted_indices, particles)
+    call i_elm_sort_global(sorted_indices, particles, n_alive_particles)
 
     !> End timing the sorting section
     end_time = MPI_WTIME()
@@ -505,7 +505,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
 
     !> Populate the SoA data structures
-    do j=1,last_particle_alive_idx
+    do j=1,n_alive_particles
 #ifdef USE_ORDERING
       p_x(:,j) = particles(sorted_indices(j))%x
       p_p(:,j) = particles(sorted_indices(j))%p
@@ -556,7 +556,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #ifdef CALC_EBPSIU_ENHANCED
       !$omp        elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,       &
 #endif
-      !$omp        last_particle_alive_idx, n_sort)                                 &
+      !$omp        n_alive_particles, n_sort)                                 &
       !$omp private(ifail, j, k)                                                    &
       !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                               &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
@@ -568,7 +568,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
       !$omp device(sim%gpu_id)                                                                    
 #endif
-      do j=1, last_particle_alive_idx
+      do j=1, n_alive_particles
         do k=1,nstep_particles/n_sort
         
           if (p_i_elm(j) .le. 0) cycle
@@ -687,7 +687,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     
     !> ------------------COPY BACK---------------------
     !> copy the SoA data structures back to the particles
-    do j=1,last_particle_alive_idx
+    do j=1,n_alive_particles
 #ifdef USE_ORDERING
       particles(sorted_indices(j))%x = p_x(:,j)    
       particles(sorted_indices(j))%p = p_p(:,j)
