@@ -126,7 +126,7 @@ end subroutine neighbours_side_co_counter
 !> GPU version of coord_in_neighbour. Nothing changes except the
 !> declaration of the node_list type.
 subroutine coord_in_neighbour_gpu(node_list,element_list,i_from,i_to,st)
-  type (type_node_list_gpu),    intent(in)    :: node_list
+  type (type_node_list),    intent(in) :: node_list
   type (type_element_list), intent(in) :: element_list
   integer, intent(in)                  :: i_from
   integer, intent(out)                 :: i_to !<  >0 if a neighbour exists on that side, -1 if search

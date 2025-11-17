@@ -17,7 +17,7 @@ implicit none
 !$omp declare target
 #endif
 
-type (type_node_list_gpu), intent(in)    :: node_list
+type (type_node_list), intent(in)    :: node_list
 type (type_element_list), intent(in) :: element_list
 real*8, intent(in)     :: R_find, Z_find
 real*8, intent(out)    :: R_out,Z_out,s_out,t_out
@@ -64,7 +64,7 @@ use mod_parameters, only: n_period, n_plane
 !use phys_module, only: i_plane_rtree
 implicit none
 
-type (type_node_list_gpu), intent(in)    :: node_list
+type (type_node_list), intent(in)    :: node_list
 type (type_element_list), intent(in) :: element_list
 integer, intent(in)    :: i_elm
 real*8, intent(in)     :: R_find, Z_find

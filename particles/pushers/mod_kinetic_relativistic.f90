@@ -111,7 +111,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,node
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
        calc_EBpsiU_linear_gpu_inlined, calc_EBpsiU_linear_gpu_inlined_enhanced
-  use data_structure, only: type_node_list_gpu, type_element_list
+  use data_structure, only: type_element_list, type_node_list
   !> inline functions
   use mod_pusher_tools, only: cayley_transform
 
@@ -129,8 +129,8 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,node
   real*8,  allocatable     ,intent(in)  :: nodes_deltas(:,:,:,:) !< Change of variable values and derivatives in last timestep (contiguous)
   integer, allocatable     ,intent(in)  :: elm_vertex(:,:) !> SoA
   real*8,  allocatable     ,intent(in)  :: elm_size(:,:,:) ! element scaling factors
-  type (type_node_list_gpu),intent(in)  :: node_list 
-  type (type_element_list), intent(in)  :: element_list
+  type (type_node_list)    ,intent(in)  :: node_list 
+  type (type_element_list) ,intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
   real*8,                   intent(in)  :: time_prev 
   logical,                  intent(in)  :: static
@@ -245,7 +245,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
        calc_EBpsiU_linear_gpu_inlined
-  use data_structure, only: type_node_list_gpu, type_element_list
+  use data_structure, only: type_element_list, type_node_list
   !> inline functions
   use mod_pusher_tools, only: cayley_transform
 
@@ -258,8 +258,8 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
 
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
-  
-  type (type_node_list_gpu),intent(in)  :: node_list 
+
+  type (type_node_list),intent(in)      :: node_list
   type (type_element_list), intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
   real*8,                   intent(in)  :: time_prev 
@@ -373,15 +373,15 @@ subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, tim
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
        calc_EBpsiU_linear_gpu
-  use data_structure, only: type_node_list_gpu, type_element_list
+  use data_structure, only: type_element_list, type_node_list
 
   ! declare input/output variables
   integer(kind=4),intent(inout) :: ifail
   class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
-  
-  type (type_node_list_gpu),intent(in)  :: node_list 
+
+  type (type_node_list)   , intent(in)  :: node_list
   type (type_element_list), intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
   real*8,                   intent(in)  :: time_prev 

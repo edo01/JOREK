@@ -224,11 +224,10 @@ subroutine find_RZ_nearby_gpu(node_list, element_list, R_old, Z_old, s_old, t_ol
         R_new, Z_new, s_new, t_new, i_elm_new, ifail, phi)
 use data_structure
 use mod_neighbours
-use data_structure, only: type_node_list_gpu
 use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 implicit none
 !> Input parameters
-type (type_node_list_gpu),intent(in)    :: node_list
+type (type_node_list),intent(in)    :: node_list
 type (type_element_list), intent(in)    :: element_list
 real*8,                   intent(in)    :: R_old, Z_old !< The old R,Z location
 real*8,                   intent(in)    :: R_new, Z_new !< The new R,Z location
@@ -358,10 +357,9 @@ end subroutine find_RZ_nearby_gpu
 pure subroutine try_interp_gpu(node_list,element_list,i_elm,st,p,x,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 use data_structure
 use mod_interp
-use data_structure, only: type_node_list_gpu
 implicit none
 !> Input parameters
-type (type_node_list_gpu),intent(in) :: node_list
+type (type_node_list),intent(in) :: node_list
 type (type_element_list), intent(in)    :: element_list
 real*8,                   intent(in)    :: st(2), p
 integer,                  intent(in)    :: i_elm

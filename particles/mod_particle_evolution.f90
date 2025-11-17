@@ -314,7 +314,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu_inlined
-    use data_structure, only: type_node_list_gpu, init_node_list_gpu, dealloc_node_list_gpu, make_deep_copy_node_list_to_gpu
     use phys_module, only: F0, mode, central_mass, central_density, tstep
     use hdf5_io_module
     use mod_particle_io
@@ -343,7 +342,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     integer   :: j, k, m, n, ifail, i_tor
     real*8    :: group_mass, sim_time
     integer   :: num_particles
-    type(type_node_list_gpu) :: node_list_gpu
+    
     !> SoA
     real*8, allocatable           :: p_x(:,:), p_p(:,:), p_st(:,:), p_weight(:)
     integer, allocatable          :: p_i_elm(:) 
@@ -399,11 +398,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     !> ---------- GPU DATA STRUCTURES ----------
     !> -----------------------------------------
     if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
-
-    !> allocate node_list_gpu
-    call init_node_list_gpu(node_list_gpu, sim%fields%node_list%n_nodes, sim%fields%node_list%n_dof)
-    !> copy the node_list to the node_list_gpu
-    call make_deep_copy_node_list_to_gpu(sim%fields%node_list, node_list_gpu)
 
 #ifdef CALC_EBPSIU_ENHANCED
     allocate(elm_vertex(sim%fields%element_list%n_elements, n_vertex_max))
@@ -485,24 +479,25 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #ifdef USE_GPU
       !> TODO: the optimal way would be to allocate the SoA structures in the main, and update them before and after
       !>       the kernel execution. 
-      !$omp target data                                                                                     &
-      !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                                              &
-      !$omp map(to: fields, fields%element_list, sim_time, node_list_gpu, node_list_gpu%node,               &
-      !$omp         group_mass, tstep_part_adj, nstep_particles, P_par_idx_kin, P_perp_idx_kin,             &
+      !$omp target data                                                                     &
+      !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                              &
+      !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,   &      
+      !$omp         group_mass, tstep_part_adj, nstep_particles,                            &  
+      !$omp         P_par_idx_kin, P_perp_idx_kin,j_phi_idx_kin,                            &
 #ifdef CALC_EBPSIU_ENHANCED
-      !$omp         elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,                              &
+      !$omp         elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,              &
 #endif
-      !$omp         j_phi_idx_kin, p_weight, p_q)                                  
+      !$omp         p_weight, p_q)                                  
 
       !$omp target teams distribute parallel do default(none)                       &
       !$omp shared(p_x, p_p, p_st, p_weight, p_i_elm, p_q,                          &
-      !$omp        fields, node_list_gpu,feedback_rhs,                              &
+      !$omp        fields,  feedback_rhs,                                           &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,           & 
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,                    &
 #ifdef CALC_EBPSIU_ENHANCED
       !$omp        elm_vertex, elm_size, nodes_x, nodes_values, nodes_deltas,       &
 #endif
-      !$omp        alive_particle_count, n_sort)                                 &
+      !$omp        alive_particle_count, n_sort)                                    &
       !$omp private(ifail, j, k)                                                    &
       !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                               &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
@@ -533,8 +528,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
                                       fields%time_prev, fields%static, fields%flag_zero_dpsidt,                                    &
                                         sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
 #else
-          call calc_EBpsiU_linear_gpu_inlined(node_list_gpu, fields%element_list, fields%time_now,  &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt,     &
+          call calc_EBpsiU_linear_gpu_inlined(fields%node_list, fields%element_list, fields%time_now,   &
+                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt,         &
                                         sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
 #endif
           ! norm2 is really slow on GPU
@@ -582,11 +577,11 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
           enddo !< degrees
 
 #ifdef CALC_EBPSIU_ENHANCED
-          call volume_preserving_push_jorek_gpu_SoA_enhanced(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j),  nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, node_list_gpu, &
+          call volume_preserving_push_jorek_gpu_SoA_enhanced(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j),  nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, fields%node_list, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
 #else
-          call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), node_list_gpu, &
+          call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), fields%node_list, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
 #endif
@@ -630,10 +625,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     end select ! select type (particles)
 
     !> ------------------CLEANING---------------------
-
-    !> deallocate the node_list_gpu
-    call dealloc_node_list_gpu(node_list_gpu)
-
     !> deallocate SoA data structures
     deallocate(p_x);      deallocate(p_p);      deallocate(p_st)
     deallocate(p_weight); deallocate(p_i_elm);  deallocate(p_q)

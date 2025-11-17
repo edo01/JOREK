@@ -852,10 +852,10 @@ module mod_expression
                 hhz_p  = HZ_p (i_tor)
                 hhz_pp = HZ_pp(i_tor)
                 vv(:)  = 0.d0
-                vv(1:n_var)  = nodes(i)%values(i_tor,j,:)
+                vv(1:n_var)  = nodes(i)%values(i_tor,j,1:n_var)
 		            va(:)  = 0.d0
               if(export_aux_node_list .and. allocated(aux_node_list%node)) then
-                   va(1:n_var)  = aux_nodes(i)%values(i_tor,j,:)
+                   va(1:n_var)  = aux_nodes(i)%values(i_tor,j,1:n_var)
                 endif
                 
                 ! --- Poloidal Flux

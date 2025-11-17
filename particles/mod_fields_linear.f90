@@ -191,7 +191,6 @@ end subroutine calc_EBpsiU_linear_gpu_inlined_enhanced
 pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, E, B, psi, U)
   use phys_module, only: F0, central_mass, central_density
   use constants, only: mu_zero, mass_proton
-  use data_structure, only: type_node_list_gpu
   ! inline
   use mod_linear, only: linear_interp_differentials
   use mod_linear, only: linear_interp_differentials_dt
@@ -199,7 +198,7 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now
   use mod_interp, only: sincosperiod_moivre
 
   ! Routine parameters
-  type (type_node_list_gpu),intent(in)  :: node_list
+  type (type_node_list),intent(in)      :: node_list
   type (type_element_list), intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
   real*8,                   intent(in)  :: time_prev 
@@ -431,10 +430,9 @@ end subroutine calc_EBpsiU_linear_gpu_inlined
 pure subroutine calc_EBpsiU_linear_gpu(node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, E, B, psi, U)
   use phys_module, only: F0, central_mass, central_density
   use constants, only: mu_zero, mass_proton
-  use data_structure, only: type_node_list_gpu
 
   ! Routine parameters
-  type (type_node_list_gpu),intent(in)  :: node_list
+  type (type_node_list),intent(in)      :: node_list
   type (type_element_list), intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
   real*8,                   intent(in)  :: time_prev 
@@ -518,7 +516,7 @@ pure subroutine do_interp_PRZ_1_gpu(node_list, element_list, time_now, time_prev
   use mod_linear, only: linear_interp_differentials_dt
 
 
-  type (type_node_list_gpu),intent(in)  :: node_list
+  type (type_node_list),intent(in)      :: node_list
   type (type_element_list), intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
   real*8,                   intent(in)  :: time_prev 

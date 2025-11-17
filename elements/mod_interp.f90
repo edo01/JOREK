@@ -117,7 +117,7 @@ end subroutine interp_PRZ_0
 
 !> This subroutine interpolates some variables at a specific position within one element at a given position (s,t)
 pure subroutine interp_PRZ_1_gpu(node_list, element_list, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t, deltas)
-type (type_node_list_gpu),    intent(in)  :: node_list
+type (type_node_list),    intent(in)  :: node_list
 type (type_element_list), intent(in)  :: element_list
 integer,                  intent(in)  :: i_elm
 integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -1297,7 +1297,7 @@ pure subroutine interp_RZP_0(node_list,element_list,i_elm,s,t,phi,R,Z)
 end subroutine interp_RZP_0
 
 pure subroutine interp_RZP_1_gpu(node_list,element_list,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
-type (type_node_list_gpu),    intent(in)  :: node_list
+type (type_node_list),    intent(in)  :: node_list
 type (type_element_list), intent(in)  :: element_list
 integer,                  intent(in)  :: i_elm
 real*8,                   intent(in)  :: s,t,phi

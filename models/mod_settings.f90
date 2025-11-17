@@ -2,10 +2,6 @@ module mod_settings
 
 implicit none
 
-#ifdef USE_GPU
-!$omp declare target
-#endif
-
 integer, parameter :: n_tor             = 3      !< number of toroidal harmonics
 integer, parameter :: n_coord_tor       = 1      !< number of toroidal harmonics in (R, Z) coordinates
 integer, parameter :: l_pol_domm        = 0      !< highest poloidal mode in the Dommaschk potentials        
@@ -32,5 +28,6 @@ integer, parameter :: n_degrees_1d      = (n_order+1)/2    !< degrees of freedom
 integer, parameter :: n_degrees         = n_degrees_1d**2  !< degrees of freedom per variable per node in 2D
 integer, parameter :: nref_max          = 10               !< (refinement; not presently working)
 integer, parameter :: n_ref_list        = 10               !< (refinement; not presently working)
+integer, parameter :: n_var_max         = 8                !< maximum number of variables stored at each node
 
 end module mod_settings
