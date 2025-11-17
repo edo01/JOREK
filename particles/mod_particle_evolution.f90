@@ -18,7 +18,7 @@ module mod_particle_evolution
 
     implicit none
     private
-    public :: evolve_particle_group, evolve_REs, evolve_REs_gpu_SoA
+    public :: evolve_particle_group, evolve_REs, evolve_REs_gpu
 contains
 
   !> For each particle group, this function does the following:
@@ -46,6 +46,7 @@ contains
     real*8,allocatable :: feedback_rhs(:,:,:,:,:)
 #ifdef USE_RHS_INV
     real*8,allocatable :: feedback_rhs_inv(:,:,:,:,:)
+    integer :: n, m, i_elm, i_tor
 #endif
     type (type_node_list),         pointer :: feedback_nodelist
     type (type_element_list),      pointer :: feedback_element_list
@@ -95,9 +96,9 @@ contains
       case ('rep')
 #ifdef USE_GPU
 #ifdef USE_RHS_INV
-      call evolve_REs_gpu_SoA(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj)
+      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj)
 #else
-      call evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+      call evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
 #else
       call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
@@ -120,13 +121,22 @@ contains
 #endif
 
 #ifdef USE_RHS_INV
-    !feedback_rhs = reshape(feedback_rhs_inv, (/n_degrees, n_vertex_max, sim%fields%element_list%n_elements, n_tor, 3/), order=(/3,5,4,2,1/))
     start_time = MPI_WTIME()
-    feedback_rhs = reshape(feedback_rhs_inv, (/n_degrees, n_vertex_max, sim%fields%element_list%n_elements, n_tor, 8/), order=(/1,2,4,5,3/))
+    do n=1,n_degrees
+      do m=1,n_vertex_max
+        do i_elm=1,sim%fields%element_list%n_elements
+          do i_tor=1,n_tor
+            feedback_rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv(i_elm,P_par_idx_kin,i_tor,m,n)
+            feedback_rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv(i_elm,P_perp_idx_kin,i_tor,m,n)
+            feedback_rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv(i_elm,j_Phi_idx_kin,i_tor,m,n)
+          enddo
+        enddo
+      enddo
+    enddo
     end_time = MPI_WTIME()
     tot_time = mpi_minmeanmax(end_time-start_time)
     if (sim%my_id .eq. 0) then
-      write(*,"(A,3f10.3,A)") , "Time taken for reshape (min/mean/max): ", tot_time, " seconds"
+      write(*,"(A,3f10.3,A)") , "Time taken for feedback_rhs reconstruction finished in (min/mean/max): ", tot_time, " seconds"
     endif
 
     deallocate(feedback_rhs_inv) 
@@ -295,29 +305,8 @@ contains
     
   end subroutine evolve_REs
 
-  !> Parallelization strategies to handle the feedback accumulation:
-  !> 1) Subdivide the particles into small batches and execute the loop over the batches sequentially. 
-  !>    Inside a batch the feedback_rhs array is replicated among the threads, and the accumulation is done completely in parallel.
-  !>    This new data structure has the following structure: (n_particles_batch, n_aux, n_tor, n_vertex_max, n_degrees +1, i_elm) in order to maximize the memory access efficiency.
-  !>    a) The batch data structure is resident in the GPU memory and accumulated FULLY in parallel inside a batch, but sequentially between batches. NO ATOMIC
-  !>    b) A final reduction is required to collapse the first dimension of the batch data structure.
-  !>    c) If inside a batch the particles start from the same element, a coalesced access to the feedback_rhs array can be achieved. Please note that this does not mean that 
-  !>       coalesced access to the feedback_rhs array is always achieved, since the particles may move to different elements during the evolution.
-  !>    d) Dimensional analysis: 16 poloidal dofs * 10^2 elements * 10 toroidal modes * 3 aux * 8 Bytes = 3.84*10^5 B = 384 kB per particle. Using a batch size of 10^5 particles, 
-  !>       the total memory footprint is 38.4 GB, which is still acceptable for the GPU memory. We can avoid to launch 10^7/10^5 = 100 batches, which is a lot of overhead, by cycling 
-  !>       over the batches, INSIDE THE KERNEL. 
-  !>    e) Is 10^5 particles per batch too small to occupy the GPU?
-  !>
-  !> 2) Same as 1, but now the feedback_rhs array is not replicated for the number of the particles in a batch, but for the number of batches. Each batch
-  !>    is processed in parallel, and the feedback_rhs array is accumulated in parallel between batches. Inside the batch, the accumulation still needs to be done with ATOMIC operations.
-  !>    At the end of the kernel, a final reduction is required to collapse the first dimension.
-  !>    a) Coalesced access to the feedback_rhs array may not be possible, since now we want to avoid the particles to start from the same element.
-  !>    b) To avoid cuncurrent access to the feedback_rhs array, we may want to put particles belonging to the same element in different batches. Please note that this does not mean that 
-  !>       cuncurrent access to the feedback_rhs array is not possible, since the particles may move to different elements during the evolution.
-  !>    c) Dimensional analysis: 16 poloidal dofs * 10^2 elements * 10 toroidal modes * 3 aux * 8 Bytes = 3.84*10^5 B = 384 kB per batch -> we can launch a thread for each particle!
-
-!> This kernel uses SoA (Structure of Arrays) data structure to store the particles.
-subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+!> Kernel to evolve REs on GPU
+subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
@@ -730,7 +719,7 @@ subroutine evolve_REs_gpu_SoA(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     deallocate(jumps_counter); deallocate(v_par_counter); deallocate(v_counter)
 #endif
 
-  end subroutine evolve_REs_gpu_SoA
+  end subroutine evolve_REs_gpu
 
 
   !> Internal function for gathering the feedback rhs values when using the ncs or ics coupling scheme
