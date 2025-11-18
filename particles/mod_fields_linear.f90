@@ -9,7 +9,7 @@ use mod_interp
 implicit none
 private
 public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_before_time
-public calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_inlined, calc_EBpsiU_linear_gpu_inlined_enhanced
+public calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_SoA
 
 !> Action to read in the fields into sim%fields
 type, extends(action) :: read_jorek_fields_interp_linear
@@ -44,20 +44,18 @@ end type jorek_fields_interp_linear
 contains
 
 
-pure subroutine calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, &
+pure subroutine calc_EBpsiU_linear_gpu_SoA(node_list_SoA, element_list_SoA, &
                                                         time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, &
                                                         E, B, psi, U)
   use phys_module,     only: F0, central_mass, central_density
   use constants,       only: mu_zero, mass_proton
   use mod_basisfunctions, only: basisfunctions_T
   use mod_interp,      only: sincosperiod_moivre
+  use data_structure, only: type_node_list_SoA, type_element_list_SoA
 
   ! Routine parameters
-  real*8,  allocatable, intent(in)  :: nodes_x(:,:,:,:)       ! node coordinates (SoA)
-  real*8,  allocatable, intent(in)  :: nodes_values(:,:,:,:)  ! variable values (SoA)
-  real*8,  allocatable, intent(in)  :: nodes_deltas(:,:,:,:)  ! variable deltas (SoA)
-  integer, allocatable, intent(in)  :: elm_vertex(:,:)        ! element vertices
-  real*8, allocatable, intent(in)   :: elm_size(:,:,:)        ! element scaling factors
+  type(type_node_list_SoA), intent(in)    :: node_list_SoA
+  type(type_element_list_SoA), intent(in) :: element_list_SoA
   real*8, intent(in)  :: time_now, time_prev, time, phi
   logical, intent(in) :: static, flag_zero_dpsidt
   integer, intent(in) :: i_elm
@@ -91,28 +89,28 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, n
 
   ! --- Interpolation of values ---
   do kv = 1, n_vertex_max
-    iv = elm_vertex(i_elm,kv)
+    iv = element_list_SoA%vertex(i_elm,kv)
 
     do kf = 1, n_degrees
-      v  = dot_product(nodes_values(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), HZ)
+      v  = dot_product(node_list_SoA%values(1:n_tor,kf,1,iv) * element_list_SoA%size(kv,kf,i_elm), HZ)
       P(1)   = P(1)   + v  * H(kf, kv)
       P_s(1) = P_s(1) + v  * H_s(kf, kv)
       P_t(1) = P_t(1) + v  * H_t(kf, kv)
 
-      vp     = dot_product(nodes_values(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), dHZ)
+      vp     = dot_product(node_list_SoA%values(1:n_tor,kf,1,iv) * element_list_SoA%size(kv,kf,i_elm), dHZ)
       P_phi(1) = P_phi(1) + vp * H(kf, kv)
 
-      v  = dot_product(nodes_values(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), HZ)
+      v  = dot_product(node_list_SoA%values(1:n_tor,kf,2,iv) * element_list_SoA%size(kv,kf,i_elm), HZ)
       P(2)   = P(2)   + v  * H(kf, kv)
       P_s(2) = P_s(2) + v  * H_s(kf, kv)
       P_t(2) = P_t(2) + v  * H_t(kf, kv)
 
-      vp     = dot_product(nodes_values(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), dHZ)
+      vp     = dot_product(node_list_SoA%values(1:n_tor,kf,2,iv) * element_list_SoA%size(kv,kf,i_elm), dHZ)
       P_phi(2) = P_phi(2) + vp * H(kf, kv)
     enddo
 
-    xR(:,kv) = nodes_x(1,:,1,iv) * elm_size(kv,:,i_elm)
-    xZ(:,kv) = nodes_x(1,:,2,iv) * elm_size(kv,:,i_elm)
+    xR(:,kv) = node_list_SoA%x(1,:,1,iv) * element_list_SoA%size(kv,:,i_elm)
+    xZ(:,kv) = node_list_SoA%x(1,:,2,iv) * element_list_SoA%size(kv,:,i_elm)
   enddo
 
   R   = sum(xR*H);   R_s = sum(xR*H_s);   R_t = sum(xR*H_t)
@@ -123,23 +121,23 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, n
     Pd    = 0.d0;  Pd_s = 0.d0;  Pd_t = 0.d0;  Pd_phi = 0.d0
 
     do kv = 1, n_vertex_max
-      iv = elm_vertex(i_elm,kv)
+      iv = element_list_SoA%vertex(i_elm,kv)
 
       do kf = 1, n_degrees
-        v  = dot_product(nodes_deltas(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), HZ)
+        v  = dot_product(node_list_SoA%deltas(1:n_tor,kf,1,iv) * element_list_SoA%size(kv,kf,i_elm), HZ)
         Pd(1)   = Pd(1)   + v  * H(kf, kv)
         Pd_s(1) = Pd_s(1) + v  * H_s(kf, kv)
         Pd_t(1) = Pd_t(1) + v  * H_t(kf, kv)
 
-        vp      = dot_product(nodes_deltas(1:n_tor,kf,1,iv) * elm_size(kv,kf,i_elm), dHZ)
+        vp      = dot_product(node_list_SoA%deltas(1:n_tor,kf,1,iv) * element_list_SoA%size(kv,kf,i_elm), dHZ)
         Pd_phi(1) = Pd_phi(1) + vp * H(kf, kv)
 
-        v  = dot_product(nodes_deltas(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), HZ)
+        v  = dot_product(node_list_SoA%deltas(1:n_tor,kf,2,iv) * element_list_SoA%size(kv,kf,i_elm), HZ)
         Pd(2)   = Pd(2)   + v  * H(kf, kv)
         Pd_s(2) = Pd_s(2) + v  * H_s(kf, kv)
         Pd_t(2) = Pd_t(2) + v  * H_t(kf, kv)
 
-        vp      = dot_product(nodes_deltas(1:n_tor,kf,2,iv) * elm_size(kv,kf,i_elm), dHZ)
+        vp      = dot_product(node_list_SoA%deltas(1:n_tor,kf,2,iv) * element_list_SoA%size(kv,kf,i_elm), dHZ)
         Pd_phi(2) = Pd_phi(2) + vp * H(kf, kv)
       enddo
     enddo
@@ -183,12 +181,12 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, n
   ! Projection to perpendicular component
   E = E - E * B / sqrt(dot_product(B,B))
 
-end subroutine calc_EBpsiU_linear_gpu_inlined_enhanced
+end subroutine calc_EBpsiU_linear_gpu_SoA
 
 
 !> Calculates the electric and magnetic fields at a specific position
 !> in the jorek element `i_elm` at `st`.
-pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, E, B, psi, U)
+pure subroutine calc_EBpsiU_linear_gpu(node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, E, B, psi, U)
   use phys_module, only: F0, central_mass, central_density
   use constants, only: mu_zero, mass_proton
   ! inline
@@ -422,148 +420,7 @@ pure subroutine calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now
   E = E - E * B / sqrt(dot_product(B,B))
   !E = 0
 
-end subroutine calc_EBpsiU_linear_gpu_inlined
-
-
-!> Calculates the electric and magnetic fields at a specific position
-!> in the jorek element `i_elm` at `st`.
-pure subroutine calc_EBpsiU_linear_gpu(node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, time, i_elm, st, phi, E, B, psi, U)
-  use phys_module, only: F0, central_mass, central_density
-  use constants, only: mu_zero, mass_proton
-
-  ! Routine parameters
-  type (type_node_list),intent(in)      :: node_list
-  type (type_element_list), intent(in)  :: element_list
-  real*8,                   intent(in)  :: time_now 
-  real*8,                   intent(in)  :: time_prev 
-  logical,                  intent(in)  :: static
-  logical,                  intent(in)  :: flag_zero_dpsidt
-  real*8, intent(in)  :: time
-  integer, intent(in) :: i_elm !< JOREK element index
-  real*8, intent(in)  :: st(2) !< element-local coordinates
-  real*8, intent(in)  :: phi !< toroidal angle
-  real*8, intent(out) :: E(3) !< Electric field [V/m]
-  real*8, intent(out) :: B(3) !< Magnetic field [T]
-  real*8, intent(out) :: psi !< psi in JOREK units
-  real*8, intent(out) :: u !< velocity stream function in m/s
-
-  ! Internal parameters
-  !> Variab
-  !integer, parameter :: i_var(2) = [1,2]
-  integer            :: i_var(2)
-  real*8             :: P(2), P_s(2), P_t(2), P_phi(2), P_time(2) ! Placeholder for evaluating variables and derivatives locally
-  ! Values
-  real*8             :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
-  ! Others
-  real*8             :: inv_st_jac, R_inv
-  real*8             :: psi_R, psi_Z, psi_phi, U_R, U_Z, U_phi, t_norm
-#ifdef USE_GPU
-  !$omp declare target 
-#endif
-
-  t_norm  = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
-
-  ! Interpolate the fields to get psi and U at the current position (and the
-  ! changes u_n - u(n-1))
-
-  !> TODO: this is a workaround for the compiler not being able to handle the parameter array i_var.
-  i_var(1) = 1
-  i_var(2) = 2
-
-  R_phi = 0.0; Z_phi = 0.0
-
-  call do_interp_PRZ_1_gpu(node_list, element_list, time_now, time_prev, static, &
-              time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-
-  !call do_interp_PRZ_1_gpu(node_list, fields%element_list, fields%time_now, fields%time_prev, fields%static, &
-  !            time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  !call do_interp_PRZ_1(fields, time, i_elm, [1,2], 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-
-  ! Calculate the derivatives to R and Z
-  R_inv = 1.d0/R
-  inv_st_jac = 1.d0/(R_s * Z_t - R_t * Z_s)
-  
-  psi_R    = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
-  psi_Z    = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
-  psi_phi  = P_phi(1) - R_phi*psi_R - Z_phi*psi_Z
-  U_R      = (  P_s(2) * Z_t - P_t(2) * Z_s ) * inv_st_jac
-  U_Z      = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
-  U_phi    = P_phi(2) - R_phi*U_R - Z_phi*U_Z
-  
-  ! Update psi and U
-  psi = P(1)
-  U   = P(2)/t_norm
-
-  ! Set dpsi/dt to 0 if flag is true
-  if(flag_zero_dpsidt) P_time(1) = 0.d0
-
-  ! Calculate the magnetic field (see http://jorek.eu/wiki/doku.php?id=reduced_mhd)
-  B     = [+psi_Z, -psi_R, F0] * R_inv
-
-  ! The local electric field, obtained from E=-Grad (u F0)-\partial_t A
-  ! See http://jorek.eu/wiki/doku.php?id=u_phi
-  E     = [-F0*U_R, -F0*U_Z, -F0*U_phi*R_inv]/t_norm
-  E(3)  = E(3) - R_inv*P_time(1) ! because this is not normalized with t_norm
-
 end subroutine calc_EBpsiU_linear_gpu
-
-pure subroutine do_interp_PRZ_1_gpu(node_list, element_list, time_now, time_prev, static, &
-              time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  use mod_interp, only: interp_PRZ_1_gpu
-  use constants, only: mu_zero, mass_proton
-  use phys_module, only: tstep, central_mass, central_density
-  use mod_linear, only: linear_interp_differentials
-  use mod_linear, only: linear_interp_differentials_dt
-
-
-  type (type_node_list),intent(in)      :: node_list
-  type (type_element_list), intent(in)  :: element_list
-  real*8,                   intent(in)  :: time_now 
-  real*8,                   intent(in)  :: time_prev 
-  logical,                  intent(in)  :: static
-
-  real*8,                   intent(in)  :: time !< Time at which to calculate this variable
-  integer,                  intent(in)  :: i_elm
-  integer,                  intent(in)  :: n_v, i_v(n_v)
-  real*8,                   intent(in)  :: s, t, phi
-  real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
-  real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
-
-  real*8                 :: df, dt
-  real*8, dimension(n_v) :: Pd, Pd_s, Pd_t, Pd_phi
-  real*8                 :: t_jorek
-#ifdef USE_GPU
-  !$omp declare target
-#endif
-  
-  ! JOREK time step in seconds
-  t_jorek = tstep*sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20)
-
-  P_time = 0.d0
-  
-  !> interpolate values
-  call interp_PRZ_1_gpu(node_list,element_list,i_elm,i_v,n_v,s,t,phi,P,P_s,P_t,P_phi,R,R_s,R_t,Z,Z_s,Z_t)
-
-  !> interpolate differentials
-  if(t_jorek .gt. 0.d0) then
-    call interp_PRZ_1_gpu(node_list,element_list,i_elm,i_v,n_v,s,t,phi, &
-      Pd,Pd_s,Pd_t,Pd_phi,R,R_s,R_t,Z,Z_s,Z_t,deltas=.true.)
-    if(abs(time_now-time_prev) .gt. 1d-10 .and. .not. static) then
-      !> compute time fraction df
-      dt = 1.d0/(time_now - time_prev)
-      df = (time_now - time)*dt
-      !> apply linear interpolation
-      P     = linear_interp_differentials(n_v,P,Pd,df)
-      P_s   = linear_interp_differentials(n_v,P_s,Pd_s,df)
-      P_t   = linear_interp_differentials(n_v,P_t,Pd_t,df)
-      P_phi = linear_interp_differentials(n_v,P_phi,Pd_phi,df)
-    else
-      dt = 1.d0/t_jorek
-    endif
-    !> compute time derivative
-    P_time = linear_interp_differentials_dt(n_v,Pd,dt) 
-  endif
-end subroutine do_interp_PRZ_1_gpu
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
@@ -1036,6 +893,12 @@ subroutine do_read(this, sim, ev)
   class default
     if (my_id .eq. 0) write(*,*) "ERROR, do_read called with wrong sim%fields"
   end select
+
+#ifdef USE_GPU
+  ! if using GPU, also need to init the SoA versions
+  call init_node_list_SoA(sim%fields%node_list_SoA, sim%fields%node_list)
+  call init_element_list_SoA(sim%fields%element_list_SoA, sim%fields%element_list)
+#endif
 end subroutine do_read
 
 

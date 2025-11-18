@@ -101,7 +101,7 @@ end subroutine volume_preserving_second_half_step_jorek
 !---------------------------------------------------------------------------
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA)
-subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, &
+subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q, node_list_SoA, element_list_SoA, node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, &
                                                 mass, time, timestep, ifail)
   ! load functions
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
@@ -110,8 +110,9 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,node
   use mod_fields
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear_gpu_inlined, calc_EBpsiU_linear_gpu_inlined_enhanced
+       calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_SoA
   use data_structure, only: type_element_list, type_node_list
+  use data_structure, only: type_element_list_SoA, type_node_list_SoA
   !> inline functions
   use mod_pusher_tools, only: cayley_transform
 
@@ -123,12 +124,9 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,node
   integer(kind=1), intent(in) :: q  
 
   ! declare input variables
-  real(kind=8),intent(in) :: mass, time, timestep
-  real*8,  allocatable     ,intent(in)  :: nodes_x(:,:,:,:)
-  real*8,  allocatable     ,intent(in)  :: nodes_values(:,:,:,:) !< Variable values and derivatives (contiguous)
-  real*8,  allocatable     ,intent(in)  :: nodes_deltas(:,:,:,:) !< Change of variable values and derivatives in last timestep (contiguous)
-  integer, allocatable     ,intent(in)  :: elm_vertex(:,:) !> SoA
-  real*8,  allocatable     ,intent(in)  :: elm_size(:,:,:) ! element scaling factors
+  real(kind=8),intent(in)                 :: mass, time, timestep
+  type(type_node_list_SoA)   , intent(in) :: node_list_SoA
+  type(type_element_list_SoA), intent(in) :: element_list_SoA
   type (type_node_list)    ,intent(in)  :: node_list 
   type (type_element_list) ,intent(in)  :: element_list
   real*8,                   intent(in)  :: time_now 
@@ -184,7 +182,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q,node
   x = half_position(4:6)
   ! compute magnetic and electric fields
 
-  call calc_EBpsiU_linear_gpu_inlined_enhanced(nodes_x, nodes_values, nodes_deltas, elm_vertex, elm_size, time_now, &
+  call calc_EBpsiU_linear_gpu_SoA(node_list_SoA, element_list_SoA, time_now, &
                               time_prev, static, flag_zero_dpsidt, &
                               time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
 
@@ -244,7 +242,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   use mod_fields
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear_gpu_inlined
+       calc_EBpsiU_linear_gpu
   use data_structure, only: type_element_list, type_node_list
   !> inline functions
   use mod_pusher_tools, only: cayley_transform
@@ -314,7 +312,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   x = half_position(4:6)
   ! compute magnetic and electric fields
 
-  call calc_EBpsiU_linear_gpu_inlined(node_list, element_list, time_now, &
+  call calc_EBpsiU_linear_gpu(node_list, element_list, time_now, &
                               time_prev, static, flag_zero_dpsidt, &
                               time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
 

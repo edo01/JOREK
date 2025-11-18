@@ -66,6 +66,17 @@ module mod_particle_types
     generic :: assignment(=) => copy
   end type particle_base
 
+  !> Structure of Arrays base type for all other particles. 
+  !> For multidimensional arrays, the last index always indicates the particle index.
+  !type, abstract :: particle_SoA_base
+  !  real*8, allocatable    :: x(:,:)        !< particle position in real space  
+  !  real*8, allocatable    :: st(:,:)       !< particle position in the element
+  !  real*8, allocatable    :: weight(:)     !< weight (i.e. number of particles)
+  !  integer*4, allocatable :: i_elm(:)      !< index in element_list. Negative indices indicate lost particles on the edge of - that element.
+  !  integer*4, allocatable :: i_life(:)     !< particle lifetime index (i.e. is this still the same particle?)
+  !  real*4, allocatable    :: t_birth(:)    !< birth time of this particle
+  !end type particle_base
+
   !> A simple type just for fieldline tracing in two-step methods (Adams Bashforth) or for forward euler
   type, extends(particle_base) :: particle_fieldline
     real*8    :: B_hat_prev(3) = 0.d0 !< Field direction at previous timestep
@@ -120,6 +131,11 @@ module mod_particle_types
     real(kind=8),dimension(3) :: p !< Momentum in Cartesian coordinates (p_x,p_y,p_z) in [AMU*m/s]
     integer(kind=1)           :: q !< charge [e]
  end type particle_kinetic_relativistic
+
+ !type, extends(particle_SoA_base) :: particle_kinetic_relativistic_SoA
+ !   real(kind=8), allocatable(:, :)  :: p !< Momentum in Cartesian coordinates (p_x,p_y,p_z) in [AMU*m/s]
+ !   integer(kind=1), allocatable(:)  :: q !< charge [e]
+ !end type particle_kinetic_relativistic_SoA
 
  !> This particle type is used for computing the guiding center trajectory of a
  !> relativistic particle. GC position and momentum are given at the time (\t\)

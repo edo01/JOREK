@@ -39,7 +39,10 @@ type :: particle_group
   real*8             :: av_weight                !< average weight of each super particle in the group
   integer            :: q                        !< charge of each runaway electron super particle
 
-  class(particle_base), dimension(:), allocatable :: particles
+  class(particle_base), dimension(:), allocatable :: particles     !< Array of structures containing the particles in the group
+!#ifdef USE_GPU
+!  class(particle_SoA_base)                        :: particles_SoA !< Structure of arrays version of the particles in the group
+!#endif
 
 end type particle_group
 
