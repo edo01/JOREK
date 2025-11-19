@@ -39,7 +39,9 @@ contains
 
         ! allocating particle arrays ---------
         call allocate_particles_for_group(sim, i, particle_type_str, n_particles_per_mpi(sim%my_id+1))
-
+#ifdef USE_GPU
+        call allocate_particles_for_group_SoA(sim, i, particle_type_str, n_particles_per_mpi(sim%my_id+1))
+#endif
         ! initialize them to empty ---------- (temporary, to be replaced by a more general initialization function)
         call initialize_particle_list_to_zero(n_particles_per_mpi(sim%my_id+1),sim%groups(i)%particles,ierr)
       endif !if allocated
@@ -95,6 +97,95 @@ contains
     end select
 
   end subroutine allocate_particles_for_group
+
+  subroutine allocate_particles_for_group_SoA(sim, group_num, particle_type_str, n_particles_per_mpi, mpi_comm_loc)
+    use mod_particle_types
+
+    implicit none
+    !> inputs:
+    type(particle_sim),            intent(inout) :: sim
+    integer,                       intent(in)    :: group_num
+    character(len=:), allocatable, intent(in)    :: particle_type_str
+    integer,                       intent(in)    :: n_particles_per_mpi
+    integer, optional,             intent(in)    :: mpi_comm_loc
+    integer                                      :: errorcode, ierr, i
+
+
+    !> allocate derived arrays based on particle type
+    select case (trim(particle_type_str))
+      case ("particle_kinetic")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else        
+          stop
+        endif
+      case ("particle_kinetic_leapfrog")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else        
+          stop
+        endif
+      case ("particle_gc")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else        
+          stop
+        endif
+      case ("particle_gc_vpar")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else        
+          stop
+        endif
+      case ("particle_gc_Qin")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else        
+          stop
+        endif
+      case ("particle_fieldline")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else
+          stop
+        endif
+      case ("particle_kinetic_relativistic")
+        allocate(particle_SoA_kinetic_relativistic :: sim%groups(group_num)%particles_SoA)
+        select type (p_SoA_rel => sim%groups(group_num)%particles_SoA)
+        type is (particle_SoA_kinetic_relativistic)
+          allocate(p_SoA_rel%p(2,n_particles_per_mpi))
+          allocate(p_SoA_rel%q(n_particles_per_mpi))
+        end select
+      case ("particle_gc_relativistic")
+        write(*,*) "ERROR: Unsupported particle type in allocate_particle_SoA_arrays: ", particle_type_str
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else
+          stop
+        endif
+      case default
+        write(*,*) "Error: missing type name declaration ",trim(particle_type_str)," for reading: ABORT!"
+        if (present(mpi_comm_loc)) then
+          call MPI_Abort(mpi_comm_loc,errorcode,ierr)
+        else        
+          stop 
+        endif
+    end select
+
+    !> allocate base arrays
+    allocate(sim%groups(group_num)%particles_SoA%i_elm(n_particles_per_mpi))
+    allocate(sim%groups(group_num)%particles_SoA%i_life(n_particles_per_mpi))
+    allocate(sim%groups(group_num)%particles_SoA%t_birth(n_particles_per_mpi))
+    allocate(sim%groups(group_num)%particles_SoA%weight(n_particles_per_mpi))
+    allocate(sim%groups(group_num)%particles_SoA%x(2,n_particles_per_mpi))
+    allocate(sim%groups(group_num)%particles_SoA%st(2,n_particles_per_mpi))
+  end subroutine allocate_particles_for_group_SoA
 
   !> function ran locally on each mpi process which calcuates the number of particles 
   !> to distribute to it from a total of n_particles

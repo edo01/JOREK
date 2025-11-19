@@ -2,10 +2,54 @@ module mod_particle_sorting
 use mod_particle_types
 
 implicit none
-private
-public i_elm_sort_simd_lane, i_elm_sort_global
+public sort_particles
+
+!> enumerator of the particle type 
+enum, bind(C)
+enumerator :: particle_global_sort = 1, particle_simd_lane_sort = 2
+endenum
 
 contains
+
+subroutine sort_particles(sim, group_num, method, alive_particle_count)
+  use mod_event, only: mpi_minmeanmax
+  use mpi
+  use mod_particle_sim
+  implicit none
+
+  ! Arguments
+  class(particle_sim), target, intent(inout)                :: sim
+  integer, intent(in) :: group_num
+  integer, intent(in) :: method
+  integer, optional, intent(out) :: alive_particle_count
+
+  ! Local variables
+  integer, allocatable :: sorted_indices(:)
+  double precision :: start_time, end_time, tot_time(3)
+  
+  start_time = MPI_WTIME()
+
+  select case (method)
+  case (particle_simd_lane_sort)
+    write(*,*) "INFO: Using SIMD-lane based particle sorting."
+    call i_elm_sort_simd_lane(sorted_indices, sim%groups(group_num)%particles, alive_particle_count)
+  case (particle_global_sort)
+    write(*,*) "INFO: Using global particle sorting."
+    call i_elm_sort_global(sorted_indices, sim%groups(group_num)%particles, alive_particle_count)
+  case default
+    write(*,*) "ERROR: Unsupported particle sorting method: ", method
+    stop
+  end select
+
+  ! Reorder particles based on sorted indices
+  call reorder_particles(sim%groups(group_num)%particles, sorted_indices)
+
+  end_time = MPI_WTIME()
+  tot_time = mpi_minmeanmax(end_time-start_time)
+  if (sim%my_id .eq. 0) then
+      write(*,"(A,3f10.3,A)") , "Time taken for ordering (min/mean/max): ", tot_time, " seconds"
+  endif
+end subroutine sort_particles
 
 !> Sort particles by their i_elm field by SIMD-lane grouping the positive i_elm. In this way,
 !> particles in a SIMD lane will have strictly increasing i_elm values. This strategy might 
@@ -15,7 +59,7 @@ subroutine i_elm_sort_simd_lane(sorted_indices, particles, last_positive_idx)
 
   ! Arguments
   integer, allocatable, intent(out) :: sorted_indices(:)
-  type(particle_kinetic_relativistic), intent(in) :: particles(:)
+  class(particle_base), intent(in) :: particles(:)
   integer, intent(out) :: last_positive_idx
 
   integer :: SIMD_LANE_SIZE
@@ -139,7 +183,7 @@ end subroutine i_elm_sort_simd_lane
 subroutine i_elm_sort_global(sorted_indices, particles, last_positive_idx)
   implicit none
   integer, allocatable, intent(out) :: sorted_indices(:)
-  type(particle_kinetic_relativistic), intent(in) :: particles(:)
+  class(particle_base), intent(in) :: particles(:)
   integer, intent(out) :: last_positive_idx
 
   integer :: i, j, n_particles
@@ -263,7 +307,6 @@ recursive subroutine sort_indices(field_values, indices)
     deallocate(high_indices)
   end if
 end subroutine sort_indices
-
 
 
 end module mod_particle_sorting

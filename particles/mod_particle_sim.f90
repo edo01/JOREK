@@ -40,9 +40,7 @@ type :: particle_group
   integer            :: q                        !< charge of each runaway electron super particle
 
   class(particle_base), dimension(:), allocatable :: particles     !< Array of structures containing the particles in the group
-!#ifdef USE_GPU
-!  class(particle_SoA_base)                        :: particles_SoA !< Structure of arrays version of the particles in the group
-!#endif
+  class(particle_SoA_base), pointer               :: particles_SoA !< Structure of arrays version of the particles in the group
 
 end type particle_group
 

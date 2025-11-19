@@ -17,10 +17,13 @@ module mod_particle_types
   public :: particle_gc, particle_fieldline
   public :: particle_kinetic_relativistic, particle_gc_relativistic
   public :: particle_gc_vpar, particle_gc_Qin
+  public :: particle_SoA_base, particle_SoA_kinetic_relativistic
   public :: particle_get_q
   public :: copy_particle
   public :: copy_particle_base
   public :: copy_particle_kinetic_leapfrog
+  public :: copy_particles_to_SoA, copy_particles_from_SoA
+  public :: reorder_particles
   public :: codify_particle_type
   public :: find_active_particle_id
   public :: particle_arrays_from_list,particle_list_from_arrays
@@ -68,14 +71,14 @@ module mod_particle_types
 
   !> Structure of Arrays base type for all other particles. 
   !> For multidimensional arrays, the last index always indicates the particle index.
-  !type, abstract :: particle_SoA_base
-  !  real*8, allocatable    :: x(:,:)        !< particle position in real space  
-  !  real*8, allocatable    :: st(:,:)       !< particle position in the element
-  !  real*8, allocatable    :: weight(:)     !< weight (i.e. number of particles)
-  !  integer*4, allocatable :: i_elm(:)      !< index in element_list. Negative indices indicate lost particles on the edge of - that element.
-  !  integer*4, allocatable :: i_life(:)     !< particle lifetime index (i.e. is this still the same particle?)
-  !  real*4, allocatable    :: t_birth(:)    !< birth time of this particle
-  !end type particle_base
+  type, abstract :: particle_SoA_base
+    real*8,     allocatable, dimension(:,:) :: x          !< particle position in real space
+    real*8,     allocatable, dimension(:,:) :: st         !< particle position in the element
+    real*8,     allocatable, dimension(:)     :: weight     !< weight (i.e. number of particles)
+    integer*4,  allocatable, dimension(:)     :: i_elm      !< index in element_list. Negative indices indicate lost particles on the edge of - that element.
+    integer*4,  allocatable, dimension(:)     :: i_life     !< particle lifetime index 
+    real*4,     allocatable, dimension(:)     :: t_birth    !< birth time of this particle
+  end type particle_SoA_base
 
   !> A simple type just for fieldline tracing in two-step methods (Adams Bashforth) or for forward euler
   type, extends(particle_base) :: particle_fieldline
@@ -132,10 +135,11 @@ module mod_particle_types
     integer(kind=1)           :: q !< charge [e]
  end type particle_kinetic_relativistic
 
- !type, extends(particle_SoA_base) :: particle_kinetic_relativistic_SoA
- !   real(kind=8), allocatable(:, :)  :: p !< Momentum in Cartesian coordinates (p_x,p_y,p_z) in [AMU*m/s]
- !   integer(kind=1), allocatable(:)  :: q !< charge [e]
- !end type particle_kinetic_relativistic_SoA
+  !> Structure of Arrays version of the relativistic kinetic particle type
+  type, extends(particle_SoA_base) :: particle_SoA_kinetic_relativistic
+      real(kind=8),     allocatable, dimension(:,:) :: p !< Momentum in Cartesian coordinates (p_x,p_y,p_z) in [AMU*m/s]
+      integer(kind=1),  allocatable, dimension(:)   :: q !< charge [e]
+  end type particle_SoA_kinetic_relativistic
 
  !> This particle type is used for computing the guiding center trajectory of a
  !> relativistic particle. GC position and momentum are given at the time (\t\)
@@ -332,6 +336,103 @@ contains
       end select
     end select
   end subroutine copy_particle
+
+  !> Reorder the particles according to a new array of indices
+  subroutine reorder_particles(particle_list, new_order)
+    class(particle_base), dimension(:), intent(inout) :: particle_list
+    integer, dimension(:), intent(in) :: new_order
+    integer :: n_particles, i
+    class(particle_base), allocatable, dimension(:) :: particle_list_copy
+
+    n_particles = size(particle_list)
+    allocate(particle_list_copy(n_particles))
+
+    ! Create a copy of the original particle list
+    do i = 1, n_particles
+      call particle_list_copy(i)%copy(particle_list(i))
+    end do
+
+    ! Reorder the particles based on new_order
+    do i = 1, n_particles
+      call particle_list(i)%copy(particle_list_copy(new_order(i)))
+    end do
+
+    deallocate(particle_list_copy)
+  end subroutine reorder_particles
+
+  !> Copy particles from an Array of Structures to a Structure of Arrays
+  subroutine copy_particles_to_SoA(particle_SoA_out, particle_list_in)
+    class(particle_base), dimension(:), intent(in)  :: particle_list_in
+    class(particle_SoA_base), intent(inout)        :: particle_SoA_out
+    integer :: n_particles, i
+
+    n_particles = size(particle_list_in)
+
+    !$omp parallel do default(shared) private(i)
+    do i=1,n_particles
+      particle_SoA_out%x(:,i)       = particle_list_in(i)%x
+      particle_SoA_out%st(:,i)      = particle_list_in(i)%st
+      particle_SoA_out%weight(i)    = particle_list_in(i)%weight
+      particle_SoA_out%i_elm(i)     = particle_list_in(i)%i_elm
+      particle_SoA_out%i_life(i)    = particle_list_in(i)%i_life
+      particle_SoA_out%t_birth(i)   = particle_list_in(i)%t_birth
+    end do
+    !$omp end parallel do
+
+    select type (p_list => particle_list_in)
+    type is (particle_kinetic_relativistic)
+      select type (p_SoA => particle_SoA_out)
+      type is (particle_SoA_kinetic_relativistic)
+        !$omp parallel do default(shared) private(i)
+        do i=1,n_particles
+          p_SoA%p(:,i) = p_list(i)%p
+          p_SoA%q(i)    = p_list(i)%q
+        end do
+        !$omp end parallel do
+      class default
+        write(*,*) "ERROR: Unsupported particle type in copy_particles_to_SoA"
+        stop
+      end select
+    end select
+
+  end subroutine copy_particles_to_SoA
+
+  !> Copy particles from a Structure of Arrays to an Array of Structures
+  subroutine copy_particles_from_SoA(particle_list_out, particle_SoA_in)
+    class(particle_base), dimension(:), intent(inout)  :: particle_list_out
+    class(particle_SoA_base), intent(in)        :: particle_SoA_in
+    integer :: n_particles, i
+
+    n_particles = size(particle_SoA_in%i_elm)
+
+    !$omp parallel do default(shared) private(i)
+    do i=1,n_particles
+      particle_list_out(i)%x       = particle_SoA_in%x(:,i)
+      particle_list_out(i)%st      = particle_SoA_in%st(:,i)
+      particle_list_out(i)%weight    = particle_SoA_in%weight(i)
+      particle_list_out(i)%i_elm     = particle_SoA_in%i_elm(i)
+      particle_list_out(i)%i_life    = particle_SoA_in%i_life(i)
+      particle_list_out(i)%t_birth   = particle_SoA_in%t_birth(i)
+    end do
+    !$omp end parallel do
+
+    select type (p_SoA => particle_SoA_in)
+    type is (particle_SoA_kinetic_relativistic)
+      select type (p_list => particle_list_out)
+      type is (particle_kinetic_relativistic)
+        !$omp parallel do default(shared) private(i)
+        do i=1,n_particles
+          p_list(i)%p = p_SoA%p(:,i)
+          p_list(i)%q = p_SoA%q(i)
+        end do
+        !$omp end parallel do
+      class default
+        write(*,*) "ERROR: Unsupported particle type in copy_particles_from_SoA"
+        stop
+      end select
+    end select
+
+  end subroutine copy_particles_from_SoA
 
   !> codify_single_particle_type returns a codified 
   !> particle type for a particle

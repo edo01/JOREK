@@ -53,6 +53,8 @@ contains
     type (particle_group),         pointer :: part_group
     real*8 :: start_time, end_time, tot_time(3)
 
+    integer :: alive_particle_count
+
     character(len=3) :: cs
 
     !> Coupling scheme specific
@@ -77,6 +79,20 @@ contains
 #ifdef USE_RHS_INV
     allocate(feedback_rhs_inv(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
 #endif
+
+    alive_particle_count = size(sim%groups(group_num)%particles,1)
+
+#ifdef USE_ORDERING
+    !> reorder particles by i_elm to improve data locality
+    call sort_particles(sim, group_num, particle_global_sort, alive_particle_count)
+#endif
+#ifdef USE_GPU
+    !> when using the GPU, we must keep the SoA updated
+    call copy_particles_to_SoA(sim%groups(group_num)%particles_SoA, sim%groups(group_num)%particles)
+
+    call copy_particles_from_SoA(sim%groups(group_num)%particles, sim%groups(group_num)%particles_SoA)
+#endif
+
 
     !> count number of particles in system
     call with(sim, counter)
@@ -306,7 +322,7 @@ contains
   end subroutine evolve_REs
 
 !> Kernel to evolve REs on GPU
-subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, alive_particle_count)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
@@ -327,6 +343,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     type(count_action)                                        :: counter
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8, intent(in)                                        :: tstep_part_adj
+    integer, optional, intent(in)                             :: alive_particle_count !< last particle alive index, used to avoid evolving dead particles
+
     
     character(len=3) :: cs !> TODO: not used
     integer :: particle_lost  
@@ -355,7 +373,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
     
     !> sorting 
     integer                       :: n_sort, s !< Multiple sorting
-    integer                       :: alive_particle_count !< last particle alive index, used to avoid evolving dead particles
     real*8                        :: start_time, end_time, tot_time(3)
 #ifdef USE_ORDERING
     integer, allocatable          :: sorted_indices(:) !< indices of the particles sorted by i_elm
@@ -458,7 +475,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
       !>       the kernel execution. 
       !$omp target data                                                                               &
       !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                                        &
-      !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &   ! check if  fields%node_list%node is needed   
+      !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &
 #ifdef CALC_EBPSIU_ENHANCED
       !$omp        fields%element_list_SoA, fields%node_list_SoA,                                     &
       !$omp        fields%node_list_SoA%x, fields%node_list_SoA%values, fields%node_list_SoA%deltas,  &

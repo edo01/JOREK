@@ -629,7 +629,9 @@ mpi_comm_in,mpi_info_in,test_in)
 
         !> allocate particle list and initialise to 0 -----------------
         call allocate_particles_for_group(sim, i, particle_type_str, n_particles_per_mpi_array(sim%my_id+1), mpi_comm_loc)
-
+#ifdef USE_GPU
+        call allocate_particles_for_group_SoA(sim, i, particle_type_str, n_particles_per_mpi_array(sim%my_id+1), mpi_comm_loc)
+#endif
         call initialize_particle_list_to_zero(n_particles_per_mpi_array(sim%my_id+1),sim%groups(i)%particles,ierr)
 
 
@@ -723,6 +725,9 @@ mpi_comm_in,mpi_info_in,test_in)
       particle_type_str = trim(config%type)
 
       call allocate_particles_for_group(sim, i, particle_type_str, n_particles_per_mpi_array(sim%my_id+1), mpi_comm_loc)
+#ifdef USE_GPU
+        call allocate_particles_for_group_SoA(sim, i, particle_type_str, n_particles_per_mpi_array(sim%my_id+1), mpi_comm_loc)
+#endif
       if (sim%my_id == master_task) write(*,*) "Group '", part_groups_in_use(i), "' initialized."
     endif
   enddo ! n_part_groups (particle groups requested in part_groups_in_use)
