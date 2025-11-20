@@ -326,7 +326,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog !> not used
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
-    use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu_SoA, calc_EBpsiU_linear_gpu
+    use mod_fields_linear, only: jorek_fields_interp_linear, calc_EBpsiU_linear_gpu_enhanced, calc_EBpsiU_linear_gpu
     use phys_module, only: F0, mode, central_mass, central_density, tstep
     use hdf5_io_module
     use mod_particle_io
@@ -425,12 +425,10 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp map(tofrom: feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,                &
       !$omp             particles_SoA%st, particles_SoA%i_elm)                                        &
       !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &
-#ifdef CALC_EBPSIU_ENHANCED
-      !$omp        fields%element_list_SoA, fields%node_list_SoA,                                     &
-      !$omp        fields%node_list_SoA%x, fields%node_list_SoA%values, fields%node_list_SoA%deltas,  &
-      !$omp        fields%element_list_SoA%vertex, fields%element_list_SoA%neighbours,                &
-      !$omp        fields%element_list_SoA%size,                                                      &
-#endif
+      !$omp         fields%element_list_SoA, fields%node_list_SoA,                                     &
+      !$omp         fields%node_list_SoA%x, fields%node_list_SoA%values, fields%node_list_SoA%deltas,  &
+      !$omp         fields%element_list_SoA%vertex, fields%element_list_SoA%neighbours,                &
+      !$omp         fields%element_list_SoA%size,                                                      &
       !$omp         group_mass, tstep_part_adj, nstep_particles,                                      &  
       !$omp         P_par_idx_kin, P_perp_idx_kin,j_phi_idx_kin,                                      &
       !$omp         particles_SoA%weight, particles_SoA%q)                                  
@@ -463,7 +461,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
                                   sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
 
 #ifdef CALC_EBPSIU_ENHANCED
-          call calc_EBpsiU_linear_gpu_SoA(fields, sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
+          call calc_EBpsiU_linear_gpu_enhanced(fields, sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
 #else
           call calc_EBpsiU_linear_gpu(fields, sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
 #endif

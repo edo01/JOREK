@@ -107,7 +107,7 @@ subroutine volume_preserving_push_jorek_gpu(x, p, st, i_elm, q, fields, mass, ti
   use mod_fields
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_SoA
+       calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_enhanced
   use data_structure, only: type_element_list, type_node_list
   !> inline functions
   use mod_pusher_tools, only: cayley_transform
@@ -172,7 +172,7 @@ subroutine volume_preserving_push_jorek_gpu(x, p, st, i_elm, q, fields, mass, ti
   ! compute magnetic and electric fields
 
 #ifdef CALC_EBPSIU_ENHANCED
-  call calc_EBpsiU_linear_gpu_SoA(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
+  call calc_EBpsiU_linear_gpu_enhanced(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
 #else
   call calc_EBpsiU_linear_gpu(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
 #endif

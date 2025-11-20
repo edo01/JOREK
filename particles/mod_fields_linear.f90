@@ -9,7 +9,7 @@ use mod_interp
 implicit none
 private
 public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_before_time
-public calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_SoA
+public calc_EBpsiU_linear_gpu_enhanced, calc_EBpsiU_linear_gpu
 
 !> Action to read in the fields into sim%fields
 type, extends(action) :: read_jorek_fields_interp_linear
@@ -44,7 +44,7 @@ end type jorek_fields_interp_linear
 contains
 
 
-pure subroutine calc_EBpsiU_linear_gpu_SoA(fields, time, i_elm, st, phi, E, B, psi, U)
+pure subroutine calc_EBpsiU_linear_gpu_enhanced(fields, time, i_elm, st, phi, E, B, psi, U)
   use phys_module,        only: F0, central_mass, central_density
   use constants,          only: mu_zero, mass_proton
   use mod_basisfunctions, only: basisfunctions_T
@@ -177,7 +177,7 @@ pure subroutine calc_EBpsiU_linear_gpu_SoA(fields, time, i_elm, st, phi, E, B, p
   ! Projection to perpendicular component
   E = E - E * B / sqrt(dot_product(B,B))
 
-end subroutine calc_EBpsiU_linear_gpu_SoA
+end subroutine calc_EBpsiU_linear_gpu_enhanced
 
 
 !> Calculates the electric and magnetic fields at a specific position
@@ -249,18 +249,18 @@ pure subroutine calc_EBpsiU_linear_gpu(fields, time, i_elm, st, phi, E, B, psi, 
 
   ! Preload values and premultiply with sizes(:,kv)
   do kv = 1,n_vertex_max  ! 4 vertices
-    iv = fields%element_list%element(i_elm)%vertex(kv)
-    sizes(:) = fields%element_list%element(i_elm)%size(kv,:)
+    iv = fields%element_list_SoA%vertex(i_elm,kv)
+    sizes(:) = fields%element_list_SoA%size(kv,:,i_elm)
 
     ! running without deltas
     do i = 1, 2
       do kf=1,n_degrees
-        values(1:n_tor,kf,i,kv) = fields%node_list%node(iv)%values(1:n_tor,kf,i_var(i)) * sizes(kf)
+        values(1:n_tor,kf,i,kv) = fields%node_list_SoA%values(1:n_tor,kf,i_var(i),iv) * sizes(kf)
       end do
     end do
-    
-    xR(:,kv) = fields%node_list%node(iv)%x(1,:,1) * sizes(:)
-    xZ(:,kv) = fields%node_list%node(iv)%x(1,:,2) * sizes(:)
+
+    xR(:,kv) = fields%node_list_SoA%x(1,:,1,iv) * sizes(:)
+    xZ(:,kv) = fields%node_list_SoA%x(1,:,2,iv) * sizes(:)
   end do
 
   R   = sum(xR*H)
@@ -300,15 +300,15 @@ pure subroutine calc_EBpsiU_linear_gpu(fields, time, i_elm, st, phi, E, B, psi, 
 
     ! Preload values and premultiply with sizes(:,kv)
     do kv = 1,n_vertex_max  ! 4 vertices
-      iv = fields%element_list%element(i_elm)%vertex(kv)
-      sizes(:) = fields%element_list%element(i_elm)%size(kv,:)
+      iv = fields%element_list_SoA%vertex(i_elm,kv)
+      sizes(:) = fields%element_list_SoA%size(kv,:,i_elm)
       do i = 1, 2
         do kf=1,n_degrees
-          values(1:n_tor,kf,i,kv) = fields%node_list%node(iv)%deltas(1:n_tor,kf,i_var(i)) * sizes(kf)
+          values(1:n_tor,kf,i,kv) = fields%node_list_SoA%deltas(1:n_tor,kf,i_var(i),iv) * sizes(kf)
         end do
       end do
-      xR(:,kv) = fields%node_list%node(iv)%x(1,:,1) * sizes(:)
-      xZ(:,kv) = fields%node_list%node(iv)%x(1,:,2) * sizes(:)
+      xR(:,kv) = fields%node_list_SoA%x(1,:,1,iv) * sizes(:)
+      xZ(:,kv) = fields%node_list_SoA%x(1,:,2,iv) * sizes(:)
     end do
 
     R   = sum(xR*H)
