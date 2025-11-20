@@ -75,8 +75,8 @@ end function node_same_pos
 !> Find if two elements (elm1, elm2 which is on side1 of elm1) have the same
 !> orientation. Element node numbering must always be consecutive when going
 !> co or counter-clockwise around the element.
-subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbours,co)
-  type (type_element_list), intent(in) :: element_list
+subroutine neighbours_side_co_counter_gpu(element_list_SoA,elm1,elm2,side1,side2,neighbours,co)
+  type (type_element_list_SoA), intent(in) :: element_list_SoA
   integer, intent(in)               :: elm1, elm2
   integer, intent(in)               :: side1
   integer, intent(out)              :: side2
@@ -87,6 +87,122 @@ subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbo
 #ifdef USE_GPU
   !$omp declare target
 #endif
+
+  co = .false. ! does not mean anything if not neighbours
+  neighbours = .false.
+
+  ! Find the side in elm2 pointing to elm1
+  ! If elm2 has no neighbour == elm1 use the last one that is 0 (i.e. the one on
+  ! the axis itself.)
+  side2 = 0
+  do i=1,n_vertex_max
+    if (element_list_SoA%neighbours(elm2,i) .eq. elm1) then
+      side2 = i
+      exit ! loop
+    end if
+  end do
+  if (side2 .gt. 0) then
+    neighbours = .true.
+
+    ! Determine node numbers of the sides
+    ! node numbers are related to sides as node1=mod(side-1,4)+1, node2=mod(side,4)+1
+    n1 = element_list_SoA%vertex(elm1,mod([side1-1,side1],4)+1)
+    n2 = element_list_SoA%vertex(elm2,mod([side2-1,side2],4)+1)
+    ! Find if match cross or straight (i.e. 1->2/2->1 or 1->1/2->2)
+    ! We do not need to check the node position since there is only one option
+    ! and one of the node numbers must match.
+    if      (n1(1) .eq. n2(2)) then
+      co = .true.
+    else if (n1(2) .eq. n2(1)) then
+      co = .true.
+    else if (n1(1) .eq. n2(1)) then
+      co = .false.
+    else if (n1(2) .eq. n2(2)) then
+      co = .false.
+    end if
+  end if
+end subroutine neighbours_side_co_counter_gpu
+
+!> GPU version of coord_in_neighbour. Nothing changes except the
+!> declaration of the node_list type.
+subroutine coord_in_neighbour_gpu(node_list_SoA,element_list_SoA,i_from,i_to,st)
+  type (type_node_list_SoA),    intent(in) :: node_list_SoA
+  type (type_element_list_SoA), intent(in) :: element_list_SoA
+  integer, intent(in)                  :: i_from
+  integer, intent(out)                 :: i_to !<  >0 if a neighbour exists on that side, -1 if search
+  real*8, intent(inout)                :: st(2)
+
+  integer :: q_from, q_to !< Quadrants
+  logical :: nb, co !< .true. if they have the same orientation (co or counter clockwise)
+  real*8  :: x
+#ifdef USE_GPU
+  !$omp declare target
+#endif
+
+
+  if (st(1) .gt. st(2)) then ! 1 or 2
+    if (1.d0 - st(1) .gt. st(2)) then
+      q_from = 1
+    else
+      q_from = 2
+    end if
+  else
+    if (1.d0 - st(1) .le. st(2)) then
+      q_from = 3
+    else
+      q_from = 4
+    end if
+  end if
+
+  i_to = element_list_SoA%neighbours(i_from,q_from)
+  if (i_to .le. 0) return
+
+  ! Check once more that they are neighbours and determine the orientation
+  call neighbours_side_co_counter_gpu(element_list_SoA,i_from,i_to,q_from,q_to,nb,co)
+  if (.not. nb .or. q_to .eq. 0) then
+    !write(*,"(A,i5,A,i5)") "ERROR IN element_list%element(", i_from, ")%neighbours to ", i_to
+    i_to = 0
+    return
+  end if
+
+  ! x is the coordinate along the boundary from vertex i_side to i_side+1
+  select case (q_from)
+  case (1)
+    x = st(1)
+  case (2)
+    x = st(2)
+  case (3)
+    x = 1.d0 - st(1)
+  case (4)
+    x = 1.d0 - st(2)
+  end select
+
+  if (co) x = 1.d0-x ! if the vectors along the boundary are antiparallel
+
+  select case (q_to)
+  case (1)
+    st = [x,0.d0]
+  case (2)
+    st = [1.d0,x]
+  case (3)
+    st = [1.d0-x,1.d0]
+  case (4)
+    st = [0.d0,1.d0-x]
+  end select
+end subroutine coord_in_neighbour_gpu
+
+!> Find if two elements (elm1, elm2 which is on side1 of elm1) have the same
+!> orientation. Element node numbering must always be consecutive when going
+!> co or counter-clockwise around the element.
+subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbours,co)
+  type (type_element_list), intent(in) :: element_list
+  integer, intent(in)               :: elm1, elm2
+  integer, intent(in)               :: side1
+  integer, intent(out)              :: side2
+  logical, intent(out)              :: neighbours
+  logical, intent(out)              :: co !< True if elements are both clockwise or
+!< counter-clockwise (i.e. they have the same direction)
+  integer :: i, n1(2), n2(2)
 
   co = .false. ! does not mean anything if not neighbours
   neighbours = .false.
@@ -122,74 +238,6 @@ subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbo
     end if
   end if
 end subroutine neighbours_side_co_counter
-
-!> GPU version of coord_in_neighbour. Nothing changes except the
-!> declaration of the node_list type.
-subroutine coord_in_neighbour_gpu(node_list,element_list,i_from,i_to,st)
-  type (type_node_list),    intent(in) :: node_list
-  type (type_element_list), intent(in) :: element_list
-  integer, intent(in)                  :: i_from
-  integer, intent(out)                 :: i_to !<  >0 if a neighbour exists on that side, -1 if search
-  real*8, intent(inout)                :: st(2)
-
-  integer :: q_from, q_to !< Quadrants
-  logical :: nb, co !< .true. if they have the same orientation (co or counter clockwise)
-  real*8  :: x
-#ifdef USE_GPU
-  !$omp declare target
-#endif
-
-
-  if (st(1) .gt. st(2)) then ! 1 or 2
-    if (1.d0 - st(1) .gt. st(2)) then
-      q_from = 1
-    else
-      q_from = 2
-    end if
-  else
-    if (1.d0 - st(1) .le. st(2)) then
-      q_from = 3
-    else
-      q_from = 4
-    end if
-  end if
-
-  i_to = element_list%element(i_from)%neighbours(q_from)
-  if (i_to .le. 0) return
-
-  ! Check once more that they are neighbours and determine the orientation
-  call neighbours_side_co_counter(element_list,i_from,i_to,q_from,q_to,nb,co)
-  if (.not. nb .or. q_to .eq. 0) then
-    !write(*,"(A,i5,A,i5)") "ERROR IN element_list%element(", i_from, ")%neighbours to ", i_to
-    i_to = 0
-    return
-  end if
-
-  ! x is the coordinate along the boundary from vertex i_side to i_side+1
-  select case (q_from)
-  case (1)
-    x = st(1)
-  case (2)
-    x = st(2)
-  case (3)
-    x = 1.d0 - st(1)
-  case (4)
-    x = 1.d0 - st(2)
-  end select
-
-  if (co) x = 1.d0-x ! if the vectors along the boundary are antiparallel
-
-  select case (q_to)
-  case (1)
-    st = [x,0.d0]
-  case (2)
-    st = [1.d0,x]
-  case (3)
-    st = [1.d0-x,1.d0]
-  case (4)
-    st = [0.d0,1.d0-x]
-  end select
-end subroutine coord_in_neighbour_gpu
 
 !> Convert s,t coordinates on the boundary of element i_from into s,t coordinates
 !> on the boundary of i_to.

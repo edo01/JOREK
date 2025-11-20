@@ -46,6 +46,7 @@ module data_structure
 end type type_node
 
   type type_node_list_SoA !< type definition of a node (i.e. a vertex) in Structure of Arrays format
+    integer                                    :: n_nodes  !< number of nodes in the list
     real*8, dimension(:,:,:,:), allocatable    :: x        !< x,y,z coordinates of points and additional nodal geometry
     real*8, dimension(:,:,:,:), allocatable    :: values   !< Variable values and derivatives (contiguous)
     real*8, dimension(:,:,:,:), allocatable    :: deltas   !< Change of variable values and derivatives in last timestep (contiguous)
@@ -74,6 +75,7 @@ end type type_node
   end type type_element
 
   type type_element_list_SoA !< type definition for one elements in Structure of Arrays format
+    integer :: n_elements                         !< number of elements in the list
     integer, dimension(:,:), allocatable :: vertex               !< nodes of the corners
     integer, dimension(:,:), allocatable :: neighbours           !< neighbouring elements
     real*8, dimension(:,:,:), allocatable :: size               !< size of vectors at each vertex of the element
@@ -319,6 +321,8 @@ contains
     type(type_node_list), intent(in)        :: node_list     !< the node list in AoS format
     integer   :: j
 
+    node_list_SoA%n_nodes = node_list%n_nodes
+    
     !> ATTENTION: this order of allocation follows the gpu implementation
     allocate(node_list_SoA%x(n_coord_tor,n_degrees,n_dim,node_list%n_nodes))
     allocate(node_list_SoA%values(n_tor,n_degrees,n_var,node_list%n_nodes))
@@ -349,6 +353,8 @@ contains
     type(type_element_list_SoA), intent(inout)    :: element_list_SoA       !< the element list in SoA format
     type(type_element_list), intent(in)      :: element_list     !< the element list in AoS format
     integer   :: j
+
+    element_list_SoA%n_elements = element_list%n_elements
 
     !> ATTENTION: this order of allocation follows the gpu implementation
     allocate(element_list_SoA%vertex(element_list%n_elements,n_vertex_max))

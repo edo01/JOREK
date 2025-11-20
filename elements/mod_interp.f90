@@ -1296,9 +1296,9 @@ pure subroutine interp_RZP_0(node_list,element_list,i_elm,s,t,phi,R,Z)
   end do
 end subroutine interp_RZP_0
 
-pure subroutine interp_RZP_1_gpu(node_list,element_list,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
-type (type_node_list),    intent(in)  :: node_list
-type (type_element_list), intent(in)  :: element_list
+pure subroutine interp_RZP_1_gpu(node_list_SoA,element_list_SoA,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
+type (type_node_list_SoA),    intent(in)  :: node_list_SoA
+type (type_element_list_SoA), intent(in)  :: element_list_SoA
 integer,                  intent(in)  :: i_elm
 real*8,                   intent(in)  :: s,t,phi
 real*8,                   intent(out) :: R, R_s, R_t, R_p, Z, Z_s, Z_t, Z_p
@@ -1328,13 +1328,13 @@ R = 0.d0; R_s = 0.d0; R_t = 0.d0; R_p = 0.d0
 Z = 0.d0; Z_s = 0.d0; Z_t = 0.d0; Z_p = 0.d0
 
 do kv = 1,n_vertex_max  ! 4 vertices
-  iv = element_list%element(i_elm)%vertex(kv)  ! the node number
+  iv = element_list_SoA%vertex(i_elm,kv)  ! the node number
   do kf = 1, n_degrees       ! 4 basis functions
     do i_tor=1, n_coord_tor
-      xx1 = node_list%node(iv)%x(i_tor,kf,1)
-      xx2 = node_list%node(iv)%x(i_tor,kf,2)
-      ss  = element_list%element(i_elm)%size(kv,kf)
-      
+      xx1 = node_list_SoA%x(i_tor,kf,1,iv)
+      xx2 = node_list_SoA%x(i_tor,kf,2,iv)
+      ss  = element_list_SoA%size(kv,kf,i_elm)
+
       R    = R    + xx1 * ss * G(kv,kf)    * HZ_coord(i_tor)
       R_s  = R_s  + xx1 * ss * G_s(kv,kf)  * HZ_coord(i_tor)
       R_t  = R_t  + xx1 * ss * G_t(kv,kf)  * HZ_coord(i_tor)

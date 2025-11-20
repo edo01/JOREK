@@ -1,4 +1,4 @@
-subroutine find_RZ_gpu(node_list,element_list,R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
+subroutine find_RZ_gpu(node_list_SoA,element_list_SoA,R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
 !-------------------------------------------------------------------------
 !< Find all elements for which minmax is correct and run find_RZ_single on those.
 !< Return the first result.
@@ -17,8 +17,8 @@ implicit none
 !$omp declare target
 #endif
 
-type (type_node_list), intent(in)    :: node_list
-type (type_element_list), intent(in) :: element_list
+type (type_node_list_SoA), intent(in)    :: node_list_SoA
+type (type_element_list_SoA), intent(in) :: element_list_SoA
 real*8, intent(in)     :: R_find, Z_find
 real*8, intent(out)    :: R_out,Z_out,s_out,t_out
 integer, intent(inout) :: ielm_out
@@ -38,9 +38,9 @@ ielm_out = 0
 
 ! then loop through all
 !do k=1,size(i_elms)
-do k=1,element_list%n_elements
+do k=1,element_list_SoA%n_elements
   !call find_RZ_single(node_list,element_list,i_elms(k),R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
-  call find_RZ_single_gpu(node_list,element_list,k,R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
+  call find_RZ_single_gpu(node_list_SoA,element_list_SoA,k,R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
   if (ifail .eq. 0) exit
 enddo
 
@@ -49,7 +49,7 @@ if (ifail .eq. 999) ielm_out = 0 ! Otherwise testing ielm=0 on output does not
 ! work anymore (and we don't always check ifail)
 end subroutine find_RZ_gpu
 
-subroutine find_RZ_single_gpu(node_list,element_list,i_elm,R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
+subroutine find_RZ_single_gpu(node_list_SoA,element_list_SoA,i_elm,R_find,Z_find,R_out,Z_out,ielm_out,s_out,t_out,ifail)
 !-------------------------------------------------------------------------
 !< solves two non-linear equations using Newtons method (from numerical recipes)
 !< LU decomposition replaced by explicit solution of 2x2 matrix.
@@ -64,8 +64,8 @@ use mod_parameters, only: n_period, n_plane
 !use phys_module, only: i_plane_rtree
 implicit none
 
-type (type_node_list), intent(in)    :: node_list
-type (type_element_list), intent(in) :: element_list
+type (type_node_list_SoA), intent(in)    :: node_list_SoA
+type (type_element_list_SoA), intent(in) :: element_list_SoA
 integer, intent(in)    :: i_elm
 real*8, intent(in)     :: R_find, Z_find
 real*8, intent(out)    :: R_out,Z_out,s_out,t_out
@@ -114,7 +114,7 @@ do istart = 1,5
   do i=1,ntrial
     !call interp_RZP(node_list,element_list,i_elm,x(1),x(2),phi,RRg1,dRRg1_dr,dRRg1_ds,dummy,dummy,dummy,dummy,dummy,dummy,dummy, &
     !                                                           ZZg1,dZZg1_dr,dZZg1_ds,dummy,dummy,dummy,dummy,dummy,dummy,dummy)
-    call interp_RZP_1_gpu(node_list,element_list,i_elm,x(1),x(2),phi,RRg1,dRRg1_dr,dRRg1_ds,dummy,ZZg1,dZZg1_dr,dZZg1_ds,dummy)
+    call interp_RZP_1_gpu(node_list_SoA,element_list_SoA,i_elm,x(1),x(2),phi,RRg1,dRRg1_dr,dRRg1_ds,dummy,ZZg1,dZZg1_dr,dZZg1_ds,dummy)
 
     FVEC(1)   = RRg1 - R_find
     FVEC(2)   = ZZg1 - Z_find

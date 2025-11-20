@@ -220,15 +220,15 @@ else
 end if
 end subroutine try_interp
 
-subroutine find_RZ_nearby_gpu(node_list, element_list, R_old, Z_old, s_old, t_old, i_elm_old, &
+subroutine find_RZ_nearby_gpu(node_list_SoA, element_list_SoA, R_old, Z_old, s_old, t_old, i_elm_old, &
         R_new, Z_new, s_new, t_new, i_elm_new, ifail, phi)
 use data_structure
 use mod_neighbours
 use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 implicit none
 !> Input parameters
-type (type_node_list),intent(in)    :: node_list
-type (type_element_list), intent(in)    :: element_list
+type (type_node_list_SoA),    intent(in)  :: node_list_SoA
+type (type_element_list_SoA), intent(in)  :: element_list_SoA
 real*8,                   intent(in)    :: R_old, Z_old !< The old R,Z location
 real*8,                   intent(in)    :: R_new, Z_new !< The new R,Z location
 real*8,                   intent(in)    :: s_old, t_old !< The old st location (used to compute a guess)
@@ -255,7 +255,7 @@ real*8  :: err2, err2_old, dist(2), fact
 #endif
 
 ! Check if element is valid
-if (i_elm_old .lt. 1 .or. i_elm_old .gt. element_list%n_elements) then
+if (i_elm_old .lt. 1 .or. i_elm_old .gt. element_list_SoA%n_elements) then
 
 #ifdef USE_GPU_TEST
   write(*,*) "WARNING: element not valid, but find_RZ is not implemented for GPU"
@@ -276,7 +276,7 @@ i_elm_new = i_elm_old ! start in the current element
 st_new = [s_old,t_old] ! start at the old position
 x_new = [R_new,Z_new]
 ! Find the jacobian at the current s and t position
-call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+call try_interp_gpu(node_list_SoA,element_list_SoA,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 err2 = dot_product(x_step-x_new,x_step-x_new)
 ifail=0
 
@@ -298,20 +298,20 @@ do newton_iter_number = 1, newton_iter_max
   if (fact .ge. 1.d0-1d-12) then
     st_new = st_new + st_step/fact
     i_elm_tmp = i_elm_new
-    call coord_in_neighbour_gpu(node_list,element_list,i_elm_tmp,i_elm_new,st_new)
+    call coord_in_neighbour_gpu(node_list_SoA,element_list_SoA,i_elm_tmp,i_elm_new,st_new)
     if (i_elm_new .lt. 0) then
 
 #ifdef USE_GPU_TEST
 !    write(*,*) "WARNING: impossible finding a neighbour, but find_RZ is not implemented for GPU"
 #endif
     !i_elm_new = -3
-    call find_RZ_gpu(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
-    return 
+    call find_RZ_gpu(node_list_SoA,element_list_SoA,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+    return
     end if
     if (i_elm_new .eq. 0) then ! No element on that side, particle is lost
       i_elm_new = - i_elm_tmp ! Save position of particle
       ! Calculate new R and Z in x_new
-      call try_interp_gpu(node_list,element_list,i_elm_tmp,st_new,p,x_new,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+      call try_interp_gpu(node_list_SoA,element_list_SoA,i_elm_tmp,st_new,p,x_new,R_s,R_t,Z_s,R_t,inv_st_jac_det)
       ! Set new element-local coordinates for the point on the axis
       s_new = st_new(1)
       t_new = st_new(2)
@@ -319,11 +319,11 @@ do newton_iter_number = 1, newton_iter_max
       return
     end if
 
-    call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+    call try_interp_gpu(node_list_SoA,element_list_SoA,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 
   else ! if not on the boundary
     st_new = st_new + st_step
-    call try_interp_gpu(node_list,element_list,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+    call try_interp_gpu(node_list_SoA,element_list_SoA,i_elm_new,st_new,p,x_step,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 
   end if
   err2 = dot_product(x_step-x_new,x_step-x_new)
@@ -347,20 +347,20 @@ if (newton_iter_number .gt. newton_iter_max) then
   !            " using find_RZ, but find_RZ is not implemented for GPU"
 #endif
   !i_elm_new = -1
-  call find_RZ_gpu(node_list,element_list,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
+  call find_RZ_gpu(node_list_SoA,element_list_SoA,R_new,Z_new,x_step(1),x_step(2),i_elm_new,s_new,t_new,ifail)
   return
 endif
 end subroutine find_RZ_nearby_gpu
 
 
 !> Auxiliary subroutine for find_RZ_nearby_gpu
-pure subroutine try_interp_gpu(node_list,element_list,i_elm,st,p,x,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
+pure subroutine try_interp_gpu(node_list_SoA,element_list_SoA,i_elm,st,p,x,R_s,R_t,Z_s,Z_t,inv_st_jac_det)
 use data_structure
 use mod_interp
 implicit none
 !> Input parameters
-type (type_node_list),intent(in) :: node_list
-type (type_element_list), intent(in)    :: element_list
+type (type_node_list_SoA), intent(in) :: node_list_SoA
+type (type_element_list_SoA), intent(in)    :: element_list_SoA
 real*8,                   intent(in)    :: st(2), p
 integer,                  intent(in)    :: i_elm
 real*8,                   intent(out)   :: x(2), R_s, R_t, Z_s, Z_t, inv_st_jac_det
@@ -371,7 +371,7 @@ real*8 :: jac
 !$omp declare target
 #endif
 
-call interp_RZP_1_gpu(node_list,element_list,i_elm,st(1),st(2),p,x(1),R_s,R_t,R_p,x(2),Z_s,Z_t,Z_p)
+call interp_RZP_1_gpu(node_list_SoA,element_list_SoA,i_elm,st(1),st(2),p,x(1),R_s,R_t,R_p,x(2),Z_s,Z_t,Z_p)
 ! Guard against the determinant being close to zero
 jac = R_s * Z_t - R_t * Z_s
 if (abs(jac) .lt. 1d-8) then
