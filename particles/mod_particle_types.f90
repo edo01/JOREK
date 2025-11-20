@@ -348,11 +348,9 @@ contains
     call copy_particle_list(particle_list_copy, particle_list)
 
     ! Reorder the particles based on new_order
-    !$omp parallel do default(shared) private(i)
     do i = 1, size(particle_list)
       particle_list(i) = particle_list_copy(new_order(i))
     end do
-    !$omp end parallel do
 
     deallocate(particle_list_copy)
   end subroutine reorder_particles
@@ -390,11 +388,9 @@ contains
       stop
     end select
 
-    !$omp parallel do default(shared) private(j)
     do j=1,n_particles
       particle_list_copy(j) = particle_list_in(j)
     end do
-    !$omp end parallel do
   end subroutine copy_particle_list
 
 
@@ -406,7 +402,6 @@ contains
 
     n_particles = size(particle_list_in)
 
-    !$omp parallel do default(shared) private(i)
     do i=1,n_particles
       particle_SoA_out%x(:,i)       = particle_list_in(i)%x
       particle_SoA_out%st(:,i)      = particle_list_in(i)%st
@@ -415,18 +410,15 @@ contains
       particle_SoA_out%i_life(i)    = particle_list_in(i)%i_life
       particle_SoA_out%t_birth(i)   = particle_list_in(i)%t_birth
     end do
-    !$omp end parallel do
 
     select type (p_list => particle_list_in)
     type is (particle_kinetic_relativistic)
       select type (p_SoA => particle_SoA_out)
       type is (particle_SoA_kinetic_relativistic)
-        !$omp parallel do default(shared) private(i)
         do i=1,n_particles
           p_SoA%p(:,i) = p_list(i)%p
           p_SoA%q(i)    = p_list(i)%q
         end do
-        !$omp end parallel do
       class default
         write(*,*) "ERROR: Unsupported particle type in copy_particles_to_SoA"
         stop
@@ -443,7 +435,6 @@ contains
 
     n_particles = size(particle_SoA_in%i_elm)
 
-    !$omp parallel do default(shared) private(i)
     do i=1,n_particles
       particle_list_out(i)%x       = particle_SoA_in%x(:,i)
       particle_list_out(i)%st      = particle_SoA_in%st(:,i)
@@ -452,18 +443,15 @@ contains
       particle_list_out(i)%i_life    = particle_SoA_in%i_life(i)
       particle_list_out(i)%t_birth   = particle_SoA_in%t_birth(i)
     end do
-    !$omp end parallel do
 
     select type (p_SoA => particle_SoA_in)
     type is (particle_SoA_kinetic_relativistic)
       select type (p_list => particle_list_out)
       type is (particle_kinetic_relativistic)
-        !$omp parallel do default(shared) private(i)
         do i=1,n_particles
           p_list(i)%p = p_SoA%p(:,i)
           p_list(i)%q = p_SoA%q(i)
         end do
-        !$omp end parallel do
       class default
         write(*,*) "ERROR: Unsupported particle type in copy_particles_from_SoA"
         stop
