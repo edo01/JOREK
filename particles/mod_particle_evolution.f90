@@ -512,13 +512,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
             enddo !< n_vertex_max
           enddo !< degrees
 
-#ifdef CALC_EBPSIU_ENHANCED
-          call volume_preserving_push_jorek_gpu_SoA(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), & 
-                        fields, group_mass, sim_time, tstep_part_adj, ifail)
-#else
           call volume_preserving_push_jorek_gpu(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), &
                         fields, group_mass, sim_time, tstep_part_adj, ifail)
-#endif
 
         end do !< steps
       end do !< particles

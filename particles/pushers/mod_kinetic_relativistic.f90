@@ -11,7 +11,7 @@ implicit none
 
 private
 public :: volume_preserving_push_cartesian, volume_preserving_push_jorek
-public :: volume_preserving_push_jorek_gpu, volume_preserving_push_jorek_gpu_SoA
+public :: volume_preserving_push_jorek_gpu
 public :: volume_preserving_radiation_push_jorek
 public :: relativistic_kinetic_to_particle
 public :: gc_to_relativistic_kinetic
@@ -96,133 +96,6 @@ pure subroutine volume_preserving_second_half_step_jorek(particle,&
   particle%p = particle%p*mass*SPEED_OF_LIGHT
 end subroutine volume_preserving_second_half_step_jorek
 
-
-!---------------------------------------------------------------------------
-!> This subroutine integrates a relativistic particle trajectory in JOREK
-!> fields using the Volume Preserving Algorithm (VPA)
-subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, fields, &
-                                                mass, time, timestep, ifail)
-  ! load functions
-  use mod_coordinate_transforms, only: cartesian_to_cylindrical
-  use mod_coordinate_transforms, only: cylindrical_to_cartesian
-  use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
-  use mod_fields
-  use mod_find_rz_nearby, only: find_RZ_nearby_gpu
-  use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_SoA
-  use data_structure, only: type_element_list, type_node_list
-  use data_structure, only: type_element_list_SoA, type_node_list_SoA
-  !> inline functions
-  use mod_pusher_tools, only: cayley_transform
-
-
-  ! declare input/output variables
-  integer(kind=4),intent(inout) :: ifail
-  real*8, intent(inout) :: x(3), p(3), st(2)
-  integer, intent(inout) :: i_elm 
-  integer(kind=1), intent(in) :: q  
-
-  ! declare input variables
-  real(kind=8),intent(in)                 :: mass, time, timestep
-  type(jorek_fields_interp_linear), intent(in) :: fields
-
-
-  ! declare internal variables
-  real(kind=8) :: psi, U
-  real(kind=8),dimension(3) :: B, E
-  ! half_position coordinates: 1:x, 2:y, 3:z, 4:R, 5:Z, 6:phi 
-  real(kind=8),dimension(6) :: half_position
-  real(kind=8) :: scaling_factor !< in [s^2*C/(kg*m)]
-  !inlined function variables
-  ! volume_preserving_second_half_step_jorek
-  real(kind=8) :: E_cartesian(3), B_cartesian(3)
-  real*8 :: cayley_transform_mat_tmp(3,3) !< temporary matrix for the Cayley transform
-  real*8 :: p_old(3) !< old momentum to be used in the Cayley transform
-
-#ifdef USE_GPU
-  !$omp declare target
-#endif
-
-  ! check if the particle is valid
-  !if(particle%i_elm.le.0) return ! we can remove this check (we already check it in the calling routine)
-  ! transform the particle position from cylindrical to cartesian coordinates
-  half_position(1:3) = cylindrical_to_cartesian(x)
-
-  ! compute first half-step
-  !call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
-  !     mass,timestep,scaling_factor)
-  
-  !> volume_preserving_first_half_step_jorek {
-  scaling_factor = 5.d-1*timestep*q*EL_CHG/(ATOMIC_MASS_UNIT*mass*SPEED_OF_LIGHT) !> TODO: real(p_q(j), 8)??
-  ! compute dimensionless momentum
-  p = p/(mass*SPEED_OF_LIGHT)
-  ! compute coordinates at half-step
-  half_position(1:3) = half_position(1:3) + (5.d-1*timestep*SPEED_OF_LIGHT*p) &
-                  /(sqrt(1.d0+dot_product(p,p)))
-  !> } volume_preserving_first_half_step_jorek
-
-  ! calculate cylindrical coordinates from cartesian ones
-  half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
-  ! find the (i_elm,s,t) coordinates
-
-  ! TODO: USE SoA ELEMENT AND NODE LISTS
-  call find_RZ_nearby_gpu(fields%node_list, fields%element_list, x(1),&
-       x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
-       st(1),st(2), i_elm, ifail)
-
-  ! check if the particle is lost, exit if it is the case
-  if(i_elm.le.0) return
-  ! copy RZPHI coordinates in particles
-  x = half_position(4:6)
-  ! compute magnetic and electric fields
-
-  call calc_EBpsiU_linear_gpu_SoA(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
-
-  ! compute the second half-step  
-  E_cartesian = vector_cylindrical_to_cartesian(x(3),E)
-  B_cartesian = vector_cylindrical_to_cartesian(x(3),B)
-
-  !> volume_preserving_second_half_step_jorek {
-
-  ! compute momentum at t_(i+1/2)
-  p = p + scaling_factor*E_cartesian
-  ! rotate momentum with respect to the magnetic field
-  !p_p(:,j) = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+p_dot)), B_cartesian), p_p(:,j))
-  cayley_transform_mat_tmp = cayley_transform(SPEED_OF_LIGHT*scaling_factor/(sqrt(1.d0+dot_product(p, p))), B_cartesian)
-  p_old = p
-  !p_p(:,j) = matmul(cayley_transform_mat_tmp, p_p(:,j)) ! matmul seems not to work on GPU
-  p(1) = cayley_transform_mat_tmp(1,1) * p_old(1) + cayley_transform_mat_tmp(1,2) * p_old(2) + cayley_transform_mat_tmp(1,3) * p_old(3)
-  p(2) = cayley_transform_mat_tmp(2,1) * p_old(1) + cayley_transform_mat_tmp(2,2) * p_old(2) + cayley_transform_mat_tmp(2,3) * p_old(3)
-  p(3) = cayley_transform_mat_tmp(3,1) * p_old(1) + cayley_transform_mat_tmp(3,2) * p_old(2) + cayley_transform_mat_tmp(3,3) * p_old(3)
-  
-  ! compute momentum at t_(i+1)
-  p = p + scaling_factor*E_cartesian
-
-  ! update position at t_(i+1)
-  half_position(1:3) = half_position(1:3) + (5.d-1*timestep*SPEED_OF_LIGHT*p)/&
-    (sqrt(1.d0+dot_product(p,p)))
-  
-  ! compute dimensional momentum
-  p = p*mass*SPEED_OF_LIGHT
-
-  !> } volume_preserving_second_half_step_jorek 
-
-  ! transform back from cartesian to cylindrical coordinates
-  half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
-  ! find the (i_elm,s,t) coordinates
-
-  !TODO: USE SoA ELEMENT AND NODE LISTS
-  call find_RZ_nearby_gpu(fields%node_list, fields%element_list, x(1),&
-       x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
-       st(1),st(2), i_elm, ifail)
-
-  ! copy new RZPHI position into particle
-  x = half_position(4:6)
-
-end subroutine volume_preserving_push_jorek_gpu_SoA
-
-
-
 !---------------------------------------------------------------------------
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA)
@@ -234,7 +107,7 @@ subroutine volume_preserving_push_jorek_gpu(x, p, st, i_elm, q, fields, mass, ti
   use mod_fields
   use mod_find_rz_nearby, only: find_RZ_nearby_gpu
   use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear_gpu
+       calc_EBpsiU_linear_gpu, calc_EBpsiU_linear_gpu_SoA
   use data_structure, only: type_element_list, type_node_list
   !> inline functions
   use mod_pusher_tools, only: cayley_transform
@@ -298,9 +171,13 @@ subroutine volume_preserving_push_jorek_gpu(x, p, st, i_elm, q, fields, mass, ti
   x = half_position(4:6)
   ! compute magnetic and electric fields
 
+#ifdef CALC_EBPSIU_ENHANCED
+  call calc_EBpsiU_linear_gpu_SoA(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
+#else
   call calc_EBpsiU_linear_gpu(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
+#endif
 
-  ! compute the second half-step  
+  ! compute the second half-step
   E_cartesian = vector_cylindrical_to_cartesian(x(3),E)
   B_cartesian = vector_cylindrical_to_cartesian(x(3),B)
 
