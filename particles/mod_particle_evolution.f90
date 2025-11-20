@@ -394,7 +394,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
 
     !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
-    n_sort = 10 !10 ! TODO: move it to input file
+    n_sort = 1 !10 ! TODO: move it to input file
 
     do s=1,n_sort
 
@@ -463,13 +463,9 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
                                   sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
 
 #ifdef CALC_EBPSIU_ENHANCED
-          call calc_EBpsiU_linear_gpu_SoA(fields%node_list_SoA, fields%element_list_SoA, fields%time_now, &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt,                                    &
-                                        sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
+          call calc_EBpsiU_linear_gpu_SoA(fields, sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
 #else
-          call calc_EBpsiU_linear_gpu_SoA(fields%node_list, fields%element_list, fields%time_now,   &
-                                      fields%time_prev, fields%static, fields%flag_zero_dpsidt,         &
-                                        sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
+          call calc_EBpsiU_linear_gpu(fields, sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
 #endif
           ! norm2 is really slow on GPU
           !B_norm2 = B/norm2(B)
@@ -487,6 +483,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
               
           do n=1,n_degrees
             do m=1,n_vertex_max
+              ! TODO: CHANGE IT WITH SOA
               proj_factor = HH(m,n) * fields%element_list%element(particles_SoA%i_elm(j))%size(m,n) * particles_SoA%weight(j)
 
               do i_tor = 1,n_tor
@@ -516,14 +513,11 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
           enddo !< degrees
 
 #ifdef CALC_EBPSIU_ENHANCED
-          call volume_preserving_push_jorek_gpu_SoA_enhanced(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), & 
-                        fields%node_list_SoA, fields%element_list_SoA, fields%node_list, fields%element_list,   &
-                        fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt,              &
-                        group_mass, sim_time, tstep_part_adj, ifail)
+          call volume_preserving_push_jorek_gpu_SoA(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), & 
+                        fields, group_mass, sim_time, tstep_part_adj, ifail)
 #else
-          call volume_preserving_push_jorek_gpu_SoA(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), fields%node_list, &
-                        fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
-                        group_mass, sim_time, tstep_part_adj, ifail)
+          call volume_preserving_push_jorek_gpu(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), &
+                        fields, group_mass, sim_time, tstep_part_adj, ifail)
 #endif
 
         end do !< steps

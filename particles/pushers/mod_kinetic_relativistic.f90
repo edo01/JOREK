@@ -12,7 +12,6 @@ implicit none
 private
 public :: volume_preserving_push_cartesian, volume_preserving_push_jorek
 public :: volume_preserving_push_jorek_gpu, volume_preserving_push_jorek_gpu_SoA
-public :: volume_preserving_push_jorek_gpu_SoA_enhanced
 public :: volume_preserving_radiation_push_jorek
 public :: relativistic_kinetic_to_particle
 public :: gc_to_relativistic_kinetic
@@ -101,7 +100,7 @@ end subroutine volume_preserving_second_half_step_jorek
 !---------------------------------------------------------------------------
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA)
-subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q, node_list_SoA, element_list_SoA, node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, &
+subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, fields, &
                                                 mass, time, timestep, ifail)
   ! load functions
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
@@ -125,14 +124,8 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q, nod
 
   ! declare input variables
   real(kind=8),intent(in)                 :: mass, time, timestep
-  type(type_node_list_SoA)   , intent(in) :: node_list_SoA
-  type(type_element_list_SoA), intent(in) :: element_list_SoA
-  type (type_node_list)    ,intent(in)  :: node_list 
-  type (type_element_list) ,intent(in)  :: element_list
-  real*8,                   intent(in)  :: time_now 
-  real*8,                   intent(in)  :: time_prev 
-  logical,                  intent(in)  :: static
-  logical,                  intent(in)  :: flag_zero_dpsidt
+  type(jorek_fields_interp_linear), intent(in) :: fields
+
 
   ! declare internal variables
   real(kind=8) :: psi, U
@@ -172,7 +165,8 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q, nod
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu(node_list, element_list, x(1),&
+  ! TODO: USE SoA ELEMENT AND NODE LISTS
+  call find_RZ_nearby_gpu(fields%node_list, fields%element_list, x(1),&
        x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
        st(1),st(2), i_elm, ifail)
 
@@ -182,9 +176,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q, nod
   x = half_position(4:6)
   ! compute magnetic and electric fields
 
-  call calc_EBpsiU_linear_gpu_SoA(node_list_SoA, element_list_SoA, time_now, &
-                              time_prev, static, flag_zero_dpsidt, &
-                              time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
+  call calc_EBpsiU_linear_gpu_SoA(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
 
   ! compute the second half-step  
   E_cartesian = vector_cylindrical_to_cartesian(x(3),E)
@@ -219,22 +211,22 @@ subroutine volume_preserving_push_jorek_gpu_SoA_enhanced(x, p, st, i_elm, q, nod
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu(node_list, element_list, x(1),&
+  !TODO: USE SoA ELEMENT AND NODE LISTS
+  call find_RZ_nearby_gpu(fields%node_list, fields%element_list, x(1),&
        x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
        st(1),st(2), i_elm, ifail)
 
   ! copy new RZPHI position into particle
   x = half_position(4:6)
 
-end subroutine volume_preserving_push_jorek_gpu_SoA_enhanced
+end subroutine volume_preserving_push_jorek_gpu_SoA
 
 
 
 !---------------------------------------------------------------------------
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA)
-subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, element_list, time_now, time_prev, static, flag_zero_dpsidt, &
-                                                mass, time, timestep, ifail)
+subroutine volume_preserving_push_jorek_gpu(x, p, st, i_elm, q, fields, mass, time, timestep, ifail)
   ! load functions
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
   use mod_coordinate_transforms, only: cylindrical_to_cartesian
@@ -256,13 +248,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
 
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
-
-  type (type_node_list),intent(in)      :: node_list
-  type (type_element_list), intent(in)  :: element_list
-  real*8,                   intent(in)  :: time_now 
-  real*8,                   intent(in)  :: time_prev 
-  logical,                  intent(in)  :: static
-  logical,                  intent(in)  :: flag_zero_dpsidt
+  type(jorek_fields_interp_linear), intent(in) :: fields
 
   ! declare internal variables
   real(kind=8) :: psi, U
@@ -302,7 +288,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu(node_list, element_list, x(1),&
+  call find_RZ_nearby_gpu(fields%node_list, fields%element_list, x(1),&
        x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
        st(1),st(2), i_elm, ifail)
 
@@ -312,9 +298,7 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   x = half_position(4:6)
   ! compute magnetic and electric fields
 
-  call calc_EBpsiU_linear_gpu(node_list, element_list, time_now, &
-                              time_prev, static, flag_zero_dpsidt, &
-                              time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
+  call calc_EBpsiU_linear_gpu(fields, time+5.d-1*timestep, i_elm, st, x(3), E, B, psi, U)
 
   ! compute the second half-step  
   E_cartesian = vector_cylindrical_to_cartesian(x(3),E)
@@ -349,96 +333,13 @@ subroutine volume_preserving_push_jorek_gpu_SoA(x, p, st, i_elm, q, node_list, e
   half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
   ! find the (i_elm,s,t) coordinates
 
-  call find_RZ_nearby_gpu(node_list, element_list, x(1),&
+  call find_RZ_nearby_gpu(fields%node_list, fields%element_list, x(1),&
        x(2),st(1),st(2),i_elm, half_position(4),half_position(5), &
        st(1),st(2), i_elm, ifail)
 
   ! copy new RZPHI position into particle
   x = half_position(4:6)
 
-end subroutine volume_preserving_push_jorek_gpu_SoA
-
-
-!---------------------------------------------------------------------------
-!> This subroutine integrates a relativistic particle trajectory in JOREK
-!> fields using the Volume Preserving Algorithm (VPA)
-subroutine volume_preserving_push_jorek_gpu(particle,node_list,element_list, time_now, time_prev, static, flag_zero_dpsidt,mass,time,timestep,ifail)
-  ! load functions
-  use mod_coordinate_transforms, only: cartesian_to_cylindrical
-  use mod_coordinate_transforms, only: cylindrical_to_cartesian
-  use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
-  use mod_fields
-  use mod_find_rz_nearby, only: find_RZ_nearby_gpu
-  use mod_fields_linear, only: jorek_fields_interp_linear, &
-       calc_EBpsiU_linear_gpu
-  use data_structure, only: type_element_list, type_node_list
-
-  ! declare input/output variables
-  integer(kind=4),intent(inout) :: ifail
-  class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
-  ! declare input variables
-  real(kind=8),intent(in) :: mass, time, timestep
-
-  type (type_node_list)   , intent(in)  :: node_list
-  type (type_element_list), intent(in)  :: element_list
-  real*8,                   intent(in)  :: time_now 
-  real*8,                   intent(in)  :: time_prev 
-  logical,                  intent(in)  :: static
-  logical,                  intent(in)  :: flag_zero_dpsidt
-
-  ! declare internal variables
-  real(kind=8) :: psi, U
-  real(kind=8),dimension(3) :: B, E
-  ! half_position coordinates: 1:x, 2:y, 3:z, 4:R, 5:Z, 6:phi 
-  real(kind=8),dimension(6) :: half_position
-  real(kind=8) :: scaling_factor !< in [s^2*C/(kg*m)]
-#ifdef USE_GPU
-  !$omp declare target
-#endif
-
-  ! check if the particle is valid
-  !if(particle%i_elm.le.0) return ! we can remove this check (we already check it in the calling routine)
-  ! transform the particle position from cylindrical to cartesian coordinates
-  half_position(1:3) = cylindrical_to_cartesian(particle%x)
-  ! compute first half-step
-  call volume_preserving_first_half_step_jorek(particle,half_position(1:3),&
-       mass,timestep,scaling_factor)
-       
-  ! calculate cylindrical coordinates from cartesian ones
-  half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
-  ! find the (i_elm,s,t) coordinates
-
-  call find_RZ_nearby_gpu(node_list, element_list, particle%x(1),&
-       particle%x(2),particle%st(1),particle%st(2),particle%i_elm,&
-       half_position(4),half_position(5),particle%st(1),particle%st(2),&
-       particle%i_elm,ifail)
-
-  ! check if the particle is lost, exit if it is the case
-  if(particle%i_elm.le.0) return
-  ! copy RZPHI coordinates in particles
-  particle%x = half_position(4:6)
-  ! compute magnetic and electric fields
-  call calc_EBpsiU_linear_gpu(node_list, element_list, time_now, &
-                                      time_prev, static, flag_zero_dpsidt, &
-                                       time+5.d-1*timestep, particle%i_elm, particle%st, particle%x(3), E, B, psi, U)
-
-  ! compute the second half-step  
-  call volume_preserving_second_half_step_jorek(particle, &
-    half_position(1:3),scaling_factor,                    &
-    vector_cylindrical_to_cartesian(particle%x(3),E),     &
-    vector_cylindrical_to_cartesian(particle%x(3),B),     &
-    mass,timestep)
-  ! transform back from cartesian to cylindrical coordinates
-  half_position(4:6) = cartesian_to_cylindrical(half_position(1:3))
-  ! find the (i_elm,s,t) coordinates
-
-  call find_rz_nearby_gpu(node_list,element_list,particle%x(1), &
-    particle%x(2),particle%st(1),particle%st(2),particle%i_elm,           &
-    half_position(4),half_position(5),particle%st(1),particle%st(2),      &
-    particle%i_elm,ifail)
-
-  ! copy new RZPHI position into particle
-  particle%x = half_position(4:6)
 end subroutine volume_preserving_push_jorek_gpu
 
 
