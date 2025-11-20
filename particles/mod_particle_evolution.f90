@@ -53,7 +53,7 @@ contains
     type (particle_group),         pointer :: part_group
     real*8 :: start_time, end_time, tot_time(3)
 
-    integer :: alive_particle_count
+    integer :: alive_particle_count, j
 
     character(len=3) :: cs
 
@@ -89,10 +89,7 @@ contains
 #ifdef USE_GPU
     !> when using the GPU, we must keep the SoA updated
     call copy_particles_to_SoA(sim%groups(group_num)%particles_SoA, sim%groups(group_num)%particles)
-
-    call copy_particles_from_SoA(sim%groups(group_num)%particles, sim%groups(group_num)%particles_SoA)
 #endif
-
 
     !> count number of particles in system
     call with(sim, counter)
@@ -112,9 +109,9 @@ contains
       case ('rep')
 #ifdef USE_GPU
 #ifdef USE_RHS_INV
-      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj)
+      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj, alive_particle_count)
 #else
-      call evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+      call evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, alive_particle_count)
 #endif
 #else
       call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
@@ -361,23 +358,9 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     real*8    :: group_mass, sim_time
     integer   :: num_particles
     
-    !> SoA
-    real*8, allocatable           :: p_x(:,:), p_p(:,:), p_st(:,:), p_weight(:)
-    integer, allocatable          :: p_i_elm(:) 
-    integer(kind=1),allocatable   :: p_q(:)
-
-#ifdef CALC_EBPSIU_ENHANCED
-    !> enhanced calc_EBpsiU
-    integer                       :: n_elements, n_nodes
-#endif
-    
     !> sorting 
     integer                       :: n_sort, s !< Multiple sorting
     real*8                        :: start_time, end_time, tot_time(3)
-#ifdef USE_ORDERING
-    integer, allocatable          :: sorted_indices(:) !< indices of the particles sorted by i_elm
-    integer                       :: ierr
-#endif
 
     if (sim%my_id .eq. 0) then
       write(*,*) 'INFO: REs evolution executed on     : GPU'
@@ -404,65 +387,30 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     group_mass      = sim%groups(group_num)%mass
     sim_time        = sim%time
     num_particles   = size(sim%groups(group_num)%particles,1)
-    
-    !> if the particles are not sorted, then the number of alive particles is the total number of particles
-    alive_particle_count = num_particles 
 
     !> -----------------------------------------
     !> ---------- GPU DATA STRUCTURES ----------
     !> -----------------------------------------
     if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
 
-    select type (particles => sim%groups(group_num)%particles)
-    type is (particle_kinetic_relativistic)
-
-    !> allocate the SoA data structures
-    !> TODO: move them in the main and update them before the kernel execution
-    allocate(p_x(3,alive_particle_count))
-    allocate(p_p(3,alive_particle_count))
-    allocate(p_st(2,alive_particle_count)) 
-    allocate(p_weight(alive_particle_count))
-    allocate(p_i_elm(alive_particle_count))
-    allocate(p_q(alive_particle_count))
-
     !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
-    n_sort = 1 !10
+    n_sort = 10 !10 ! TODO: move it to input file
 
     do s=1,n_sort
 
 #ifdef USE_ORDERING
-    !> Start timing the sorting section
-    start_time = MPI_WTIME()
-
-    call i_elm_sort_global(sorted_indices, particles, alive_particle_count)
-
-    !> End timing the sorting section
-    end_time = MPI_WTIME()
-    tot_time = mpi_minmeanmax(end_time-start_time)
-    if (sim%my_id .eq. 0) then
-        write(*,"(A,3f10.3,A)") , "Time taken for ordering (min/mean/max): ", tot_time, " seconds"
+    !> if we use multiple sorting, from the 2nd sort onwards we need to reorder the particles again
+    if (s .gt. 1) then
+      !> reorder particles by i_elm to improve data locality
+      call sort_particles(sim, group_num, particle_global_sort, alive_particle_count)
+      !> update SoA after sorting
+      call copy_particles_to_SoA(sim%groups(group_num)%particles_SoA, sim%groups(group_num)%particles)
     endif
-
 #endif
 
-    !> Populate the SoA data structures
-    do j=1,alive_particle_count
-#ifdef USE_ORDERING
-      p_x(:,j) = particles(sorted_indices(j))%x
-      p_p(:,j) = particles(sorted_indices(j))%p
-      p_st(:,j) = particles(sorted_indices(j))%st
-      p_weight(j) = particles(sorted_indices(j))%weight
-      p_i_elm(j) = particles(sorted_indices(j))%i_elm
-      p_q(j) = particles(sorted_indices(j))%q
-#else 
-      p_x(:,j) = particles(j)%x
-      p_p(:,j) = particles(j)%p
-      p_st(:,j) = particles(j)%st
-      p_weight(j) = particles(j)%weight
-      p_i_elm(j) = particles(j)%i_elm
-      p_q(j) = particles(j)%q
-#endif
-    enddo
+
+    select type (particles_SoA => sim%groups(group_num)%particles_SoA)
+    type is (particle_SoA_kinetic_relativistic)
 
     select type (fields => sim%fields)
     type is (jorek_fields_interp_linear)
@@ -474,7 +422,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !> TODO: the optimal way would be to allocate the SoA structures in the main, and update them before and after
       !>       the kernel execution. 
       !$omp target data                                                                               &
-      !$omp map(tofrom: feedback_rhs, p_x, p_p, p_st, p_i_elm)                                        &
+      !$omp map(tofrom: feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,                &
+      !$omp             particles_SoA%st, particles_SoA%i_elm)                                        &
       !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &
 #ifdef CALC_EBPSIU_ENHANCED
       !$omp        fields%element_list_SoA, fields%node_list_SoA,                                     &
@@ -484,43 +433,43 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
 #endif
       !$omp         group_mass, tstep_part_adj, nstep_particles,                                      &  
       !$omp         P_par_idx_kin, P_perp_idx_kin,j_phi_idx_kin,                                      &
-      !$omp         p_weight, p_q)                                  
+      !$omp         particles_SoA%weight, particles_SoA%q)                                  
 
-      !$omp target teams distribute parallel do default(none)                       &
-      !$omp shared(p_x, p_p, p_st, p_weight, p_i_elm, p_q,                          &
-      !$omp        fields,  feedback_rhs,                                           &
-      !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,           & 
-      !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,                    &
-      !$omp        alive_particle_count, n_sort)                                    &
-      !$omp private(ifail, j, k)                                                    &
-      !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                               &
-      !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,                   &
-      !$omp         cylindrical_velocity, gamma_m, proj_factor,                     &
-      !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                           &
+      !$omp target teams distribute parallel do default(none)                  &
+      !$omp shared(particles_SoA,                                              &
+      !$omp        fields,  feedback_rhs,                                      &
+      !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,      & 
+      !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,               &
+      !$omp        alive_particle_count, n_sort)                               &
+      !$omp private(ifail, j, k)                                               &
+      !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                          &
+      !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,              &
+      !$omp         cylindrical_velocity, gamma_m, proj_factor,                &
+      !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                      &
       !$omp device(sim%gpu_id)                                                                    
 #endif
       do j=1, alive_particle_count
-        do k=1,nstep_particles/n_sort
+        do k=1, nstep_particles/n_sort
         
-          if (p_i_elm(j) .le. 0) cycle
+          if (particles_SoA%i_elm(j) .le. 0) cycle
 
           ! HH_s and HH_t are not used
-          call basisfunctions(p_st(1,j), p_st(2,j), HH, HH_s, HH_t)
-          call mode_moivre(p_x(3,j), HZ)
+          call basisfunctions(particles_SoA%st(1,j), particles_SoA%st(2,j), HH, HH_s, HH_t)
+          call mode_moivre(particles_SoA%x(3,j), HZ)
 
           ! Determines velocity in cylindrical coordinates
-          cylindrical_momentum = vector_cartesian_to_cylindrical(p_x(3,j), p_p(:,j))
+          cylindrical_momentum = vector_cartesian_to_cylindrical(particles_SoA%x(3,j), particles_SoA%p(:,j))
           cylindrical_velocity = cylindrical_momentum / &
                                   sqrt(dot_product(cylindrical_momentum,cylindrical_momentum)/SPEED_OF_LIGHT**2 + group_mass**2)
 
 #ifdef CALC_EBPSIU_ENHANCED
           call calc_EBpsiU_linear_gpu_SoA(fields%node_list_SoA, fields%element_list_SoA, fields%time_now, &
                                       fields%time_prev, fields%static, fields%flag_zero_dpsidt,                                    &
-                                        sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
+                                        sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
 #else
           call calc_EBpsiU_linear_gpu_SoA(fields%node_list, fields%element_list, fields%time_now,   &
                                       fields%time_prev, fields%static, fields%flag_zero_dpsidt,         &
-                                        sim_time, p_i_elm(j), p_st(:,j), p_x(3,j), E, B, psi, U)
+                                        sim_time, particles_SoA%i_elm(j), particles_SoA%st(:,j), particles_SoA%x(3,j), E, B, psi, U)
 #endif
           ! norm2 is really slow on GPU
           !B_norm2 = B/norm2(B)
@@ -533,33 +482,33 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
 
           v_Ppar  = gamma_m * v_par**2 * MU_ZERO
           v_Pperp = gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-          v_jPhi  = - real(p_q(j), 8) * EL_CHG * cylindrical_velocity(3) * p_x(1,j) * MU_ZERO
+          v_jPhi  = - real(particles_SoA%q(j), 8) * EL_CHG * cylindrical_velocity(3) * particles_SoA%x(1,j) * MU_ZERO
               
               
           do n=1,n_degrees
             do m=1,n_vertex_max
-              proj_factor = HH(m,n) * fields%element_list%element(p_i_elm(j))%size(m,n) * p_weight(j)
+              proj_factor = HH(m,n) * fields%element_list%element(particles_SoA%i_elm(j))%size(m,n) * particles_SoA%weight(j)
 
               do i_tor = 1,n_tor
 #ifdef USE_RHS_INV
                 !$omp atomic update
-                feedback_rhs(p_i_elm(j),P_par_idx_kin,i_tor,m,n) =  feedback_rhs(p_i_elm(j),P_par_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Ppar*proj_factor
+                feedback_rhs(particles_SoA%i_elm(j),P_par_idx_kin,i_tor,m,n) =  feedback_rhs(particles_SoA%i_elm(j),P_par_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Ppar*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(p_i_elm(j),P_perp_idx_kin,i_tor,m,n) =  feedback_rhs(p_i_elm(j),P_perp_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Pperp*proj_factor
+                feedback_rhs(particles_SoA%i_elm(j),P_perp_idx_kin,i_tor,m,n) =  feedback_rhs(particles_SoA%i_elm(j),P_perp_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Pperp*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(p_i_elm(j),j_phi_idx_kin,i_tor,m,n) =  feedback_rhs(p_i_elm(j),j_phi_idx_kin,i_tor,m,n) + HZ(i_tor)*v_jPhi*proj_factor
+                feedback_rhs(particles_SoA%i_elm(j),j_phi_idx_kin,i_tor,m,n) =  feedback_rhs(particles_SoA%i_elm(j),j_phi_idx_kin,i_tor,m,n) + HZ(i_tor)*v_jPhi*proj_factor
                 !$omp end atomic
 #else
                 !$omp atomic update
-                feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar*proj_factor
+                feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,p_i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp*proj_factor
+                feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp*proj_factor
                 !$omp end atomic
                 !$omp atomic update
-                feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,p_i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi*proj_factor
+                feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi*proj_factor
                 !$omp end atomic
 #endif
               enddo !< n_tor
@@ -567,12 +516,12 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
           enddo !< degrees
 
 #ifdef CALC_EBPSIU_ENHANCED
-          call volume_preserving_push_jorek_gpu_SoA_enhanced(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), & 
+          call volume_preserving_push_jorek_gpu_SoA_enhanced(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), & 
                         fields%node_list_SoA, fields%element_list_SoA, fields%node_list, fields%element_list,   &
                         fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt,              &
                         group_mass, sim_time, tstep_part_adj, ifail)
 #else
-          call volume_preserving_push_jorek_gpu_SoA(p_x(:,j), p_p(:,j), p_st(:,j), p_i_elm(j), p_q(j), fields%node_list, &
+          call volume_preserving_push_jorek_gpu_SoA(particles_SoA%x(:,j), particles_SoA%p(:,j), particles_SoA%st(:,j), particles_SoA%i_elm(j), particles_SoA%q(j), fields%node_list, &
                         fields%element_list, fields%time_now, fields%time_prev, fields%static, fields%flag_zero_dpsidt, &
                         group_mass, sim_time, tstep_part_adj, ifail)
 #endif
@@ -593,35 +542,14 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     endif
 
     end select ! select type (fields)
+    end select ! select type (particles)
     
     
     !> ------------------COPY BACK---------------------
     !> copy the SoA data structures back to the particles
-    do j=1,alive_particle_count
-#ifdef USE_ORDERING
-      particles(sorted_indices(j))%x = p_x(:,j)    
-      particles(sorted_indices(j))%p = p_p(:,j)
-      particles(sorted_indices(j))%st = p_st(:,j)
-      particles(sorted_indices(j))%i_elm = p_i_elm(j)
-#else
-      particles(j)%x = p_x(:,j)    
-      particles(j)%p = p_p(:,j)
-      particles(j)%st = p_st(:,j)
-      particles(j)%i_elm = p_i_elm(j)
-#endif
-    enddo !< copy
+    call copy_particles_from_SoA(sim%groups(group_num)%particles, sim%groups(group_num)%particles_SoA)
 
     enddo !< n_sort
-
-    end select ! select type (particles)
-
-    !> ------------------CLEANING---------------------
-    !> deallocate SoA data structures
-    deallocate(p_x);      deallocate(p_p);      deallocate(p_st)
-    deallocate(p_weight); deallocate(p_i_elm);  deallocate(p_q)
-#ifdef USE_ORDERING
-    deallocate(sorted_indices)
-#endif
   end subroutine evolve_REs_gpu
 
 

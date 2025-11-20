@@ -31,13 +31,19 @@ subroutine sort_particles(sim, group_num, method, alive_particle_count)
 
   select case (method)
   case (particle_simd_lane_sort)
-    write(*,*) "INFO: Using SIMD-lane based particle sorting."
+    if (sim%my_id .eq. 0) then
+      write(*,*) "INFO: Using SIMD-lane based particle sorting."
+    end if
     call i_elm_sort_simd_lane(sorted_indices, sim%groups(group_num)%particles, alive_particle_count)
   case (particle_global_sort)
-    write(*,*) "INFO: Using global particle sorting."
+    if (sim%my_id .eq. 0) then
+      write(*,*) "INFO: Using global particle sorting."
+    end if
     call i_elm_sort_global(sorted_indices, sim%groups(group_num)%particles, alive_particle_count)
   case default
-    write(*,*) "ERROR: Unsupported particle sorting method: ", method
+    if (sim%my_id .eq. 0) then
+      write(*,*) "ERROR: Unsupported particle sorting method: ", method
+    end if
     stop
   end select
 
