@@ -159,7 +159,7 @@ contains
         allocate(particle_SoA_kinetic_relativistic :: sim%groups(group_num)%particles_SoA)
         select type (p_SoA_rel => sim%groups(group_num)%particles_SoA)
         type is (particle_SoA_kinetic_relativistic)
-          allocate(p_SoA_rel%p(2,n_particles_per_mpi))
+          allocate(p_SoA_rel%p(3,n_particles_per_mpi))
           allocate(p_SoA_rel%q(n_particles_per_mpi))
         end select
       case ("particle_gc_relativistic")
@@ -183,7 +183,7 @@ contains
     allocate(sim%groups(group_num)%particles_SoA%i_life(n_particles_per_mpi))
     allocate(sim%groups(group_num)%particles_SoA%t_birth(n_particles_per_mpi))
     allocate(sim%groups(group_num)%particles_SoA%weight(n_particles_per_mpi))
-    allocate(sim%groups(group_num)%particles_SoA%x(2,n_particles_per_mpi))
+    allocate(sim%groups(group_num)%particles_SoA%x(3,n_particles_per_mpi))
     allocate(sim%groups(group_num)%particles_SoA%st(2,n_particles_per_mpi))
   end subroutine allocate_particles_for_group_SoA
 

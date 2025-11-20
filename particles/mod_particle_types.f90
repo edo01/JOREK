@@ -339,26 +339,64 @@ contains
 
   !> Reorder the particles according to a new array of indices
   subroutine reorder_particles(particle_list, new_order)
-    class(particle_base), dimension(:), intent(inout) :: particle_list
+    class(particle_base), allocatable, dimension(:), intent(inout) :: particle_list
     integer, dimension(:), intent(in) :: new_order
-    integer :: n_particles, i
+    integer :: i
     class(particle_base), allocatable, dimension(:) :: particle_list_copy
-
-    n_particles = size(particle_list)
-    allocate(particle_list_copy(n_particles))
-
+    
     ! Create a copy of the original particle list
-    do i = 1, n_particles
-      call particle_list_copy(i)%copy(particle_list(i))
-    end do
+    call copy_particle_list(particle_list_copy, particle_list)
 
     ! Reorder the particles based on new_order
-    do i = 1, n_particles
-      call particle_list(i)%copy(particle_list_copy(new_order(i)))
+    !$omp parallel do default(shared) private(i)
+    do i = 1, size(particle_list)
+      particle_list(i) = particle_list_copy(new_order(i))
     end do
+    !$omp end parallel do
 
     deallocate(particle_list_copy)
   end subroutine reorder_particles
+
+
+  !> allocate an empty array of a specified particle type 
+  subroutine copy_particle_list(particle_list_copy, particle_list_in)
+    implicit none
+
+    class(particle_base), allocatable, dimension(:), intent(in)  :: particle_list_in
+    class(particle_base), allocatable, dimension(:), intent(out) :: particle_list_copy
+    integer :: n_particles, j
+
+    n_particles = size(particle_list_in)
+
+    select type (particle_list_in)
+    type is (particle_kinetic)
+      allocate(particle_kinetic::particle_list_copy(n_particles))
+    type is (particle_kinetic_leapfrog)
+      allocate(particle_kinetic_leapfrog::particle_list_copy(n_particles))
+    type is (particle_gc)
+      allocate(particle_gc::particle_list_copy(n_particles))
+    type is (particle_gc_vpar)
+      allocate(particle_gc_vpar::particle_list_copy(n_particles))
+    type is (particle_gc_Qin)
+      allocate(particle_gc_Qin::particle_list_copy(n_particles))
+    type is (particle_fieldline)
+      allocate(particle_fieldline::particle_list_copy(n_particles))
+    type is (particle_kinetic_relativistic)
+      allocate(particle_kinetic_relativistic::particle_list_copy(n_particles))
+    type is (particle_gc_relativistic)
+      allocate(particle_gc_relativistic::particle_list_copy(n_particles))
+    class default
+      write(*,*) "ERROR: Unsupported particle type in copy_particle_list"
+      stop
+    end select
+
+    !$omp parallel do default(shared) private(j)
+    do j=1,n_particles
+      particle_list_copy(j) = particle_list_in(j)
+    end do
+    !$omp end parallel do
+  end subroutine copy_particle_list
+
 
   !> Copy particles from an Array of Structures to a Structure of Arrays
   subroutine copy_particles_to_SoA(particle_SoA_out, particle_list_in)
