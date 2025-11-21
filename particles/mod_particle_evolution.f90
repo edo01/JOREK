@@ -419,19 +419,23 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     start_time = MPI_WTIME()
 
 #ifdef USE_GPU
-      !> TODO: the optimal way would be to allocate the SoA structures in the main, and update them before and after
-      !>       the kernel execution. 
-      !$omp target data                                                                               &
-      !$omp map(tofrom: feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,                &
-      !$omp             particles_SoA%st, particles_SoA%i_elm)                                        &
+      !> TODO: Move it in the setup phase
+      !$omp target enter data                                                                         &
       !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &
-      !$omp         fields%element_list_SoA, fields%node_list_SoA,                                     &
-      !$omp         fields%node_list_SoA%x, fields%node_list_SoA%values, fields%node_list_SoA%deltas,  &
-      !$omp         fields%element_list_SoA%vertex, fields%element_list_SoA%neighbours,                &
-      !$omp         fields%element_list_SoA%size,                                                      &
+      !$omp         fields%element_list_SoA, fields%node_list_SoA,                                    &
+      !$omp         fields%node_list_SoA%x, fields%node_list_SoA%values, fields%node_list_SoA%deltas, &
+      !$omp         fields%element_list_SoA%vertex, fields%element_list_SoA%neighbours,               &
+      !$omp         fields%element_list_SoA%size,                                                     &
       !$omp         group_mass, tstep_part_adj, nstep_particles,                                      &  
       !$omp         P_par_idx_kin, P_perp_idx_kin,j_phi_idx_kin,                                      &
-      !$omp         particles_SoA%weight, particles_SoA%q)                                  
+      !$omp         feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,                    &
+      !$omp         particles_SoA%st, particles_SoA%i_elm,                                            &
+      !$omp         particles_SoA%weight, particles_SoA%q)                                            
+
+      !$omp target update to(feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,           &
+      !$omp         particles_SoA%st, particles_SoA%i_elm,                                            &
+      !$omp         particles_SoA%weight, particles_SoA%q)                                           &
+      !$omp nowait
 
       !$omp target teams distribute parallel do default(none)                  &
       !$omp shared(particles_SoA,                                              &
@@ -444,7 +448,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,              &
       !$omp         cylindrical_velocity, gamma_m, proj_factor,                &
       !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                      &
-      !$omp device(sim%gpu_id)                                                                    
+      !$omp device(sim%gpu_id) nowait                                                                  
 #endif
       do j=1, alive_particle_count
         do k=1, nstep_particles/n_sort
@@ -518,8 +522,14 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
 #ifdef USE_GPU
       !$omp end target teams distribute parallel do
 
-      !$omp end target data
+      !$omp target update 
+      !$omp from(feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,  &
+      !$omp             particles_SoA%st, particles_SoA%i_elm)                   &
+      !$omp device(sim%gpu_id) nowait
 #endif
+    
+
+    !$omp taskwait
     
     !> End timing the sorting section
     end_time = MPI_WTIME()
