@@ -116,6 +116,8 @@ contains
 #else
       call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
+      !$omp taskwait
+      ! merge the feedback
       case default
       write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
       stop 1
@@ -362,6 +364,9 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     integer                       :: n_sort, s !< Multiple sorting
     real*8                        :: start_time, end_time, tot_time(3)
 
+    !> hybrid GPU-CPU
+    integer :: gpu_token
+
     if (sim%my_id .eq. 0) then
       write(*,*) 'INFO: REs evolution executed on     : GPU'
       write(*,*) 'INFO: kernel                        : evolve_REs_gpu_SoA'
@@ -432,10 +437,10 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         particles_SoA%st, particles_SoA%i_elm,                                            &
       !$omp         particles_SoA%weight, particles_SoA%q)                                            
 
-      !$omp target update to(feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,           &
-      !$omp         particles_SoA%st, particles_SoA%i_elm,                                            &
-      !$omp         particles_SoA%weight, particles_SoA%q)                                           &
-      !$omp nowait
+      !$omp target update to(feedback_rhs, particles_SoA%x, particles_SoA%p, &
+      !$omp         particles_SoA%p, particles_SoA%st, particles_SoA%i_elm,  &
+      !$omp         particles_SoA%weight, particles_SoA%q)                   &        
+      !$omp nowait depend(out:gpu_token)
 
       !$omp target teams distribute parallel do default(none)                  &
       !$omp shared(particles_SoA,                                              &
@@ -448,7 +453,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,              &
       !$omp         cylindrical_velocity, gamma_m, proj_factor,                &
       !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                      &
-      !$omp device(sim%gpu_id) nowait                                                                  
+      !$omp device(sim%gpu_id)                                                 &
+      !$omp nowait depend(inout:gpu_token)
 #endif
       do j=1, alive_particle_count
         do k=1, nstep_particles/n_sort
@@ -521,14 +527,14 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
 #ifdef USE_GPU
       !$omp end target teams distribute parallel do
 
-      !$omp target update 
-      !$omp from(feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,  &
-      !$omp             particles_SoA%st, particles_SoA%i_elm)                   &
-      !$omp device(sim%gpu_id) nowait
+      !$omp target update                                         &
+      !$omp from(feedback_rhs, particles_SoA%x, particles_SoA%p,  &
+      !$omp             particles_SoA%st, particles_SoA%i_elm)    &
+      !$omp device(sim%gpu_id)                                    &                                           
+      !$omp nowait depend(in:gpu_token)
 #endif
     
 
-    !$omp taskwait
     
     !> End timing the sorting section
     end_time = MPI_WTIME()
