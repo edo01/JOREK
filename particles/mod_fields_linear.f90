@@ -88,25 +88,25 @@ pure subroutine calc_EBpsiU_linear_gpu_enhanced(fields, time, i_elm, st, phi, E,
     iv = fields%element_list_SoA%vertex(i_elm,kv)
 
     do kf = 1, n_degrees
-      v  = dot_product(fields%node_list_SoA%values(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(kv,kf,i_elm), HZ)
+      v  = dot_product(fields%node_list_SoA%values(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(i_elm,kv,kf), HZ)
       P(1)   = P(1)   + v  * H(kf, kv)
       P_s(1) = P_s(1) + v  * H_s(kf, kv)
       P_t(1) = P_t(1) + v  * H_t(kf, kv)
 
-      vp     = dot_product(fields%node_list_SoA%values(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(kv,kf,i_elm), dHZ)
+      vp     = dot_product(fields%node_list_SoA%values(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(i_elm,kv,kf), dHZ)
       P_phi(1) = P_phi(1) + vp * H(kf, kv)
 
-      v  = dot_product(fields%node_list_SoA%values(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(kv,kf,i_elm), HZ)
+      v  = dot_product(fields%node_list_SoA%values(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(i_elm,kv,kf), HZ)
       P(2)   = P(2)   + v  * H(kf, kv)
       P_s(2) = P_s(2) + v  * H_s(kf, kv)
       P_t(2) = P_t(2) + v  * H_t(kf, kv)
 
-      vp     = dot_product(fields%node_list_SoA%values(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(kv,kf,i_elm), dHZ)
+      vp     = dot_product(fields%node_list_SoA%values(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(i_elm,kv,kf), dHZ)
       P_phi(2) = P_phi(2) + vp * H(kf, kv)
     enddo
 
-    xR(:,kv) = fields%node_list_SoA%x(1,:,1,iv) * fields%element_list_SoA%size(kv,:,i_elm)
-    xZ(:,kv) = fields%node_list_SoA%x(1,:,2,iv) * fields%element_list_SoA%size(kv,:,i_elm)
+    xR(:,kv) = fields%node_list_SoA%x(1,:,1,iv) * fields%element_list_SoA%size(i_elm,kv,:)
+    xZ(:,kv) = fields%node_list_SoA%x(1,:,2,iv) * fields%element_list_SoA%size(i_elm,kv,:)
   enddo
 
   R   = sum(xR*H);   R_s = sum(xR*H_s);   R_t = sum(xR*H_t)
@@ -120,20 +120,20 @@ pure subroutine calc_EBpsiU_linear_gpu_enhanced(fields, time, i_elm, st, phi, E,
       iv = fields%element_list_SoA%vertex(i_elm,kv)
 
       do kf = 1, n_degrees
-        v  = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(kv,kf,i_elm), HZ)
+        v  = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(i_elm,kv,kf), HZ)
         Pd(1)   = Pd(1)   + v  * H(kf, kv)
         Pd_s(1) = Pd_s(1) + v  * H_s(kf, kv)
         Pd_t(1) = Pd_t(1) + v  * H_t(kf, kv)
 
-        vp      = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(kv,kf,i_elm), dHZ)
+        vp      = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,1,iv) * fields%element_list_SoA%size(i_elm,kv,kf), dHZ)
         Pd_phi(1) = Pd_phi(1) + vp * H(kf, kv)
 
-        v  = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(kv,kf,i_elm), HZ)
+        v  = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(i_elm,kv,kf), HZ)
         Pd(2)   = Pd(2)   + v  * H(kf, kv)
         Pd_s(2) = Pd_s(2) + v  * H_s(kf, kv)
         Pd_t(2) = Pd_t(2) + v  * H_t(kf, kv)
 
-        vp      = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(kv,kf,i_elm), dHZ)
+        vp      = dot_product(fields%node_list_SoA%deltas(1:n_tor,kf,2,iv) * fields%element_list_SoA%size(i_elm,kv,kf), dHZ)
         Pd_phi(2) = Pd_phi(2) + vp * H(kf, kv)
       enddo
     enddo
@@ -250,7 +250,7 @@ pure subroutine calc_EBpsiU_linear_gpu(fields, time, i_elm, st, phi, E, B, psi, 
   ! Preload values and premultiply with sizes(:,kv)
   do kv = 1,n_vertex_max  ! 4 vertices
     iv = fields%element_list_SoA%vertex(i_elm,kv)
-    sizes(:) = fields%element_list_SoA%size(kv,:,i_elm)
+    sizes(:) = fields%element_list_SoA%size(i_elm,kv,:)
 
     ! running without deltas
     do i = 1, 2
@@ -301,7 +301,7 @@ pure subroutine calc_EBpsiU_linear_gpu(fields, time, i_elm, st, phi, E, B, psi, 
     ! Preload values and premultiply with sizes(:,kv)
     do kv = 1,n_vertex_max  ! 4 vertices
       iv = fields%element_list_SoA%vertex(i_elm,kv)
-      sizes(:) = fields%element_list_SoA%size(kv,:,i_elm)
+      sizes(:) = fields%element_list_SoA%size(i_elm,kv,:)
       do i = 1, 2
         do kf=1,n_degrees
           values(1:n_tor,kf,i,kv) = fields%node_list_SoA%deltas(1:n_tor,kf,i_var(i),iv) * sizes(kf)
