@@ -44,10 +44,11 @@ contains
     real*8, intent(in)                                        :: tstep_part_adj
     
     real*8,allocatable :: feedback_rhs(:,:,:,:,:)
-#ifdef USE_RHS_INV
+    
+    !> feedback rhs inverse for REs
     real*8,allocatable :: feedback_rhs_inv(:,:,:,:,:)
     integer :: n, m, i_elm, i_tor
-#endif
+
     type (type_node_list),         pointer :: feedback_nodelist
     type (type_element_list),      pointer :: feedback_element_list
     type (particle_group),         pointer :: part_group
@@ -76,9 +77,8 @@ contains
     feedback_element_list => jorek_feedback%element_list
     feedback_rhs       = 0.d0
 
-#ifdef USE_RHS_INV
+    !> allocate inverse feedback rhs
     allocate(feedback_rhs_inv(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
-#endif
 
     alive_particle_count = size(sim%groups(group_num)%particles,1)
 
@@ -108,11 +108,8 @@ contains
       call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, imp_q_idx)
       case ('rep')
 #ifdef USE_GPU
-#ifdef USE_RHS_INV
+#ifdef US
       call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj, alive_particle_count)
-#else
-      call evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, alive_particle_count)
-#endif
 #else
       call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
 #endif
@@ -135,7 +132,7 @@ contains
     call gpu_test(sim, group_num, feedback_rhs)
 #endif
 
-#ifdef USE_RHS_INV
+    ! ================================= RECONSTRUCT FEEDBACK RHS =======================================
     start_time = MPI_WTIME()
     do n=1,n_degrees
       do m=1,n_vertex_max
@@ -155,7 +152,6 @@ contains
     endif
 
     deallocate(feedback_rhs_inv) 
-#endif
 
     ! ================================= CONSTRUCT PROJECTION RHS =======================================
     !> enter gathered rhs into jorek_feedback
@@ -373,11 +369,9 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       write(*,*) 'INFO: number of timesteps           : ', nstep_particles
       write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8.d0/(1024*1024) , ' MB'
       write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
+      write(*,*) 'INFO: using feedback_rhs_inv'
 #ifdef USE_ORDERING
       write(*,*) 'INFO: using particle ordering'
-#endif
-#ifdef USE_RHS_INV
-      write(*,*) 'INFO: using feedback_rhs_inv'
 #endif
 #ifdef CALC_EBPSIU_ENHANCED
       write(*,*) 'INFO: using enhanced calc_EBpsiU'
@@ -494,7 +488,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
               proj_factor = HH(m,n) * fields%element_list_SoA%size(particles_SoA%i_elm(j),m,n) * particles_SoA%weight(j)
 
               do i_tor = 1,n_tor
-#ifdef USE_RHS_INV
                 !$omp atomic update
                 feedback_rhs(particles_SoA%i_elm(j),P_par_idx_kin,i_tor,m,n) =  feedback_rhs(particles_SoA%i_elm(j),P_par_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Ppar*proj_factor
                 !$omp end atomic
@@ -504,17 +497,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
                 !$omp atomic update
                 feedback_rhs(particles_SoA%i_elm(j),j_phi_idx_kin,i_tor,m,n) =  feedback_rhs(particles_SoA%i_elm(j),j_phi_idx_kin,i_tor,m,n) + HZ(i_tor)*v_jPhi*proj_factor
                 !$omp end atomic
-#else
-                !$omp atomic update
-                feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_par_idx_kin)  =  feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar*proj_factor
-                !$omp end atomic
-                !$omp atomic update
-                feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_perp_idx_kin) =  feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp*proj_factor
-                !$omp end atomic
-                !$omp atomic update
-                feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,j_Phi_idx_kin)  =  feedback_rhs(n,m,particles_SoA%i_elm(j),i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi*proj_factor
-                !$omp end atomic
-#endif
               enddo !< n_tor
             enddo !< n_vertex_max
           enddo !< degrees
