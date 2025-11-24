@@ -359,12 +359,12 @@ contains
     !> ATTENTION: this order of allocation follows the gpu implementation
     allocate(element_list_SoA%vertex(element_list%n_elements,n_vertex_max))
     allocate(element_list_SoA%neighbours(element_list%n_elements,n_vertex_max))
-    allocate(element_list_SoA%size(n_vertex_max,n_degrees,element_list%n_elements))
+    allocate(element_list_SoA%size(element_list%n_elements,n_vertex_max,n_degrees))
 
     do j = 1,element_list%n_elements
       element_list_SoA%vertex(j,:)     = element_list%element(j)%vertex(:)
       element_list_SoA%neighbours(j,:) = element_list%element(j)%neighbours(:)
-      element_list_SoA%size(:,:,j)     = element_list%element(j)%size(:,:)
+      element_list_SoA%size(j,:,:)     = element_list%element(j)%size(:,:)
     enddo
 
   end subroutine init_element_list_SoA

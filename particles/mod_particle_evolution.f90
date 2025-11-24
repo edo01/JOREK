@@ -481,8 +481,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
               
           do n=1,n_degrees
             do m=1,n_vertex_max
-              ! TODO: CHANGE IT WITH SOA
-              proj_factor = HH(m,n) * fields%element_list%element(particles_SoA%i_elm(j))%size(m,n) * particles_SoA%weight(j)
+              proj_factor = HH(m,n) * fields%element_list_SoA%size(particles_SoA%i_elm(j),m,n) * particles_SoA%weight(j)
 
               do i_tor = 1,n_tor
 #ifdef USE_RHS_INV

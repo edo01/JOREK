@@ -1333,7 +1333,7 @@ do kv = 1,n_vertex_max  ! 4 vertices
     do i_tor=1, n_coord_tor
       xx1 = node_list_SoA%x(i_tor,kf,1,iv)
       xx2 = node_list_SoA%x(i_tor,kf,2,iv)
-      ss  = element_list_SoA%size(kv,kf,i_elm)
+      ss  = element_list_SoA%size(i_elm,kv,kf)
 
       R    = R    + xx1 * ss * G(kv,kf)    * HZ_coord(i_tor)
       R_s  = R_s  + xx1 * ss * G_s(kv,kf)  * HZ_coord(i_tor)
