@@ -54,6 +54,13 @@ contains
     type (particle_group),         pointer :: part_group
     real*8 :: start_time, end_time, tot_time(3)
 
+#ifdef USE_GPU_HYBRID
+    !> hybrid GPU-CPU specific
+    integer             :: start_idx
+    real*8              :: percentage_particles_on_gpu
+    real*8, allocatable :: feedback_rhs_inv_hybrid(:,:,:,:,:)
+#endif
+
     integer :: alive_particle_count, j
 
     character(len=3) :: cs
@@ -79,6 +86,9 @@ contains
 
     !> allocate inverse feedback rhs
     allocate(feedback_rhs_inv(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
+#ifdef USE_GPU_HYBRID
+    allocate(feedback_rhs_inv_hybrid(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
+#endif
 
     alive_particle_count = size(sim%groups(group_num)%particles,1)
 
@@ -108,13 +118,29 @@ contains
       call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, imp_q_idx)
       case ('rep')
 #ifdef USE_GPU
-#ifdef US
+#ifdef USE_GPU_HYBRID
+      ! prepare data for GPU
+      percentage_particles_on_gpu = 97.d0 ! TODO: move to input file
+      alive_particle_count = int(real(size(sim%groups(group_num)%particles,1),8) * percentage_particles_on_gpu / 100.d0)
+      start_idx = alive_particle_count + 1
+
+      if (sim%my_id .eq. 0) then
+        write(*,*) 'INFO: Using hybrid GPU-CPU RE evolution'
+        write(*,*) 'INFO: Evolving ', alive_particle_count, ' particles on GPU'
+        write(*,*) 'INFO: Evolving ', size(sim%groups(group_num)%particles,1) - alive_particle_count, ' particles on CPU'
+      endif
+
       call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj, alive_particle_count)
-#else
-      call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
-#endif
+      call evolve_REs(sim, group_num, feedback_rhs_inv_hybrid, rng, tstep_part_adj, start_idx)
+
+      !> wait for GPU to finish
       !$omp taskwait
-      ! merge the feedback
+#else
+      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj, alive_particle_count)
+#endif
+#else
+      call evolve_REs(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj)
+#endif
       case default
       write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
       stop 1
@@ -132,26 +158,6 @@ contains
     call gpu_test(sim, group_num, feedback_rhs)
 #endif
 
-    ! ================================= RECONSTRUCT FEEDBACK RHS =======================================
-    start_time = MPI_WTIME()
-    do n=1,n_degrees
-      do m=1,n_vertex_max
-        do i_elm=1,sim%fields%element_list%n_elements
-          do i_tor=1,n_tor
-            feedback_rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv(i_elm,P_par_idx_kin,i_tor,m,n)
-            feedback_rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv(i_elm,P_perp_idx_kin,i_tor,m,n)
-            feedback_rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv(i_elm,j_Phi_idx_kin,i_tor,m,n)
-          enddo
-        enddo
-      enddo
-    enddo
-    end_time = MPI_WTIME()
-    tot_time = mpi_minmeanmax(end_time-start_time)
-    if (sim%my_id .eq. 0) then
-      write(*,"(A,3f10.3,A)") , "Time taken for feedback_rhs reconstruction finished in (min/mean/max): ", tot_time, " seconds"
-    endif
-
-    deallocate(feedback_rhs_inv) 
 
     ! ================================= CONSTRUCT PROJECTION RHS =======================================
     !> enter gathered rhs into jorek_feedback
@@ -176,20 +182,43 @@ contains
 
     !> rep specific projections
     if (part_group%coupling_scheme == 'rep') then
-      feedback_rhs = feedback_rhs / real(nstep_particles,8) 
-      jorek_feedback%rhs(:,:,:,:,P_par_idx_kin) = jorek_feedback%rhs(:,:,:,:,P_par_idx_kin) + feedback_rhs(:,:,:,:,P_par_idx_kin) !* TWOPI
-      jorek_feedback%rhs(:,:,:,:,P_perp_idx_kin) = jorek_feedback%rhs(:,:,:,:,P_perp_idx_kin) + feedback_rhs(:,:,:,:,P_perp_idx_kin) !* TWOPI
-      jorek_feedback%rhs(:,:,:,:,j_Phi_idx_kin) = jorek_feedback%rhs(:,:,:,:,j_Phi_idx_kin) + feedback_rhs(:,:,:,:,j_Phi_idx_kin) !* TWOPI
+      feedback_rhs_inv = feedback_rhs_inv / real(nstep_particles,8) 
+#ifdef USE_GPU_HYBRID
+      feedback_rhs_inv_hybrid = feedback_rhs_inv_hybrid / real(nstep_particles,8)
+#endif
+
+      do n=1,n_degrees
+        do m=1,n_vertex_max
+          do i_elm=1,sim%fields%element_list%n_elements
+            do i_tor=1,n_tor
+#ifdef USE_GPU_HYBRID
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv(i_elm,P_par_idx_kin,i_tor,m,n) + feedback_rhs_inv_hybrid(i_elm,P_par_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv(i_elm,P_perp_idx_kin,i_tor,m,n) + feedback_rhs_inv_hybrid(i_elm,P_perp_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv(i_elm,j_Phi_idx_kin,i_tor,m,n) + feedback_rhs_inv_hybrid(i_elm,j_Phi_idx_kin,i_tor,m,n)
+#else
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv(i_elm,P_par_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv(i_elm,P_perp_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv(i_elm,j_Phi_idx_kin,i_tor,m,n)
+#endif
+            enddo
+          enddo
+        enddo
+      enddo
     endif
 
     jorek_feedback%rhs_gather_time = 0.d0
+
     deallocate(feedback_rhs)
+    deallocate(feedback_rhs_inv) 
+#ifdef USE_GPU_HYBRID
+    deallocate(feedback_rhs_inv_hybrid)
+#endif
     
     if (sim%my_id .eq. 0) write(*,*) '---------- Finished evolving group: ', part_group%id, " ----------"
     
   end subroutine evolve_particle_group
 
-  subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj)
+  subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj,start_idx)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
@@ -204,6 +233,7 @@ contains
     type(count_action)                                        :: counter
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8, intent(in)                                        :: tstep_part_adj
+    integer, optional                                         :: start_idx
     
     character(len=3) :: cs
 
@@ -223,6 +253,10 @@ contains
       write(*,*) 'INFO: number of timesteps           : ', nstep_particles
       write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
+
+    if (.not. present(start_idx)) then
+      start_idx = 1
+    end if
 
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * MASS_PROTON * n_norm                  ! rho_SI = rho_norm * rho
@@ -253,10 +287,10 @@ contains
       !$omp B_norm2, proj_factor, v_Ppar, v_Pperp, v_jPhi, v_n, i_tor, ifail, &
       !$omp cylindrical_velocity, cylindrical_momentum, v_par, v_perp, gamma_m ) &
       !$omp shared (particles, nstep_particles, tstep_part_adj, sim, group_num, rho_norm, &
-      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) &
+      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin, start_idx) &
       !$omp reduction(+:feedback_rhs)
   
-      do j=1,size(particles,1)
+      do j=start_idx,size(particles,1)
         do k=1,nstep_particles
           if (j .eq. 0) write(*,*) "k = ", k
           if (particles(j)%i_elm .le. 0) exit
@@ -292,15 +326,9 @@ contains
               v_n     = proj_factor
 
               do i_tor = 1,n_tor
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin) + HZ(i_tor)*v_Ppar
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_perp_idx_kin) + HZ(i_tor)*v_Pperp
-                feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) = feedback_rhs(n,m,particles(j)%i_elm,i_tor,j_Phi_idx_kin) + HZ(i_tor)*v_jPhi
-
-                !> inverse implementation from Hannes (TODO: reverse data structure of the projections generally)
-                ! feedback_rhs_inv(P_par_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(P_par_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_Ppar
-                ! feedback_rhs_inv(P_perp_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(P_perp_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_Pperp
-                ! feedback_rhs_inv(j_Phi_idx_kin,i_tor,particles(j)%i_elm,m,n) = feedback_rhs_inv(j_Phi_idx_kin,i_tor,particles(j)%i_elm,m,n) + HZ(i_tor)*v_jPhi
-
+                feedback_rhs(particles(j)%i_elm,P_par_idx_kin,i_tor,m,n) = feedback_rhs(particles(j)%i_elm,P_par_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Ppar
+                feedback_rhs(particles(j)%i_elm,P_perp_idx_kin,i_tor,m,n) = feedback_rhs(particles(j)%i_elm,P_perp_idx_kin,i_tor,m,n) + HZ(i_tor)*v_Pperp
+                feedback_rhs(particles(j)%i_elm,j_Phi_idx_kin,i_tor,m,n) = feedback_rhs(particles(j)%i_elm,j_Phi_idx_kin,i_tor,m,n) + HZ(i_tor)*v_jPhi
               enddo
             enddo
           enddo
@@ -338,8 +366,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     type(count_action)                                        :: counter
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8, intent(in)                                        :: tstep_part_adj
-    integer, optional, intent(in)                             :: alive_particle_count !< last particle alive index, used to avoid evolving dead particles
-
+    integer, intent(in)                                       :: alive_particle_count !< last particle alive index, used to avoid evolving dead particles
     
     character(len=3) :: cs !> TODO: not used
     integer :: particle_lost  
