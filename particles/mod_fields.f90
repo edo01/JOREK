@@ -14,10 +14,8 @@ module mod_fields
   type, abstract :: fields_base
     type(type_node_list),pointer         :: node_list    => null() !< Current node list
     type(type_element_list), pointer     :: element_list => null() !< Current element list
-#ifdef USE_GPU
     type(type_node_list_SoA)                  :: node_list_SoA  !< SoA version of the node list
     type(type_element_list_SoA)               :: element_list_SoA !< SoA version of the element list
-#endif
     logical                              :: static=.false. !< if true do not time interpolate
     logical                              :: flag_zero_dpsidt=.false. !< if true, P_time(1) = dpsi/dt = 0
   contains
