@@ -266,16 +266,6 @@ contains
     select type (particles => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
 
-      ! FIX initialization bug
-      do j=1,size(particles,1)
-        if(particles(j)%weight .eq. 0.0) then
-              particles(j)%weight = 1.0
-        endif
-        if(particles(j)%q .eq. 0.0) then
-              particles(j)%q = -1.0 !> default charge of the runaway electrons
-        endif
-      enddo
-
       if(use_manual_random_seed) then
         !$ call omp_set_schedule(omp_sched_static,10)
       else
