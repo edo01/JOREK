@@ -448,12 +448,18 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         particles_SoA%st, particles_SoA%i_elm,                                            &
       !$omp         particles_SoA%weight, particles_SoA%q)                                            
 
-      !$omp target update to(feedback_rhs, particles_SoA%x, particles_SoA%p, &
+      !$omp target                                                           &
+#ifdef USE_GPU_HYBRID        
+      !$omp nowait depend(out:gpu_token)                                     &
+#endif
+      !$omp update to(feedback_rhs, particles_SoA%x, particles_SoA%p,        &
       !$omp         particles_SoA%p, particles_SoA%st, particles_SoA%i_elm,  &
-      !$omp         particles_SoA%weight, particles_SoA%q)                   &        
-      !$omp nowait depend(out:gpu_token)
+      !$omp         particles_SoA%weight, particles_SoA%q)                   
 
       !$omp target teams distribute parallel do default(none)                  &
+#ifdef USE_GPU_HYBRID
+      !$omp nowait depend(inout:gpu_token)                                     &
+#endif
       !$omp shared(particles_SoA,                                              &
       !$omp        fields,  feedback_rhs,                                      &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,      & 
@@ -464,8 +470,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,              &
       !$omp         cylindrical_velocity, gamma_m, proj_factor,                &
       !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                      &
-      !$omp device(sim%gpu_id)                                                 &
-      !$omp nowait depend(inout:gpu_token)
+      !$omp device(sim%gpu_id)
+
 #endif
       do j=1, alive_particle_count
         do k=1, nstep_particles/n_sort
@@ -527,10 +533,12 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp end target teams distribute parallel do
 
       !$omp target update                                         &
+#ifdef USE_GPU_HYBRID                                       
+      !$omp nowait depend(in:gpu_token)                           &    
+#endif
       !$omp from(feedback_rhs, particles_SoA%x, particles_SoA%p,  &
       !$omp             particles_SoA%st, particles_SoA%i_elm)    &
-      !$omp device(sim%gpu_id)                                    &                                           
-      !$omp nowait depend(in:gpu_token)
+      !$omp device(sim%gpu_id)    
 #endif
     
 
