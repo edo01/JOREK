@@ -218,7 +218,7 @@ contains
     
   end subroutine evolve_particle_group
 
-  subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj,start_idx)
+  subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, start_idx_param)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
@@ -233,9 +233,10 @@ contains
     type(count_action)                                        :: counter
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8, intent(in)                                        :: tstep_part_adj
-    integer, optional                                         :: start_idx
+    integer, optional                                         :: start_idx_param
     
     character(len=3) :: cs
+    integer :: start_idx
 
     !> RE specific variables
     real*8    :: n_norm, rho_norm
@@ -254,8 +255,10 @@ contains
       write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8 , ' Bytes'
     endif
 
-    if (.not. present(start_idx)) then
+    if (.not. present(start_idx_param)) then
       start_idx = 1
+    else
+      start_idx = start_idx_param
     end if
 
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
