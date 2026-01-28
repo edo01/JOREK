@@ -46,7 +46,7 @@ contains
     real*8,allocatable :: feedback_rhs(:,:,:,:,:)
     
     !> feedback rhs inverse for REs
-    real*8,allocatable :: feedback_rhs_inv(:,:,:,:,:)
+    real*8,allocatable :: feedback_rhs_inv_CPU(:,:,:,:,:)
     integer :: n, m, i_elm, i_tor
 
     type (type_node_list),         pointer :: feedback_nodelist
@@ -54,11 +54,11 @@ contains
     type (particle_group),         pointer :: part_group
     real*8 :: start_time, end_time, tot_time(3)
 
-#ifdef USE_GPU_HYBRID
+#ifdef USE_GPU
     !> hybrid GPU-CPU specific
     integer             :: start_idx
     real*8              :: percentage_particles_on_gpu
-    real*8, allocatable :: feedback_rhs_inv_hybrid(:,:,:,:,:)
+    real*8, allocatable :: feedback_rhs_inv_GPU(:,:,:,:,:)
 #endif
 
     integer :: alive_particle_count, j
@@ -84,10 +84,12 @@ contains
     feedback_element_list => jorek_feedback%element_list
     feedback_rhs       = 0.d0
 
-    !> allocate inverse feedback rhs
-    allocate(feedback_rhs_inv(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
-#ifdef USE_GPU_HYBRID
-    allocate(feedback_rhs_inv_hybrid(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
+    !> TODO: the presence of these 3 data structures is clearly redundant. We should refactor this at some point and convert
+    !        all the feedback rhs to use only one of these structures
+    allocate(feedback_rhs_inv_CPU(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
+#ifdef USE_GPU
+    !> TODO: When we use the GPU for all the particles, this allocation is not needed and we are wasting memory
+    allocate(feedback_rhs_inv_GPU(sim%fields%element_list%n_elements, 8, n_tor, n_vertex_max, n_order+1), source=0.d0)
 #endif
 
     alive_particle_count = size(sim%groups(group_num)%particles,1)
@@ -118,9 +120,8 @@ contains
       call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, imp_q_idx)
       case ('rep')
 #ifdef USE_GPU
-#ifdef USE_GPU_HYBRID
       ! prepare data for GPU
-      percentage_particles_on_gpu = 97.d0 ! TODO: move to input file
+      percentage_particles_on_gpu = 100.d0 ! TODO: move to input file
       alive_particle_count = int(real(size(sim%groups(group_num)%particles,1),8) * percentage_particles_on_gpu / 100.d0)
       start_idx = alive_particle_count + 1
 
@@ -130,16 +131,15 @@ contains
         write(*,*) 'INFO: Evolving ', size(sim%groups(group_num)%particles,1) - alive_particle_count, ' particles on CPU'
       endif
 
-      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj, alive_particle_count)
-      call evolve_REs(sim, group_num, feedback_rhs_inv_hybrid, rng, tstep_part_adj, start_idx)
+      ! GPU evolution
+      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv_GPU, rng, tstep_part_adj, alive_particle_count)
+      ! CPU evolution
+      call evolve_REs(sim, group_num, feedback_rhs_inv_CPU, rng, tstep_part_adj, start_idx)
 
       !> wait for GPU to finish
       !$omp taskwait
 #else
-      call evolve_REs_gpu(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj, alive_particle_count)
-#endif
-#else
-      call evolve_REs(sim, group_num, feedback_rhs_inv, rng, tstep_part_adj)
+      call evolve_REs(sim, group_num, feedback_rhs_inv_CPU, rng, tstep_part_adj)
 #endif
       case default
       write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
@@ -182,23 +182,23 @@ contains
 
     !> rep specific projections
     if (part_group%coupling_scheme == 'rep') then
-      feedback_rhs_inv = feedback_rhs_inv / real(nstep_particles,8) 
-#ifdef USE_GPU_HYBRID
-      feedback_rhs_inv_hybrid = feedback_rhs_inv_hybrid / real(nstep_particles,8)
+      feedback_rhs_inv_CPU = feedback_rhs_inv_CPU / real(nstep_particles,8) 
+#ifdef USE_GPU
+      feedback_rhs_inv_GPU = feedback_rhs_inv_GPU / real(nstep_particles,8)
 #endif
 
       do n=1,n_degrees
         do m=1,n_vertex_max
           do i_elm=1,sim%fields%element_list%n_elements
             do i_tor=1,n_tor
-#ifdef USE_GPU_HYBRID
-              jorek_feedback%rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv(i_elm,P_par_idx_kin,i_tor,m,n) + feedback_rhs_inv_hybrid(i_elm,P_par_idx_kin,i_tor,m,n)
-              jorek_feedback%rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv(i_elm,P_perp_idx_kin,i_tor,m,n) + feedback_rhs_inv_hybrid(i_elm,P_perp_idx_kin,i_tor,m,n)
-              jorek_feedback%rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv(i_elm,j_Phi_idx_kin,i_tor,m,n) + feedback_rhs_inv_hybrid(i_elm,j_Phi_idx_kin,i_tor,m,n)
+#ifdef USE_GPU
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv_CPU(i_elm,P_par_idx_kin,i_tor,m,n) + feedback_rhs_inv_GPU(i_elm,P_par_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv_CPU(i_elm,P_perp_idx_kin,i_tor,m,n) + feedback_rhs_inv_GPU(i_elm,P_perp_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv_CPU(i_elm,j_Phi_idx_kin,i_tor,m,n) + feedback_rhs_inv_GPU(i_elm,j_Phi_idx_kin,i_tor,m,n)
 #else
-              jorek_feedback%rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv(i_elm,P_par_idx_kin,i_tor,m,n)
-              jorek_feedback%rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv(i_elm,P_perp_idx_kin,i_tor,m,n)
-              jorek_feedback%rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv(i_elm,j_Phi_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_par_idx_kin)  = feedback_rhs_inv_CPU(i_elm,P_par_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,P_perp_idx_kin) = feedback_rhs_inv_CPU(i_elm,P_perp_idx_kin,i_tor,m,n)
+              jorek_feedback%rhs(n,m,i_elm,i_tor,j_Phi_idx_kin)  = feedback_rhs_inv_CPU(i_elm,j_Phi_idx_kin,i_tor,m,n)
 #endif
             enddo
           enddo
@@ -209,9 +209,9 @@ contains
     jorek_feedback%rhs_gather_time = 0.d0
 
     deallocate(feedback_rhs)
-    deallocate(feedback_rhs_inv) 
-#ifdef USE_GPU_HYBRID
-    deallocate(feedback_rhs_inv_hybrid)
+    deallocate(feedback_rhs_inv_CPU) 
+#ifdef USE_GPU
+    deallocate(feedback_rhs_inv_GPU)
 #endif
     
     if (sim%my_id .eq. 0) write(*,*) '---------- Finished evolving group: ', part_group%id, " ----------"
@@ -285,7 +285,7 @@ contains
   
       do j=start_idx,size(particles,1)
         do k=1,nstep_particles
-          if (j .eq. 0) write(*,*) "k = ", k
+if (j .eq. 0) write(*,*) "k = ", k
           if (particles(j)%i_elm .le. 0) exit
   
           call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
@@ -452,17 +452,12 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         particles_SoA%weight, particles_SoA%q)                                            
 
       !$omp target                                                           &
-#ifdef USE_GPU_HYBRID        
-      !$omp nowait depend(out:gpu_token)                                     &
-#endif
       !$omp update to(feedback_rhs, particles_SoA%x, particles_SoA%p,        &
       !$omp         particles_SoA%p, particles_SoA%st, particles_SoA%i_elm,  &
-      !$omp         particles_SoA%weight, particles_SoA%q)                   
+      !$omp         particles_SoA%weight, particles_SoA%q)                   &
+      !$omp nowait depend(out:gpu_token)
 
       !$omp target teams distribute parallel do default(none)                  &
-#ifdef USE_GPU_HYBRID
-      !$omp nowait depend(inout:gpu_token)                                     &
-#endif
       !$omp shared(particles_SoA,                                              &
       !$omp        fields,  feedback_rhs,                                      &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,      & 
@@ -473,7 +468,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,              &
       !$omp         cylindrical_velocity, gamma_m, proj_factor,                &
       !$omp         v_Ppar, v_Pperp, v_jPhi, m, n, i_tor)                      &
-      !$omp device(sim%gpu_id)
+      !$omp device(sim%gpu_id)                                                 &
+      !$omp nowait depend(inout:gpu_token)
 
 #endif
       do j=1, alive_particle_count
@@ -536,12 +532,10 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp end target teams distribute parallel do
 
       !$omp target update                                         &
-#ifdef USE_GPU_HYBRID                                       
-      !$omp nowait depend(in:gpu_token)                           &    
-#endif
       !$omp from(feedback_rhs, particles_SoA%x, particles_SoA%p,  &
       !$omp             particles_SoA%st, particles_SoA%i_elm)    &
-      !$omp device(sim%gpu_id)    
+      !$omp device(sim%gpu_id)                                    &
+      !$omp nowait depend(in:gpu_token)    
 #endif
     
 
