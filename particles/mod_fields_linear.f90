@@ -46,7 +46,7 @@ contains
 
 pure subroutine calc_EBpsiU_linear_gpu_enhanced(fields, time, i_elm, st, phi, E, B, psi, U)
   use phys_module,        only: F0, central_mass, central_density
-  use constants,          only: mu_zero, mass_proton
+  use constants,          only: mu_zero, ATOMIC_MASS_UNIT
   use mod_basisfunctions, only: basisfunctions_T
   use mod_interp,         only: sincosperiod_moivre
 
@@ -75,7 +75,7 @@ pure subroutine calc_EBpsiU_linear_gpu_enhanced(fields, time, i_elm, st, phi, E,
 #endif
 
   ! JOREK normalization factor
-  t_norm = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20)
+  t_norm = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
 
   P      = 0.d0;  P_s   = 0.d0;  P_t   = 0.d0;  P_phi  = 0.d0
   P_time = 0.d0
@@ -184,7 +184,7 @@ end subroutine calc_EBpsiU_linear_gpu_enhanced
 !> in the jorek element `i_elm` at `st`.
 pure subroutine calc_EBpsiU_linear_gpu(fields, time, i_elm, st, phi, E, B, psi, U)
   use phys_module,        only: F0, central_mass, central_density
-  use constants,          only: mu_zero, mass_proton
+  use constants,          only: mu_zero, ATOMIC_MASS_UNIT
   ! inline
   use mod_linear,         only: linear_interp_differentials
   use mod_linear,         only: linear_interp_differentials_dt
@@ -227,7 +227,7 @@ pure subroutine calc_EBpsiU_linear_gpu(fields, time, i_elm, st, phi, E, B, psi, 
   !$omp declare target 
 #endif
 
-  t_norm  = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
+  t_norm  = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
 
   ! Interpolate the fields to get psi and U at the current position (and the
   ! changes u_n - u(n-1))
@@ -385,7 +385,7 @@ end subroutine calc_EBpsiU_linear_gpu
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
   use mod_interp
-  use constants, only: mu_zero, mass_proton
+  use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep, central_mass, central_density
   use mod_linear, only: linear_interp_differentials
   use mod_linear, only: linear_interp_differentials_dt
@@ -402,7 +402,7 @@ pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, 
   real*8                 :: t_jorek
   
   ! JOREK time step in seconds
-  t_jorek = tstep*sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20)
+  t_jorek = tstep*sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
 
   P_time = 0.d0
   
@@ -457,7 +457,7 @@ pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi, &
   P_ttime,R,R_s,R_t,R_ss,R_st,R_tt,Z,Z_s,Z_t,Z_ss,Z_st,Z_tt)
   !> load module and functions
   use mod_interp
-  use constants, only: mu_zero,mass_proton
+  use constants, only: mu_zero,atomic_mass_unit
   use phys_module, only: tstep,central_mass,central_density
   use mod_linear, only: linear_interp_differentials
   use mod_linear, only: linear_interp_differentials_dt
@@ -483,7 +483,7 @@ pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi, &
   real(kind=8), dimension(n_v) :: dP_sphi, dP_tphi, dP_phiphi
   
   ! JOREK time step in seconds
-  t_jorek = tstep*sqrt(mu_zero*central_density*mass_proton*central_mass*1.d20)
+  t_jorek = tstep*sqrt(mu_zero*central_density*ATOMIC_MASS_UNIT*central_mass*1.d20)
 
   P_time = 0.d0
   P_stime = 0.d0
@@ -530,7 +530,7 @@ end subroutine do_interp_PRZ_2
 !> Interpolate a variable at a specific position (with phi), with first derivatives only, including phi derivatives
 pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
   use mod_interp
-  use constants, only: mu_zero, mass_proton
+  use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep, central_mass, central_density
   use mod_linear, only: linear_interp_differentials
   use mod_linear, only: linear_interp_differentials_dt
@@ -547,7 +547,7 @@ pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s,
   real*8                 :: t_jorek
   
   ! JOREK time step in seconds
-  t_jorek = tstep*sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20)
+  t_jorek = tstep*sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
 
   P_time = 0.d0
   
@@ -610,7 +610,7 @@ function last_file_before_time(time) result(file_number)
   real*8 :: t_norm, t_lower, t_guess, t_upper
 
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
-  t_norm = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
+  t_norm = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
   if (my_id .eq. 0) then
     write(*,*) "Looking for jorek restart file just before time ", time
 
@@ -705,7 +705,7 @@ subroutine do_read(this, sim, ev)
   logical :: file_exists, next_file_found
 
   real*8 :: t_norm
-  t_norm = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
+  t_norm = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
 
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
 

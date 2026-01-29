@@ -21,6 +21,7 @@ type :: particle_group
   character(len=3)   :: coupling_scheme                            !< coupling scheme to use for the group
   real*8             :: n_particles                                !< number of super/marker particles in group
   character(len=3)   :: id                                         !< unique identifier for the group (mainly used when restarting)
+  real*8             :: average_weight = -1.d0                     !< average weight of all particles in the group (preset value negative to avoid killing of particles in first instance)
  
   ! ================ for neutrals and impurities =============
   logical            :: use_kin_ionisation       !< switch on ionisation for group         
@@ -30,14 +31,13 @@ type :: particle_group
   ! --- neutrals only
   logical            :: use_kin_cx               !< switch on charge-exchange for group  
   logical            :: use_kin_recombination    !< switch on recombination for group       
+  logical            :: use_kin_neutral_coll     !< switch on neutral self-collisions for group       
 
   ! --- impurities only
-  logical            :: use_kin_bg_collisions    !< switch only collisions with the background plasma
+  logical            :: use_kin_bg_collisions    !< switch on collisions with the background plasma
+  character(len=9)   :: kin_bg_coll_type         !< method to calculate heat flux in kin_bg_collision
+  real*8             :: homma2020_alpha          !< flux limiting factor alpha for Homma2020 heat flux
   integer            :: ics_group_idx            !< internal index given to this specific impurities group
-
-  ! ==================== for runaway electrons =================
-  real*8             :: av_weight                !< average weight of each super particle in the group
-  integer            :: q                        !< charge of each runaway electron super particle
 
   class(particle_base), dimension(:), allocatable :: particles     !< Array of structures containing the particles in the group
   class(particle_SoA_base), pointer               :: particles_SoA !< Structure of arrays version of the particles in the group
@@ -93,31 +93,45 @@ subroutine configure_particle_groups(sim)
 
     ! === ncs and ics options
     if (sim%groups(i)%coupling_scheme == 'ncs' .or. sim%groups(i)%coupling_scheme == 'ics') then
-        sim%groups(i)%use_kin_ionisation     =  config%use_kin_ionisation          
-        sim%groups(i)%use_kin_puffing        =  config%use_kin_puffing        
-        sim%groups(i)%use_kin_radiation      =  config%use_kin_radiation 
+      sim%groups(i)%use_kin_ionisation     =  config%use_kin_ionisation          
+      sim%groups(i)%use_kin_puffing        =  config%use_kin_puffing        
+      sim%groups(i)%use_kin_radiation      =  config%use_kin_radiation 
 
       ! --- ncs only
       sim%groups(i)%use_kin_cx             =  config%use_kin_cx
       sim%groups(i)%use_kin_recombination  =  config%use_kin_recombination         
+      sim%groups(i)%use_kin_neutral_coll   =  config%use_kin_neutral_coll
 
       ! --- ics only
       sim%groups(i)%use_kin_bg_collisions  =  config%use_kin_bg_collisions
+      sim%groups(i)%kin_bg_coll_type       =  config%kin_bg_coll_type
+      sim%groups(i)%homma2020_alpha        =  config%homma2020_alpha
       sim%groups(i)%ics_group_idx          =  config%ics_group_idx
-      
+    
       if (len_trim(config%atom_data_suffix) > 0) then
         sim%groups(i)%ad =  read_adf11(sim%my_id, trim(part_group_configs(i)%atom_data_suffix))
       else
         if (trim(config%coupling_scheme) == 'ncs') write(*,*) "WARNING: No atom_data_suffix set for particle group ", i, "."
       endif
-    endif
 
-    ! === rep options
-    if (sim%groups(i)%coupling_scheme == 'rep') then
-      sim%groups(i)%av_weight  =  config%num_re / config%n_particles
-      sim%groups(i)%q          =  -1 !< default charge of the runaway electrons
-    endif
 
+      if (sim%groups(i)%use_kin_bg_collisions) then
+        if ((sim%groups(i)%kin_bg_coll_type /= 'Homma2013') .and. (sim%groups(i)%kin_bg_coll_type /= 'Homma2020')) then
+          write(*,*) 'ERROR: Wrong input kin_bg_coll_type=', trim(sim%groups(i)%kin_bg_coll_type), &
+                  ' please choose either Homma2013 or Homma2020!'
+          stop
+        endif
+        if (sim%groups(i)%kin_bg_coll_type == 'Homma2020') then
+          if (sim%groups(i)%homma2020_alpha .le. 0.d0) then
+            write(*,*) 'ERROR: Input parameter homma2020_alpha cannot be 0 or less!'
+            stop
+          endif
+          if ((sim%groups(i)%homma2020_alpha < 0.3d0) .or. (sim%groups(i)%homma2020_alpha > 2.d0)) then
+            write(*,*) 'WARNING: Input parameter homma2020_alpha outside of recommended range of 0.3-2!'
+          endif
+        endif
+      endif
+    endif       !> if ncs or ics
   enddo 
 
 end subroutine configure_particle_groups
@@ -218,11 +232,11 @@ end subroutine
 !>   sim: (particle_sim) the particle simulation
 subroutine set_t_norm(sim)
   use phys_module, only: central_mass, central_density
-  use constants, only: MU_ZERO, MASS_PROTON
+  use constants, only: MU_ZERO, ATOMIC_MASS_UNIT
   implicit none
   ! input-outputs
   class(particle_sim), intent(inout) :: sim
-  sim%t_norm = sqrt(MU_ZERO * central_mass * MASS_PROTON * central_density * 1.d20)
+  sim%t_norm = sqrt(MU_ZERO * central_mass * ATOMIC_MASS_UNIT * central_density * 1.d20)
 end subroutine set_t_norm
 
 !> this function returns the size of the particle group

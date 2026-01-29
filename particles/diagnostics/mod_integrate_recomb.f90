@@ -4,7 +4,7 @@ implicit none
 contains
 
 #include "corr_neg_include.f90"
-subroutine integrate_recombination(my_id ,n_mpi, rec_rate_local, rec_v_R, rec_v_Z, rec_v_phi,volume_check,energy_neutrals, energy_radiation )
+subroutine integrate_recombination(my_id ,n_mpi, rec_rate_local, rec_v_R, rec_v_Z, rec_v_phi,volume_check, energy_neutrals, energy_radiation)
 !---------------------------------------------------------------
 !
 !---------------------------------------------------------------
@@ -26,8 +26,8 @@ type (type_element)      :: element
 type (type_node)         :: nodes(n_vertex_max)
 
 integer    :: n_mpi, my_id
-real*8, dimension(:), allocatable, intent(out) :: rec_rate_local , rec_v_R, rec_v_Z, rec_v_phi 
-real*8, dimension(:), allocatable, optional, intent(out) :: volume_check,energy_neutrals, energy_radiation  
+real*8, dimension(:,:), allocatable, intent(out) :: rec_rate_local , rec_v_R, rec_v_Z, rec_v_phi 
+real*8, dimension(:,:), allocatable, optional, intent(out) :: volume_check, energy_neutrals, energy_radiation    
 
 real*8     :: x_g(n_gauss,n_gauss),        x_s(n_gauss,n_gauss),        x_t(n_gauss,n_gauss)
 real*8     :: y_g(n_gauss,n_gauss),        y_s(n_gauss,n_gauss),        y_t(n_gauss,n_gauss)
@@ -46,7 +46,7 @@ real*8     :: T0_corr, r0_corr
 real*8  :: Sion_T , dSion_dT           ! Normalized ionization coefficient and its temperature derivative
 real*8  :: Srec_T , dSrec_dT           ! Normalized recombination coefficient and its temperature derivative
 real*8  :: LradDcont_T, dLradDcont_dT 
-real*8  :: LradDcont_corr, dLradDcont_dT_corr 
+real*8  :: LradDcont_corr, dLradDcont_dT_corr
 
 !real*8     :: Sum_rec(n_gauss,n_gauss)
 integer    :: missing, loc_rec_elms
@@ -61,55 +61,60 @@ missing = mod(n_elements,n_mpi) !< tells us if n_elements can be evenly shared o
 !> give all MPI processes the same amount of elements.
 !> distribute the "missing" elements over the first MPI processes until we have all elements covered.
 do i=1,n_mpi 
-    local_rec_elements(i) = floor(n_elements/real(n_mpi,8))
-    if (missing .gt. 0) then
-        missing = missing - 1
-        local_rec_elements(i) = local_rec_elements(i) +1	
-	endif
+  local_rec_elements(i) = floor(n_elements/real(n_mpi,8))
+  if (missing .gt. 0) then
+      missing = missing - 1
+      local_rec_elements(i) = local_rec_elements(i) +1  
+  endif
 enddo !n_mpi
 !write(*,*) "length local rec list", local_rec_elements(my_id+1)
 
 
 !if not allocated, allocate rec_variables of size (n_elements)
 if(.not. allocated(rec_rate_local)) then
-    allocate(rec_rate_local(local_rec_elements(my_id+1)  )) !< local_rec_elements bcause it's local
-	allocate(rec_v_R(local_rec_elements(my_id+1)    ))
-	allocate(rec_v_Z(local_rec_elements(my_id+1)    ))
-	allocate(rec_v_phi(local_rec_elements(my_id+1)  ))
+  allocate(rec_rate_local(local_rec_elements(my_id+1), n_plane  )) !< local_rec_elements bcause it's local
+	allocate(rec_v_R(local_rec_elements(my_id+1), n_plane    ))
+	allocate(rec_v_Z(local_rec_elements(my_id+1), n_plane    ))
+	allocate(rec_v_phi(local_rec_elements(my_id+1), n_plane  ))
 	
-	allocate(volume_check(local_rec_elements(my_id+1)))
-	allocate(energy_neutrals(local_rec_elements(my_id+1)))
-	allocate(energy_radiation(local_rec_elements(my_id+1)))  
+	allocate(volume_check(local_rec_elements(my_id+1), n_plane))
+	allocate(energy_neutrals(local_rec_elements(my_id+1), n_plane))
+	allocate(energy_radiation(local_rec_elements(my_id+1), n_plane))  
 endif
 
 !> can now be done local?
-rec_rate_local(:)   = 0.d0
+rec_rate_local(:,:)   = 0.d0
 !> momentum density in R,Z, phi direction. rho_rec * v
-rec_v_R(:)          = 0.d0
-rec_v_Z(:)          = 0.d0
-rec_v_phi(:)        = 0.d0
+rec_v_R(:,:)          = 0.d0
+rec_v_Z(:,:)          = 0.d0
+rec_v_phi(:,:)        = 0.d0
 !> volume check. 
-volume_check(:)     = 0.d0
-energy_neutrals(:)  = 0.d0
-energy_radiation(:) = 0.d0
+volume_check(:,:)     = 0.d0
+energy_neutrals(:,:)  = 0.d0
+energy_radiation(:,:) = 0.d0
 
-delta_phi     = 2.d0 * PI / float(n_plane) / float(n_period)
+delta_phi     = TWOPI / real(n_plane,8) / real(n_period,8)
 !HZ_p,n_plane,n_gauss,n_order,n_vertex_max,TWOPI
-!$omp parallel do default(none)                                              &
+!$omp parallel do default(none)                                           &
 !$omp schedule(static, 100)                                               &
-!$omp   shared(local_rec_elements,my_id,n_mpi, volume_check,energy_neutrals, energy_radiation ,              &
-!$omp          rec_rate_local,rec_v_R,rec_v_Z,rec_v_phi,                  &
-!$omp          element_list,node_list, H, H_s, H_t, HZ,                   & 
-!$omp          tstep,F0, delta_phi, gamma                                                 &
+!$omp   shared(local_rec_elements,my_id,n_mpi, volume_check,              &
+!$omp          energy_neutrals, energy_radiation, rec_rate_local,         &
+!$omp          rec_v_R,rec_v_Z,rec_v_phi,element_list,node_list, H, H_s,  & 
+!$omp          H_t, HZ, tstep,F0, delta_phi, gamma                        &
 !$omp          )                                                          &
 !$omp   private(ife,ielm,iv,i,j,k,ms,mt,mp,in,                            &
 !$omp           inode,element,                                            &
 !$omp           x_g, y_g, x_s, y_s, x_t, y_t, xjac, eq_g, eq_s, eq_t,     &
 !$omp           wst, BigR, r0, T0,  ps0_x,ps0_y ,u0_x,u0_y,vpar0,         &
-!$omp           r0_corr, T0_corr, Sion_T, dSion_dT, Srec_T, dSrec_dT,      &
-!$omp           LradDcont_T, dLradDcont_dT, LradDcont_corr, dLradDcont_dT_corr  &
-!$omp           )                                                         &
-!$omp   firstprivate(nodes)
+!$omp           r0_corr, T0_corr, Sion_T, dSion_dT, Srec_T, dSrec_dT,     &
+!$omp           LradDcont_T, dLradDcont_dT, LradDcont_corr,               &
+!$omp           dLradDcont_dT_corr)                                       &
+!$omp   firstprivate(nodes) 
+! The firstprivate is used to explicitly force making a copy of nodes where the values member is not allocated, 
+! which is then allocated in the make_deep_copy subroutine. This is done because there is no guarantee when OMP 
+! makes a private copy for each thread, whether a deep or shallow copy is made (if the values member of nodes 
+! point to the same memory location, or if new memory is allocated for the nodes on each thread), and would be 
+! problematic is the nodes from each thread modifies the same memory location.
 !> loop over all local recombination elements
 do ife =1,  local_rec_elements(my_id+1) !element_list%n_elements !n_local_rec_elms
 
@@ -174,9 +179,8 @@ enddo
 !------------------------end from elt_matrix_fft 
 
 !--------------------------------------------------- sum over the Gaussian integration points
-! TO DO: rec_rate_local(ife, mp), add n_plane for 3D? 
   do mp=1, n_plane
-       !phi       = 2.d0*PI*float(mp-1)/float(n_plane) / float(n_period)
+
     do ms=1, n_gauss
 
       do mt=1, n_gauss
@@ -193,31 +197,29 @@ enddo
 
         r0    = eq_g(mp,5,ms,mt)
         r0_corr = corr_neg_dens1(r0)
-		  
+      
         T0    = eq_g(mp,6,ms,mt)
         T0_corr = corr_neg_temp1(T0)
-		  
+      
         vpar0    = eq_g(mp,7,ms,mt)
-		
+    
         !> Calculate 
         call rec_rate_to_kinetic(r0, 0.5d0*T0, Sion_T, dSion_dT, Srec_T, dSrec_dT, LradDcont_T, dLradDcont_dT, LradDcont_corr, dLradDcont_dT_corr)  
-        ! --- Transform derivatives on Te to derivatives in total T	
-        dSrec_dT           = dSrec_dT      / 2.d0	
+        ! --- Transform derivatives on Te to derivatives in total T  
+        dSrec_dT           = dSrec_dT      / 2.d0  
         dLradDcont_dT      = dLradDcont_dT / 2.d0
         dLradDcont_dT_corr = dLradDcont_dT_corr / 2.d0
-		
-		 
-		!> neutral density gain in element due to recombination
-		rec_rate_local(ife)   = rec_rate_local(ife)+ (Srec_T * r0_corr * r0_corr)                                      *TWOPI *BigR *xjac *tstep /n_plane *wst ! rho_rec
-		!> momentum density in R,Z, phi direction. rho_rec * v
-		rec_v_R(ife)          = rec_v_R(ife)       + (Srec_T * r0_corr * r0_corr) * (-BigR*u0_y  + vpar0/BigR * ps0_y) *TWOPI *BigR *xjac *tstep /n_plane *wst !rho_rec*v_R
-		rec_v_Z(ife)          = rec_v_Z(ife)       + (Srec_T * r0_corr * r0_corr) * (+ BigR*u0_x - vpar0/BigR * ps0_x) *TWOPI *BigR *xjac *tstep /n_plane *wst !rho_rec*v_Z
-		rec_v_phi(ife)        = rec_v_phi(ife)     + (Srec_T * r0_corr * r0_corr) * (+ F0*vpar0/BigR)                  *TWOPI *BigR *xjac *tstep /n_plane *wst !rho_rec*v_phi
-		!> volume check. 
-		volume_check(ife)     = volume_check(ife)  + (1.d0)                                                            *TWOPI *BigR *xjac        /n_plane *wst
-		energy_neutrals(ife)  =energy_neutrals(ife)+ (gamma-1.d0) * 0.5d0 *T0 * r0_corr * r0_corr  * Srec_T            *TWOPI *BigR *xjac *tstep /n_plane *wst
-		energy_radiation(ife)=energy_radiation(ife)+ r0_corr * r0_corr  * (LradDcont_corr)                             *TWOPI *BigR *xjac *tstep /n_plane *wst       
-						              
+    
+        !> neutral density gain in element due to recombination
+        rec_rate_local(ife,mp)   = rec_rate_local(ife,mp)+ (Srec_T * r0_corr * r0_corr)                                      *BigR *xjac *tstep * delta_phi *wst ! rho_rec
+        !> momentum density in R,Z, phi direction. rho_rec * v
+        rec_v_R(ife,mp)          = rec_v_R(ife,mp)       + (Srec_T * r0_corr * r0_corr) * (-BigR*u0_y  + vpar0/BigR * ps0_y) *BigR *xjac *tstep * delta_phi *wst !rho_rec*v_R
+        rec_v_Z(ife,mp)          = rec_v_Z(ife,mp)       + (Srec_T * r0_corr * r0_corr) * (+ BigR*u0_x - vpar0/BigR * ps0_x) *BigR *xjac *tstep * delta_phi *wst !rho_rec*v_Z
+        rec_v_phi(ife,mp)        = rec_v_phi(ife,mp)     + (Srec_T * r0_corr * r0_corr) * (+ F0*vpar0/BigR)                  *BigR *xjac *tstep * delta_phi *wst !rho_rec*v_phi
+        !> volume check. 
+        volume_check(ife,mp)     = volume_check(ife,mp)  + (1.d0)                                                            *BigR *xjac        * delta_phi *wst
+        energy_neutrals(ife,mp)  = energy_neutrals(ife,mp)+ (gamma-1.d0) * 0.5d0 *T0 * r0_corr * r0_corr  * Srec_T           *BigR *xjac *tstep * delta_phi *wst 
+        energy_radiation(ife,mp) = energy_radiation(ife,mp)+ r0_corr * r0_corr  * LradDcont_corr                             *BigR *xjac *tstep * delta_phi *wst       
 
       enddo !mt
     enddo !ms

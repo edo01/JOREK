@@ -704,7 +704,11 @@ do i=1,n_vertex_max
             aux_P_par_re      = ( - x_t(ms,mt) * eq_aux_s(mp,P_par_idx_kin,ms,mt) + x_s(ms,mt) * eq_aux_t(mp,P_par_idx_kin,ms,mt) ) / xjac
             aux_P_perp_re     = ( - x_t(ms,mt) * eq_aux_s(mp,P_perp_idx_kin,ms,mt) + x_s(ms,mt) * eq_aux_t(mp,P_perp_idx_kin,ms,mt) ) / xjac
             aux_jre           = eq_aux_g(mp,j_Phi_idx_kin,ms,mt)
-            aux_jre_ind       = aux_jre
+            if (keep_current_prof) then
+              aux_jre_ind = 0.d0
+            else
+              aux_jre_ind = aux_jre
+            endif
           endif
 
           if (with_neutrals) then
@@ -1143,19 +1147,19 @@ do i=1,n_vertex_max
                                ZK_perp_num_tanh * 0.5d0*(1.d0-                                &
                                tanh((psi_norm-ZK_perp_num_tanh_psin)/ZK_perp_num_tanh_sig))
           end if
-          ! --- Increase diffusivity if very small temperature
-          ! if ( with_TiTe ) then
-          !   if (Ti0 .lt. ZK_i_prof_neg_thresh) then
-          !     ZKi_prof = ZK_i_prof_neg
-          !   end if
-          !   if (Te0 .lt. ZK_e_prof_neg_thresh) then
-          !     ZKe_prof = ZK_e_prof_neg
-          !   end if
-          ! else ! (with_TiTe = .f.), i.e. with single temperature
-          !   if (T0 .lt. ZK_prof_neg_thresh) then
-          !     ZK_prof = ZK_prof_neg
-          !   end if
-          ! endif ! (with_TiTe)
+          !--- Increase diffusivity if very small temperature
+          if ( with_TiTe ) then
+            if (Ti0 .lt. ZK_i_prof_neg_thresh) then
+              ZKi_prof = ZK_i_prof_neg
+            end if
+            if (Te0 .lt. ZK_e_prof_neg_thresh) then
+              ZKe_prof = ZK_e_prof_neg
+            end if
+          else ! (with_TiTe = .f.), i.e. with single temperature
+            if (T0 .lt. ZK_prof_neg_thresh) then
+              ZK_prof = ZK_prof_neg
+            end if
+          endif ! (with_TiTe)
 
           ! --- Parallel momentum source
           Vt0   = V_source(ms,mt)
@@ -1569,12 +1573,17 @@ do i=1,n_vertex_max
                                      * (-(ps0_s * v_t     - ps0_t * v_s)    /xjac)  * xjac * tstep * tstep * factor(var_vpar,6)&
             !===============================End of new TG_num terms============================
                  
-                                 + (1.d0 - delta_n_convection) * (     &
-                                   - v *((r0+alpha_e*rimp0) * rn0 * Sion_T) * vpar0 * BB2 * BigR                * xjac * tstep * factor(var_vpar,7)&
-                                   + v *((r0+alpha_e*rimp0) * (r0-rimp0) * Srec_T) * vpar0 * BB2 * BigR         * xjac * tstep * factor(var_vpar,8)&
-                                   ) &
-                                 - visco_par_par * F0**2 / (BigR * BB2) * Bgrad_vpar * Bgrad_rho_star           * xjac * tstep * factor(var_vpar,9)
-                                
+                           + (1.d0 - delta_n_convection) * (     &
+                           - v *((r0+alpha_e*rimp0) * rn0 * Sion_T) * vpar0 * BB2 * BigR                * xjac * tstep * factor(var_vpar,7)&
+                           + v *((r0+alpha_e*rimp0) * (r0-rimp0) * Srec_T) * vpar0 * BB2 * BigR         * xjac * tstep * factor(var_vpar,8)&
+                           ) &
+                           - visco_par_par * F0**2 / (BigR * BB2) * Bgrad_vpar * Bgrad_rho_star           * xjac * tstep * factor(var_vpar,9)&
+
+                          ! -------------------------------------- from kinetic coupling -------------------------------------------------
+                           - v * aux_rho0 * vpar0 * BB2 * BigR * (1.d0 - fact_conservative_u)                     * xjac * tstep * factor(var_vpar,11) &
+                           + v * BigR * aux_mom_par0                                                              * xjac * tstep * factor(var_vpar,12)
+                          ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+ 
                     
               if (normalized_velocity_profile) then
                 rhs_ij(var_vpar) = rhs_ij(var_vpar) - (visco_par + visco_par_sc_num * tau_sc) * (v_x * (vpar0_x-Vt0_x) + v_y * (vpar0_y-Vt0_y)) * BigR* xjac * tstep * factor(var_vpar,9 ) 
@@ -1602,12 +1611,7 @@ do i=1,n_vertex_max
                            * (                                          + F0 / BigR * v_p)  * xjac * tstep * tstep * factor(var_vpar,6)&
 
             !===============================End of new TG_num terms============================
-                 - visco_par_par * F0**2 / (BigR * BB2) * Bgrad_vpar * Bgrad_rho_k_star             * xjac * tstep * factor(var_vpar,9)& 
-
-            ! -------------------------------------- from kinetic coupling -------------------------------------------------
-              - v * aux_rho0 * vpar0 * BB2 * BigR * (1.d0 - fact_conservative_u)                     * xjac * tstep * factor(var_vpar,11) &
-              + v * BigR * aux_mom_par0                                                              * xjac * tstep * factor(var_vpar,12) 
-            ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                 - visco_par_par * F0**2 / (BigR * BB2) * Bgrad_vpar * Bgrad_rho_k_star             * xjac * tstep * factor(var_vpar,9)
 
             end if ! (with_vpar)
             
@@ -1723,11 +1727,7 @@ do i=1,n_vertex_max
                               
                               - ZK_e_perp_num_psin*  (v_xx + v_x/Bigr + v_yy)*(Te0_xx + Te0_x/Bigr + Te0_yy) * BigR * xjac * tstep * factor(var_Te,7 ) &
 
-                              + v * (GAMMA-1.d0) * eta_T_ohm * (zj0     / BigR)**2.d0         * BigR * xjac * tstep * factor(var_Te,9 ) &
-
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                              - v * (GAMMA-1.d0) * eta_T_ohm * (aux_jre / BigR)**2.d0         * BigR * xjac * tstep * factor(var_Te,9 ) &
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                              + v * (GAMMA-1.d0) * eta_T_ohm * ((zj0 - aux_jre) / BigR)**2.d0         * BigR * xjac * tstep * factor(var_Te,9 ) & !> aux_jre from rep coupling
   
                               - v * BigR * ksi_ion_norm  * (r0+alpha_e*rimp0) * rn0 * Sion_T                    * xjac * tstep * factor(var_Te,12) &
                               - v * BigR * (r0_corr+alpha_e*rimp0_corr) * rn0_corr * LradDrays_T                * xjac * tstep * factor(var_Te,13) &
@@ -1841,11 +1841,7 @@ do i=1,n_vertex_max
                             
                              - ZK_perp_num_psin*  (v_xx + v_x/Bigr + v_yy)*(T0_xx + T0_x/Bigr + T0_yy) * BigR * xjac * tstep * factor(var_T,7 ) &
                             
-                             + v * (GAMMA-1.d0) * eta_T_ohm * (zj0     / BigR)**2.d0     * BigR * xjac * tstep * factor(var_T,9 ) &
-
-                             ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                             - v * (GAMMA-1.d0) * eta_T_ohm * (aux_jre / BigR)**2.d0     * BigR * xjac * tstep * factor(var_T,9 ) &
-                             ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                             + v * (GAMMA-1.d0) * eta_T_ohm * ((zj0 - aux_jre) / BigR)**2.d0     * BigR * xjac * tstep * factor(var_T,9 ) & !> aux_jre from rep coupling
 
                              !===================== Additional terms from friction terms============
                              + v * BigR * ((GAMMA - 1.)/2.) * vpar0**2 * BB2 * ((r0+alpha_e*rimp0)*rn0*Sion_T)          * xjac * tstep * factor(var_T,11) &
@@ -2228,18 +2224,12 @@ do i=1,n_vertex_max
                               - v * tauIC*2. * rho /(r0_corr**2 * BB2) * F0**2/BigR**2 * (ps0_s * Pe0_t - ps0_t * Pe0_s) * theta * tstep &
                               + v * tauIC*2. * rho /(r0_corr**2 * BB2) * F0**3/BigR**3 * Pe0_p                    * xjac * theta * tstep &
                               ! The density gradient term from Z_eff
-                              - deta_dr0 * v * rho * (zj0-current_source(ms,mt)-Jb) / BigR                        * xjac * theta * tstep &
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                              + deta_dr0 * v * rho * aux_jre_ind                    / BigR                        * xjac * theta * tstep 
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                              - deta_dr0 * v * rho * (zj0-current_source(ms,mt)-Jb-aux_jre_ind) / BigR            * xjac * theta * tstep   !> aux_jre_ind from rep coupling
 
                   amat_n(var_psi,var_rho) = - v * tauIC*2./(r0_corr*BB2) * F0**3/BigR**3 * Te0  * rho_p           * xjac * theta * tstep 
 
                   if ( with_TiTe ) then ! (with_TiTe) **********************************************
-                    amat(var_psi,var_Te) = - deta_dT * v * Te * (zj0 - current_source(ms,mt) - Jb)/ BigR * xjac  * theta * tstep &
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                                           + deta_dT * v * Te * aux_jre_ind                       / BigR * xjac  * theta * tstep &
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                    amat(var_psi,var_Te) = - deta_dT * v * Te * (zj0-current_source(ms,mt)-Jb-aux_jre_ind) / BigR * xjac  * theta * tstep & !> aux_jre_ind from rep coupling
 
                                    - deta_num_dT * Te * (v_x * zj0_x + v_y * zj0_y)              * xjac          * theta * tstep &
                               + v * tauIC*2./(r0_corr*BB2) * F0**2/BigR**2 * r0 * (ps0_s * Te_t  - ps0_t * Te_s) * theta * tstep &
@@ -2248,10 +2238,7 @@ do i=1,n_vertex_max
 
                     amat_n(var_psi,var_Te) = - v * tauIC*2./(r0_corr*BB2) * F0**3/BigR**3 * r0 * Te_p     * xjac * theta * tstep
                   else ! (with_TiTe = .f.), i.e. with single temperature *********************************
-                    amat(var_psi,var_T) = - deta_dT * v * T * (zj0 - current_source(ms,mt) - Jb)/ BigR    * xjac * theta * tstep &
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                                          + deta_dT * v * T * aux_jre_ind                       / BigR    * xjac * theta * tstep &
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                    amat(var_psi,var_T) = - deta_dT * v * T * (zj0-current_source(ms,mt)-Jb-aux_jre_ind)/ BigR    * xjac * theta * tstep & !> aux_jre_ind from rep coupling
 
                                    - deta_num_dT * T * (v_x * zj0_x + v_y * zj0_y)                        * xjac * theta * tstep &
 
@@ -2263,10 +2250,7 @@ do i=1,n_vertex_max
                   end if ! (with_TiTe) *************************************************************
 
                   if (with_impurities) then
-                    amat(var_psi,var_rhoimp) = - deta_drimp0 * v * rhoimp * (zj0-current_source(ms,mt)-Jb) / BigR * xjac * theta * tstep &
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                                               + deta_drimp0 * v * rhoimp * aux_jre_ind                    / BigR * xjac * theta * tstep
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                    amat(var_psi,var_rhoimp) = - deta_drimp0 * v * rhoimp * (zj0-current_source(ms,mt)-Jb-aux_jre_ind) / BigR * xjac * theta * tstep !> aux_jre_ind from rep coupling
                   endif
 
                   !###################################################################################################
@@ -3473,10 +3457,7 @@ do i=1,n_vertex_max
                            + tgnum_Te * 0.25d0 * BigR**2 * (r0+alpha_e_bis*rimp0) * (Te0_x * u0_y - Te0_y * u0_x)            &
                                               * ( v_x * u_y - v_y * u_x) * xjac * theta*tstep*tstep 
   
-                    amat(var_Te,var_zj) = - v * (gamma-1.d0) * eta_T_ohm * 2.d0 * zj * zj0     /(BigR**2.d0) * BigR * xjac * theta * tstep &
-                      ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                                          + v * (gamma-1.d0) * eta_T_ohm * 2.d0 * zj * aux_jre /(BigR**2.d0) * BigR * xjac * theta * tstep
-                      ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                    amat(var_Te,var_zj) = - v * (gamma-1.d0) * eta_T_ohm * 2.d0 * zj * (zj0 - aux_jre) /(BigR**2.d0) * BigR * xjac * theta * tstep !> aux_jre from RE kinetics
   
                     amat(var_Te,var_rho) = v * rho * Te0    * BigR * xjac * (1.d0 + zeta)     &
                               - v * rho * BigR**2 * ( Te0_s * u0_t - Te0_t * u0_s)                        * theta * tstep &
@@ -3498,10 +3479,7 @@ do i=1,n_vertex_max
                               + v * BigR * rho * frad_bg                                              * xjac * theta * tstep &  
                               + v * BigR * rho * dr0_corr_dn * rimp0_corr * Lrad                      * xjac * theta * tstep &
                               ! New term from Z_eff
-                              - v * BigR * rho * ((GAMMA-1.)/BigR**2) * deta_dr0_ohm * zj0**2      * xjac * theta * tstep &
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                              + v * BigR * rho * ((GAMMA-1.)/BigR**2) * deta_dr0_ohm * aux_jre**2  * xjac * theta * tstep &
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                              - v * BigR * rho * ((GAMMA-1.)/BigR**2) * deta_dr0_ohm * (zj0 - aux_jre)**2 * xjac * theta * tstep & !> aux_jre from rep coupling
 
 
                     !=============== The ionization potential energy term=========================
@@ -3609,11 +3587,7 @@ do i=1,n_vertex_max
     
                               + ZK_e_perp_num_psin*(v_xx + v_x/BigR + v_yy)*(Te_xx + Te_x/BigR + Te_yy) * BigR * xjac * theta * tstep &
   
-                              - v * Te * (gamma-1.d0) * deta_dT_ohm * (zj0     / BigR)**2.d0 * BigR * xjac * theta * tstep &
-                              
-                              ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                              + v * Te * (gamma-1.d0) * deta_dT_ohm * (aux_jre / BigR)**2.d0 * BigR * xjac * theta * tstep &
-                              ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                              - v * Te * (gamma-1.d0) * deta_dT_ohm * ((zj0 - aux_jre) / BigR)**2.d0 * BigR * xjac * theta * tstep & !> aux_jre from rep coupling
 
                               + v * BigR * (r0+alpha_e*rimp0) * rn0 * ksi_ion_norm * dSion_dT * Te            * xjac * theta * tstep &
                               + v * BigR * dalpha_e_dT*rimp0  * rn0 * ksi_ion_norm * Sion_T   * Te            * xjac * theta * tstep &
@@ -3762,10 +3736,7 @@ do i=1,n_vertex_max
                                * ( v_x * ps0_y -  v_y * ps0_x                    ) * xjac * theta * tstep * tstep &
                       !===========================End of new TG_num terms===========================
                             ! New term from Z_eff
-                            - v * BigR * rhoimp*((GAMMA-1.)/BigR**2) * deta_drimp0_ohm * zj0**2     * xjac * theta * tstep &
-                      ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                            + v * BigR * rhoimp*((GAMMA-1.)/BigR**2) * deta_drimp0_ohm * aux_jre**2 * xjac * theta * tstep &
-                      ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                            - v * BigR * rhoimp*((GAMMA-1.)/BigR**2) * deta_drimp0_ohm * (zj0 - aux_jre)**2     * xjac * theta * tstep & !> aux_jre from rep coupling
 
                             - v * rhoimp * BigR**2 * alpha_e_bis * (Te0_s * u0_t - Te0_t * u0_s)       * theta * tstep &
                             - v * alpha_e * Te0 * BigR**2 * (rhoimp_s * u0_t - rhoimp_t * u0_s)        * theta * tstep &
@@ -3921,8 +3892,7 @@ do i=1,n_vertex_max
   
                     amat_nn(var_T,var_u)= (GAMMA-1.) * v * visco_T_heating *  (u0_x * u_xpp + u0_y * u_ypp) * visco_fact_new  * BigR * xjac * theta * tstep
                     
-                    amat(var_T,var_zj)  = - v * (gamma-1.d0) * eta_T_ohm * 2.d0 * zj * zj0     /(BigR**2.d0) * BigR * xjac * theta * tstep &
-                                          + v * (gamma-1.d0) * eta_T_ohm * 2.d0 * zj * aux_jre /(BigR**2.d0) * BigR * xjac * theta * tstep 
+                    amat(var_T,var_zj)  = - v * (gamma-1.d0) * eta_T_ohm * 2.d0 * zj * (zj0-aux_jre)/(BigR**2.d0) * BigR * xjac * theta * tstep !> aux_jre from rep coupling
   
                     amat(var_T,var_w)   = (GAMMA-1.) * v * BigR**2.d0 * ( u0_x * w_x + u0_y * w_y) * visco_T_heating * visco_fact_old * BigR * xjac * theta * tstep &
                                         + (GAMMA-1.) * v * 2.d0 * BigR * w *  u0_x                 * visco_T_heating * visco_fact_new * BigR * xjac * theta * tstep 
@@ -3946,10 +3916,7 @@ do i=1,n_vertex_max
                                           + v * BigR * rho * frad_bg                                                 * xjac * theta * tstep &
                                           + v * BigR * rho * rimp0_corr * Lrad                                       * xjac * theta * tstep &
                                           ! New term from Z_eff
-                                          - v * BigR * rho * (GAMMA - 1.) * deta_dr0_ohm * (zj0/BigR)**2          * xjac * theta * tstep &
-                                          ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                                          + v * BigR * rho * (GAMMA - 1.) * deta_dr0_ohm * (aux_jre/BigR)**2      * xjac * theta * tstep &
-                                          ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                                          - v * BigR * rho * (GAMMA - 1.) * deta_dr0_ohm * ((zj0 - aux_jre)/BigR)**2          * xjac * theta * tstep & !> aux_jre from rep coupling
 
                     !=============== The ionization potential energy term=========================
                                           + (GAMMA - 1.) * v * rho * E_ion_bg * BigR * xjac * (1.d0 + zeta) &
@@ -4057,10 +4024,7 @@ do i=1,n_vertex_max
                                       
                                       + ZK_perp_num_psin*(v_xx + v_x/BigR + v_yy)*(T_xx + T_x/BigR + T_yy) * BigR * xjac * theta * tstep &
                                       
-                                      - v * T * (gamma-1.d0) * deta_dT_ohm * (zj0 / BigR)**2.d0         * BigR * xjac * theta * tstep &
-                                      ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                                      + v * T * (gamma-1.d0) * deta_dT_ohm * (aux_jre / BigR)**2.d0     * BigR * xjac * theta * tstep &
-                                      ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                                      - v * T * (gamma-1.d0) * deta_dT_ohm * ((zj0 - aux_jre) / BigR)**2.d0         * BigR * xjac * theta * tstep & !> aux_jre from rep coupling
   
                                       + v * BigR * (r0+alpha_e*rimp0) * rn0           * ksi_ion_norm * dSion_dT * T  * xjac * theta * tstep &
                                       + v * BigR * dalpha_e_dT*rimp0  * rn0           * ksi_ion_norm * Sion_T   * T  * xjac * theta * tstep &
@@ -4246,10 +4210,7 @@ do i=1,n_vertex_max
                                * ( v_x * ps0_y -  v_y * ps0_x                  ) * xjac * theta * tstep * tstep &
                       !===========================End of new TG_num terms===========================
                      ! New term from Z_eff
-                     - v * BigR * rhoimp * (GAMMA - 1.) * deta_drimp0_ohm * (zj0/BigR)**2     * xjac * theta * tstep &
-                     ! -------------------------------------- from kinetic coupling -------------------------------------------------
-                     + v * BigR * rhoimp * (GAMMA - 1.) * deta_drimp0_ohm * (aux_jre/BigR)**2 * xjac * theta * tstep &
-                     ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
+                     - v * BigR * rhoimp * (GAMMA - 1.) * deta_drimp0_ohm * ((zj0 - aux_jre)/BigR)**2     * xjac * theta * tstep & !> aux_jre from rep coupling
 
 
                      - v * rhoimp * BigR**2 * alpha_imp_bis * (T0_s * u0_t - T0_t * u0_s)     * theta * tstep &
@@ -5165,10 +5126,10 @@ subroutine construct_imp_charge_states()
      m_i_over_m_imp = central_mass/2.
      m_imp          = 2.
   case('Ar')
-     m_i_over_m_imp = central_mass/40.  
+     m_i_over_m_imp = central_mass/40. * (2.d0/2.01455279245d0) !backwards compatibility  
      m_imp          = 40.
   case('Ne')
-     m_i_over_m_imp = central_mass/20. 
+     m_i_over_m_imp = central_mass/20. * (2.d0/2.01455279245d0) !backwards compatibility
      m_imp          = 20.
   case default
      write(*,*) '!! Gas type "', trim(imp_type(index_main_imp)), '" unknown (in inj_source.f90) !!'
@@ -5344,21 +5305,21 @@ subroutine construct_thermalization_terms()
        lambda_e_bg  = 24. - log((ne_SI*1.d-6)**0.5*Te_corr_eV**(-1.0))
     endif
 
-    nu_e_imp = 1.8d-19*(1.d6*MASS_ELECTRON*MASS_PROTON*m_imp) ** 0.5                    &
+    nu_e_imp = 1.8d-19*(1.d6*MASS_ELECTRON*ATOMIC_MASS_UNIT*m_imp) ** 0.5                    &
          * Z_eff_imp * (1.d14*central_density*rimp0_corr*m_i_over_m_imp) * lambda_e_imp &
-         / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*MASS_PROTON*m_imp)                    &
+         / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*ATOMIC_MASS_UNIT*m_imp)                    &
          / (EL_CHG * MU_ZERO * central_density * 1.d20)) ** 1.5
 
-    nu_e_bg  = 1.8d-19*(1.d6*MASS_ELECTRON*MASS_PROTON*central_mass) ** 0.5             &
+    nu_e_bg  = 1.8d-19*(1.d6*MASS_ELECTRON*ATOMIC_MASS_UNIT*central_mass) ** 0.5             &
          * (1.d14*central_density*(r0_corr-rimp0_corr)) * lambda_e_bg                   &
-         / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*MASS_PROTON*central_mass)             &
+         / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*ATOMIC_MASS_UNIT*central_mass)             &
          / (EL_CHG * MU_ZERO * central_density * 1.d20)) ** 1.5 ! Assuming bg_charge is 1!
 
     if (nu_e_imp < 0.) nu_e_imp = 0.
     if (nu_e_bg < 0.)  nu_e_bg  = 0.
 
     ! Converting the energy transfer rate from s^-1 to JOREK unit
-    t_norm   = sqrt(MU_ZERO * central_mass * MASS_PROTON * central_density * 1.d20)
+    t_norm   = sqrt(MU_ZERO * central_mass * ATOMIC_MASS_UNIT * central_density * 1.d20)
     nu_e_imp = nu_e_imp * t_norm
     nu_e_bg  = nu_e_bg * t_norm
 
@@ -5366,32 +5327,32 @@ subroutine construct_thermalization_terms()
 
     ! Calculating the density and temperature derivative for amats
     ! We negelect the Coulomb log's derivatives due to their smallness
-    dnu_e_imp_dTi   = -1.5*MASS_ELECTRON*nu_e_imp*dTi0_corr_dT/(MASS_ELECTRON*Ti0_corr+MASS_PROTON*m_imp*Te0_corr)
-    dnu_e_imp_dTe   = -1.5*MASS_PROTON*m_imp*nu_e_imp*dTe0_corr_dT/(MASS_ELECTRON*Ti0_corr+MASS_PROTON*m_imp*Te0_corr) &
+    dnu_e_imp_dTi   = -1.5*MASS_ELECTRON*nu_e_imp*dTi0_corr_dT/(MASS_ELECTRON*Ti0_corr+ATOMIC_MASS_UNIT*m_imp*Te0_corr)
+    dnu_e_imp_dTe   = -1.5*ATOMIC_MASS_UNIT*m_imp*nu_e_imp*dTe0_corr_dT/(MASS_ELECTRON*Ti0_corr+ATOMIC_MASS_UNIT*m_imp*Te0_corr) &
                       + nu_e_imp*dZ_eff_imp_dT/max(Z_eff_imp,1d-8)
 
-    dnu_e_imp_drhoimp = 1.8d-19*(1.d6*MASS_ELECTRON*MASS_PROTON*m_imp)**0.5                          &
+    dnu_e_imp_drhoimp = 1.8d-19*(1.d6*MASS_ELECTRON*ATOMIC_MASS_UNIT*m_imp)**0.5                          &
                         * Z_eff_imp*1.d14*central_density*drimp0_corr_dn*m_i_over_m_imp*lambda_e_imp &
-                        / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*MASS_PROTON*m_imp)                  &
+                        / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*ATOMIC_MASS_UNIT*m_imp)                  &
                         / (EL_CHG*MU_ZERO*central_density*1.d20))**1.5
     dnu_e_imp_drho    = 0.
     dnu_e_imp_drhoimp = dnu_e_imp_drhoimp * t_norm
     dnu_e_imp_drho    = dnu_e_imp_drho * t_norm
 
-    dnu_e_bg_dTi = -1.5*MASS_ELECTRON*nu_e_bg*dTi0_corr_dT/(MASS_ELECTRON*Ti0_corr+MASS_PROTON*central_mass*Te0_corr)
-    dnu_e_bg_dTe = -1.5*MASS_PROTON*central_mass*nu_e_bg*dTe0_corr_dT/(MASS_ELECTRON*Ti0_corr+MASS_PROTON*central_mass*Te0_corr)
+    dnu_e_bg_dTi = -1.5*MASS_ELECTRON*nu_e_bg*dTi0_corr_dT/(MASS_ELECTRON*Ti0_corr+ATOMIC_MASS_UNIT*central_mass*Te0_corr)
+    dnu_e_bg_dTe = -1.5*ATOMIC_MASS_UNIT*central_mass*nu_e_bg*dTe0_corr_dT/(MASS_ELECTRON*Ti0_corr+ATOMIC_MASS_UNIT*central_mass*Te0_corr)
 
     if (r0_corr-rimp0_corr <= 0.) then
        dnu_e_bg_drhoimp = 0.
        dnu_e_bg_drho    = 0.
     else
-       dnu_e_bg_drhoimp = 1.8d-19*(1.d6*MASS_ELECTRON*MASS_PROTON*central_mass) ** 0.5       &
+       dnu_e_bg_drhoimp = 1.8d-19*(1.d6*MASS_ELECTRON*ATOMIC_MASS_UNIT*central_mass) ** 0.5       &
                           * (1.d14*central_density*(-drimp0_corr_dn)) * lambda_e_bg          &
-                          / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*MASS_PROTON*central_mass) &
+                          / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*ATOMIC_MASS_UNIT*central_mass) &
                           / (EL_CHG * MU_ZERO * central_density * 1.d20)) ** 1.5 ! Assuming bg_charge is 1!
-       dnu_e_bg_drho    = 1.8d-19*(1.d6*MASS_ELECTRON*MASS_PROTON*central_mass) ** 0.5       &
+       dnu_e_bg_drho    = 1.8d-19*(1.d6*MASS_ELECTRON*ATOMIC_MASS_UNIT*central_mass) ** 0.5       &
                           * (1.d14*central_density*(dr0_corr_dn)) * lambda_e_bg              &
-                          / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*MASS_PROTON*central_mass) &
+                          / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*ATOMIC_MASS_UNIT*central_mass) &
                           / (EL_CHG * MU_ZERO * central_density * 1.d20)) ** 1.5 ! Assuming bg_charge is 1!
        dnu_e_bg_drhoimp = dnu_e_bg_drhoimp * t_norm
        dnu_e_bg_drho    = dnu_e_bg_drho * t_norm
@@ -5427,15 +5388,15 @@ subroutine construct_thermalization_terms()
      dTe_corr_eV_dT = dTe0_corr_dT/(EL_CHG*MU_ZERO*central_density*1.d20)
 
      lambda_e_bg  = 23. - log((ne_SI*1.d-6)**0.5*Te_corr_eV**(-1.5)) ! Assuming bg_charge is 1! 
-     nu_e_bg      = 1.8d-19*(1.d6*MASS_ELECTRON*MASS_PROTON*central_mass) ** 0.5       &
+     nu_e_bg      = 1.8d-19*(1.d6*MASS_ELECTRON*ATOMIC_MASS_UNIT*central_mass) ** 0.5       &
                     * (1.d14*central_density*r0_corr) * lambda_e_bg                    &
-                    / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*MASS_PROTON*central_mass) &
+                    / (1.d3*(MASS_ELECTRON*Ti0_corr+Te0_corr*ATOMIC_MASS_UNIT*central_mass) &
                     / (EL_CHG * MU_ZERO * central_density * 1.d20)) ** 1.5
 
      if (nu_e_bg < 0.)  nu_e_bg  = 0.
 
      ! Converting the energy transfer rate from s^-1 to JOREK unit
-     t_norm   = sqrt(MU_ZERO * central_mass * MASS_PROTON * central_density * 1.d20)
+     t_norm   = sqrt(MU_ZERO * central_mass * ATOMIC_MASS_UNIT * central_density * 1.d20)
      nu_e_bg  = nu_e_bg * t_norm    
 
      dTe_i    = nu_e_bg * (Ti0_corr - Te0_corr)
@@ -5444,9 +5405,9 @@ subroutine construct_thermalization_terms()
      ! Calculating the density and temperature derivative for amats
      ! We negelect the Coulomb log's derivatives due to their smallness
 
-     dnu_e_bg_dTi    = -1.5*MASS_ELECTRON*nu_e_bg*dTi0_corr_dT / (MASS_ELECTRON*Ti0_corr + MASS_PROTON*central_mass*Te0_corr)
-     dnu_e_bg_dTe    = -1.5*MASS_PROTON*central_mass*nu_e_bg*dTe0_corr_dT &
-                       / (MASS_ELECTRON*Ti0_corr + MASS_PROTON*central_mass*Te0_corr)
+     dnu_e_bg_dTi    = -1.5*MASS_ELECTRON*nu_e_bg*dTi0_corr_dT / (MASS_ELECTRON*Ti0_corr + ATOMIC_MASS_UNIT*central_mass*Te0_corr)
+     dnu_e_bg_dTe    = -1.5*ATOMIC_MASS_UNIT*central_mass*nu_e_bg*dTe0_corr_dT &
+                       / (MASS_ELECTRON*Ti0_corr + ATOMIC_MASS_UNIT*central_mass*Te0_corr)
 
      dnu_e_bg_drho   = nu_e_bg * dr0_corr_dn / r0_corr
 
@@ -5607,10 +5568,10 @@ subroutine construct_radiation_parameters()
       Brad_bg = 20.
       Crad_bg = 0.8
     
-      frad_bg     = (2./3.)*(1./(central_mass*MASS_PROTON))*((MU_ZERO*central_mass*MASS_PROTON*central_density*1.d20)**(1.5d0))            &
+      frad_bg     = (2./3.)*(1./(central_mass*ATOMIC_MASS_UNIT))*((MU_ZERO*central_mass*ATOMIC_MASS_UNIT*central_density*1.d20)**(1.5d0))            &
                     *nimp_bg(1)*Arad_bg*exp(-((log(Te_corr_eV)-log(Brad_bg))**2.)/Crad_bg**2.)
     
-      dfrad_bg_dT = -(1./3.)*((MU_ZERO*central_mass*MASS_PROTON*central_density*1.d20)**(0.5d0))*(1./EL_CHG)                               &
+      dfrad_bg_dT = -(1./3.)*((MU_ZERO*central_mass*ATOMIC_MASS_UNIT*central_density*1.d20)**(0.5d0))*(1./EL_CHG)                               &
                     *2.*(nimp_bg(1)*Arad_bg/Crad_bg**2.)*(log(Te_corr_eV)-log(Brad_bg))*(1./Te_corr_eV)*exp(-((log(Te_corr_eV)-log(Brad_bg))**2.)/Crad_bg**2.)
     else
       write(*,*) "WARNING: hard-coded fitting doesn't exist for  ", trim(imp_type(1)), ", use open adas instead!"

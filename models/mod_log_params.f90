@@ -42,7 +42,7 @@ character(len=512), parameter :: HEADER_FMT = "(A40)"
 integer           :: ivar, itor
 integer           :: i, j, n_rows, group_num !> do loop index 
 integer           :: used_segs !< used for write out of puff ctrls
-integer           :: n_wall_actions
+integer           :: n_wall_actions, n_poly
 character(len=10) :: mode_num
 logical           :: short2
 
@@ -350,6 +350,7 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
 
   write(*,INTG_FMT) 'nout                  ', nout
   write(*,INTG_FMT) 'nout_projection       ', nout_projection
+  write(*,INTG_FMT) 'nout_particles        ', nout_particles
   write(*,REAL_FMT) 'xr1                   ', xr1
   write(*,REAL_FMT) 'sig1                  ', sig1
   write(*,REAL_FMT) 'xr2                   ', xr2
@@ -424,6 +425,9 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
     write(*,CHAR_FMT) 'domm_file             ', domm_file
     write(*,REAL_FMT) 'R_domm                ', R_domm
   end if
+  write(*,LOGI_FMT) 'extended_boundary     ', extended_boundary
+  write(*,REAL_FMT) 'j_cutoff_rcoord       ', j_cutoff_rcoord
+  write(*,REAL_FMT) 'j_cutoff_sig          ', j_cutoff_sig
 
   if ( (abs(V_0) .ge. 1.d-19) .or. (num_rot) ) then
      write(*,LOGI_FMT) 'normalized_velocity_profile', normalized_velocity_profile
@@ -905,6 +909,7 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
   endif
   write(*,LOGI_FMT) 'output_bnd_elements   ', output_bnd_elements
   write(*,LOGI_FMT) 'bootstrap             ', bootstrap
+  write(*,REAL_FMT) 'bootstrap_psin_cutoff ', bootstrap_psin_cutoff
   write(*,LOGI_FMT) 'NEO                   ', NEO
   if (NEO) then
     write(*,LOGI_FMT) 'num_neo_file          ', num_neo_file
@@ -1071,11 +1076,15 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
         if (sim%groups(group_num)%coupling_scheme .eq. 'ncs') then
           write(*,LOGI_FMT) 'use_kin_cx,             ',sim%groups(group_num)%use_kin_cx
           write(*,LOGI_FMT) 'use_kin_recombination,  ',sim%groups(group_num)%use_kin_recombination
+          write(*,LOGI_FMT) 'use_kin_neutral_coll,   ',sim%groups(group_num)%use_kin_neutral_coll
+          if(sim%groups(group_num)%use_kin_neutral_coll) write(*,REAL_FMT) 'neutral_coll_dTw,       ',part_group_configs(group_num)%neutral_coll_dTw
         endif
 
         ! ics specific
         if (sim%groups(group_num)%coupling_scheme .eq. 'ics') then
           write(*,LOGI_FMT) 'use_kin_bg_collisions,  ',sim%groups(group_num)%use_kin_bg_collisions
+          write(*,CHAR_FMT) 'kin_bg_coll_type,  ',sim%groups(group_num)%kin_bg_coll_type
+          write(*,REAL_FMT) 'homma2020_alpha,  ',sim%groups(group_num)%homma2020_alpha
         endif
 
         write(*,CHAR_FMT) 'atom_data_suffix,       ',trim(part_group_configs(group_num)%atom_data_suffix)
@@ -1109,8 +1118,8 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
       if (sim%groups(group_num)%coupling_scheme .eq. 'rep') then
         write(*,REAL_FMT) 'n_re,                   ',part_group_configs(group_num)%num_re
         write(*,REAL_FMT) 're_energy,              ',part_group_configs(group_num)%re_energy
-        write(*,REAL_FMT) 'std_energy,             ',part_group_configs(group_num)%std_energy
-        write(*,REAL_FMT) 'pitch,                  ',part_group_configs(group_num)%pitch
+        write(*,REAL_FMT) 're_std_energy,          ',part_group_configs(group_num)%re_std_energy
+        write(*,REAL_FMT) 're_pitch,               ',part_group_configs(group_num)%re_pitch
       endif     
 
 
@@ -1129,6 +1138,12 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
           write(*,"(3X,A, ' = ""', A, '""')") 'type,                 ', trim(part_group_configs(group_num)%wall_act_configs(i)%type)
           write(*,"(3X,A,' = ',A)") 'target_group_id,      ', part_group_configs(group_num)%wall_act_configs(i)%target_group_id
           write(*,"(3X,A,' = ',ES12.4)") 'weight_factor,        ', part_group_configs(group_num)%wall_act_configs(i)%weight_factor
+          write(*,"(3X,A,' = ',L12)") 'only_in_polygon,      ', part_group_configs(group_num)%wall_act_configs(i)%only_in_polygon   
+          if (part_group_configs(group_num)%wall_act_configs(i)%only_in_polygon) then
+            write(*,"(3X,A,' = ',100ES12.4)") 'poly_R,               ', part_group_configs(group_num)%wall_act_configs(i)%poly_R
+            write(*,"(3X,A,' = ',100ES12.4)") 'poly_Z,               ', part_group_configs(group_num)%wall_act_configs(i)%poly_Z
+            write(*,"(3X,A, ' = ""', A, '""')") 'nametag,              ', trim(part_group_configs(group_num)%wall_act_configs(i)%nametag)
+          end if
           
           !> config of the number of supers to create per event
           if (part_group_configs(group_num)%wall_act_configs(i)%supers_num_wall > 0) then
@@ -1146,6 +1161,8 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
     write(*,HEADER_FMT) '======== End of particle groups ========'
     write(*,*) ""
   endif ! n_part_groups > 0
+
+  write(*,REAL_FMT) 'part_kill_ratio         ', part_kill_ratio
 
   ! fluid groups
   write(*,INTG_FMT) 'n_fluid_groups          ',n_fluid_groups
@@ -1173,6 +1190,12 @@ write(*,'(1x,a)',advance='no') ' USE_CATALYST : '
           write(*,"(3X,A, ' = ""', A, '""')") 'type,                 ', trim(fluid_configs(group_num)%wall_act_configs(i)%type)
           write(*,"(3X,A,' = ',A)") 'target_group_id,      ', fluid_configs(group_num)%wall_act_configs(i)%target_group_id
           write(*,"(3X,A,' = ',ES12.4)") 'weight_factor,        ', fluid_configs(group_num)%wall_act_configs(i)%weight_factor
+          write(*,"(3X,A,' = ',L12)") 'only_in_polygon,      ', fluid_configs(group_num)%wall_act_configs(i)%only_in_polygon   
+          if (fluid_configs(group_num)%wall_act_configs(i)%only_in_polygon) then
+            write(*,"(3X,A,' = ',100ES12.4)") 'poly_R,               ', fluid_configs(group_num)%wall_act_configs(i)%poly_R
+            write(*,"(3X,A,' = ',100ES12.4)") 'poly_Z,               ', fluid_configs(group_num)%wall_act_configs(i)%poly_Z
+            write(*,"(3X,A, ' = ""', A, '""')") 'nametag,              ', trim(fluid_configs(group_num)%wall_act_configs(i)%nametag)
+          end if
           
           !> config of the number of supers to create per event
           if (fluid_configs(group_num)%wall_act_configs(i)%supers_num_wall > 0) then

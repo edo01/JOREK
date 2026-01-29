@@ -28,7 +28,7 @@ module mod_solve_sparse_projection
     type(type_SP_MATRIX)          :: a_mat
     type(type_RHS)                :: rhs_vec
 
-    integer                  :: my_id, n_cpu, ierr
+    integer                  :: my_id, n_mpi, ierr
     ! type(clcktype)           :: t_itstart, t0, t1, t2, t3
     ! real*8                   :: tsecond
     integer(kind=int_all)    :: i
@@ -39,7 +39,7 @@ module mod_solve_sparse_projection
 
     external :: solve_mumps_all, solve_pastix_all, solve_strumpack_all
 
-    call MPI_COMM_SIZE(a_mat%comm, n_cpu, ierr)
+    call MPI_COMM_SIZE(a_mat%comm, n_mpi, ierr)
     call MPI_COMM_RANK(a_mat%comm, my_id, ierr)
 
     verbose = solver%verbose.and.(my_id.eq.0)

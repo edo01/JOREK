@@ -29,8 +29,9 @@ use mod_jorek_timestepping
 use mod_random_seed
 use mod_basisfunctions
 use nodes_elements
-use constants,   only: MU_ZERO, MASS_PROTON, ATOMIC_MASS_UNIT, K_BOLTZ, EL_CHG
+use constants,   only: MU_ZERO, ATOMIC_MASS_UNIT, K_BOLTZ, EL_CHG
 use mod_particle_wall_interaction
+use mod_neutral_collision, only: neutral_collisions_from_config, type_neutral_collision
 use mod_projection_functions, only: proj_f_combined_density, proj_f_combined_energy, proj_f_combined_par_momentum
 use mod_particle_puffing
 use mod_edge_domain
@@ -42,10 +43,11 @@ use mod_coupling_settings, only: use_kin_recomb_global
 use mod_initialise_particles
 use equil_info
 
+use phys_module, only: index_now
 use phys_module, only: tstep,tstep_n,restart_particles, restart, t_start, nout
 use phys_module, only: CENTRAL_MASS, CENTRAL_DENSITY, xcase, xpoint
 use phys_module, only: n_part_groups, n_aux_var, n_valves_max
-use phys_module, only: nstep_particles, nsubstep_particles, tstep_particles
+use phys_module, only: nstep_particles, nsubstep_particles, tstep_particles, nout_particles
 use phys_module, only: deuterium_adas,sqrt_mu0_over_rho0
 use phys_module, only: filter_perp, filter_hyper, filter_par, filter_perp_n0, filter_hyper_n0, filter_par_n0
 use phys_module, only: apply_dirichlet_proj, part_group_configs, init_particles_only
@@ -69,6 +71,7 @@ type(jorek_timestep_action), target               :: jorek_stepper
 type(type_edge_domain), allocatable, dimension(:) :: edge_domains
 type(edge_elements)                               :: edge_elm_template
 type(particle_puffing)                            :: gas_puff, gas_puff2
+character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm, tstep_fluid_si 
 real*8    :: tstep_part_adj !< tstep_particles adjusted so that an integer amount of steps (nstep_particles) fit into a fluid step (tstep)
@@ -83,9 +86,10 @@ integer   :: n_wall_act_groups = 0
 integer   :: recomb_counter  = 0
 integer   :: puff_counter    = 0
 
-integer,                dimension(:), allocatable :: recomb_groups
-type(particle_puffing), dimension(:), allocatable :: puff_actions   
-type(wall_act_group),   dimension(:), allocatable :: wall_act_groups
+integer,                      dimension(:), allocatable :: recomb_groups
+type(particle_puffing),       dimension(:), allocatable :: puff_actions   
+type(wall_act_group),         dimension(:), allocatable :: wall_act_groups
+type(type_neutral_collision), dimension(:), allocatable :: neutral_collisions
 
 !tmp
 class(type_rng), dimension(:), allocatable :: wall_rng
@@ -165,7 +169,7 @@ end if
 
 ! --- Calculating normalisation constants
 n_norm    = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
-rho_norm  = CENTRAL_MASS * MASS_PROTON * n_norm                  ! rho_SI = rho_norm * rho
+rho_norm  = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm             ! rho_SI = rho_norm * rho
 t_norm    = sqrt((MU_ZERO * rho_norm))                           ! t_SI   = t_norm * t_jorek 
 
 ! --- Setting up wall actions
@@ -203,6 +207,9 @@ do group_num=1, n_part_groups
   endif
 
 enddo ! n_part_groups
+
+! neutral collisions
+neutral_collisions = neutral_collisions_from_config(sim)
 
 #endif
 
@@ -275,7 +282,7 @@ do while (.not. sim%stop_now)
     
   if (puff_counter > 0) then 
     call write_to_outputfile(sim%my_id, "Puffing")
-    if (sim%my_id == 0) write(*,"(A,G12.6,A)") "====== Puffing details for time t=", sim%time, " s ======"
+    if (sim%my_id == 0) write(*,"(A,G13.6,A)") "====== Puffing details for time t=", sim%time, " s ======"
     do i=1, puff_counter
       call puff_actions(i)%do(sim)
     enddo
@@ -325,11 +332,28 @@ do while (.not. sim%stop_now)
   
 
   ! -- Finalising the fluid timestep
+
+  !neutral self collisions, which need the projected neutral density
+  if (size(neutral_collisions) > 0) then
+    call write_to_outputfile(sim%my_id, "Neutral self collisions")
+    do i=1, size(neutral_collisions)
+      call neutral_collisions(i)%do(sim,tstep_fluid_si,jorek_feedback%node_list,jorek_feedback%element_list)
+    enddo
+  endif
   
-  !Writing interim particle restart files every 500 fluid steps done. Overwrites previous restart file to save space
-  if ( mod(istep,500) .eq. 0 ) then
-    call write_to_outputfile(sim%my_id, "Writing interim_part_restart.h5")
-    call write_simulation_hdf5(sim, 'interim_part_restart.h5')
+  !Writing interim particle restart files every nout fluid steps done. Overwrites previous restart file to save space
+  if ( nout_particles .eq. 9999999 ) then
+    if ( mod(istep,nout) .eq. 0 ) then
+      call write_to_outputfile(sim%my_id, "Writing interim_part_restart.h5")
+      call write_simulation_hdf5(sim, 'interim_part_restart.h5')
+    endif
+  else
+    !Writing regular particle restart files every nout_particles.
+    if ( mod(index_now,nout_particles) .eq. 0 ) then
+      write(rst_part_file, '(a,i6.6,a)') 'part_restart_', index_now, '.h5'
+      call write_to_outputfile(sim%my_id, "Writing part_restart.h5")
+      call write_simulation_hdf5(sim, trim(rst_part_file))
+    endif
   endif
 
   ! Writing some conservation checks to the ouput file

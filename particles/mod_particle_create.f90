@@ -4,7 +4,7 @@ module mod_particle_create
   implicit none
    
   private
-  public :: free_particle_indices, part_create_scheme, type_part_create_scheme
+  public :: free_particle_indices, part_create_scheme, type_part_create_scheme, create_scheme_is_set
 
   !> holds the super particle creation scheme information for this action
   type :: type_part_create_scheme
@@ -18,6 +18,24 @@ module mod_particle_create
   end type
 
 contains
+
+
+!> check whether the create scheme has been set (.true.) or still has it default values (.false.)
+function create_scheme_is_set(supers_num, supers_weight, supers_ratio) result(is_set)
+  implicit none
+  
+  integer,                       intent(in)              :: supers_num
+  real*8,                        intent(in)              :: supers_weight 
+  real*8,                        intent(in)              :: supers_ratio  
+  logical                                                :: is_set
+
+  if (supers_num == -1.d0 .and. supers_weight == -1.d0 .and. supers_ratio == -1.d0) then
+    is_set = .false.
+  else
+    is_set = .true.
+  end if
+  
+end function create_scheme_is_set
 
 
 !> checks the set parameters for the create scheme to determine the scheme, or stop for wrong input 

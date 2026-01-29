@@ -78,7 +78,7 @@ logical, parameter :: unified_element_matrix = .true.
 !> parameters for naming equation terms in the RHS diagnostic 
 integer,  parameter :: max_terms    = 26
 integer,  parameter :: n_terms_psi  = 5
-integer,  parameter :: n_terms_u    = 11
+integer,  parameter :: n_terms_u    = 12
 integer,  parameter :: n_terms_zj   = 1
 integer,  parameter :: n_terms_w    = 1
 integer,  parameter :: n_terms_rho  = 13
@@ -108,7 +108,8 @@ character*36, dimension(n_terms_u),     parameter :: u_term_names=  &
                                                  'u_Eq__diamag_visco     ', &  !  8:
                                                  'u_Eq__zeta_timevol_term', &  !  9:
                                                  'u_Eq__ext_dens_source  ', &  ! 10:
-                                                 'u_Eq__neoclassical_term'/)   ! 11:
+                                                 'u_Eq__neoclassical_term', &  ! 11:
+                                                 'u_Eq__RE_pressure      '/)   ! 12:
 
  character*36, dimension(n_terms_zj),   parameter :: zj_term_names=  &
                                               (/ 'zj_Eq__DeltaStar_Psi   '/)  !  1:

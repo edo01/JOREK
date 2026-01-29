@@ -7,6 +7,7 @@ module mod_collisions
   public :: collide_particles
   public :: coulomb_logarithm
   public :: q_homma2013
+  public :: q_homma2020
   public :: sample_velocity_dist_magnetized
   public :: sample_velocity_dist_unmagnetized
 contains
@@ -139,6 +140,54 @@ pure function q_homma2013(kT, grad_kT, B, n_b, m_b, q_b) result(q)
        - K_perp * grad_kT_perp)
 end function q_homma2013
 
+!> HOMMA 2020 https://doi.org/10.1088/1741-4326/ab7537
+! free streaming (FS) energy flux.
+!This is a low collisionality correction on homma 2013
+!> Only the parallel Spitzer-Härm heatflux is corrected with a free-parameter
+! choose alpha between 0.3 and 2.0
+pure function q_homma2020(kT, grad_kT, B, n_b, m_b, q_b,alpha) result(q)
+  use constants
+  use mod_sampling, only: cross_product
+  real*8, intent(in) :: kT, grad_kT(3) !< local temperature [J] and gradient in RZPhi space [J/m]
+  real*8, intent(in) :: B(3) !< Local magnetic field vector [T]
+  real*8, intent(in) :: n_b !< Local background density [m^-3]
+  real*8, intent(in) :: m_b !< Background ion mass [u]
+  integer*1, intent(in) :: q_b !< Background ion charge state [e]
+  real*8, intent(in) :: alpha !< free-parameter determines the upper limit of free-streaming heatflux [-]
+  real*8 :: q(3) !< Heat flux density vector [W/m^2]
+
+
+  real*8 :: tau_b !< characteristic collision time of background ion [s]
+  real*8 :: K_par, K_dia, K_perp !< parallel, diamagnetic and perpendicular heat conductivities [m^-1 s^-1]
+  real*8 :: Omega_b !< Gyrofrequency [rad/s]
+  real*8 :: B_hat(3) !< Unit vector in the direction of magnetic field
+  real*8 :: grad_kT_perp(3) !< perpendicular gradient of kT [J/m]
+  real*8 :: q_SH,q_FS(3) !< parallel heat flux density scalar and vector [W/m^2]
+  real*8 :: v_thermal ! background thermal velocity [m/s]
+
+  tau_b = 12*pi*sqrt(pi)*EPS_ZERO**2 * sqrt(m_b*ATOMIC_MASS_UNIT) * (kT*sqrt(kT)) / &
+      (n_b * real(int(q_b, 4)**4) * EL_CHG**4 * coulomb_logarithm( &
+        kT, n_b, q_b, q_b, m_b, m_b &
+      ))
+
+  B_hat = B/norm2(B)
+  Omega_b = real(q_b,4) * EL_CHG * norm2(B) / (m_b * ATOMIC_MASS_UNIT)
+
+  K_par = 3.9d0 * n_b * kT * tau_b / (m_b * ATOMIC_MASS_UNIT)
+  K_dia = 5d0   * n_b * kT / (2.d0 * m_b * ATOMIC_MASS_UNIT * Omega_b)
+  K_perp = 2.d0 * n_b * kT / (m_b * ATOMIC_MASS_UNIT * Omega_b**2 * tau_b)
+
+  grad_kT_perp = grad_kT - dot_product(grad_kT, B_hat)*B_hat
+
+  v_thermal = sqrt(kT/(m_b*ATOMIC_MASS_UNIT)) ! background thermal velocity [m/s]
+  q_SH = - K_par * dot_product(grad_kT, B_hat)  ! spitzer harm heatflux in parallel direction (written as scalar) [W/m^2]
+  q_FS(:) = 1.d0/( 1+ abs(q_SH) /(alpha * n_b * kT  * v_thermal )) * q_SH * B_hat ! parallel free-streaming heat flux (written as vector) [W/m^2]
+
+
+  q = (q_FS  &
+       + K_dia * cross_product(B_hat, grad_kT_perp) &
+       - K_perp * grad_kT_perp)
+end function q_homma2020
 
 !> Two variants of this subroutine exist, one for magnetized plasmas and one for unmagnetized plasmas.
 !> In the first case we use Homma JCP 2013

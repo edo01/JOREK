@@ -441,13 +441,15 @@ subroutine do_count_action(this, sim, ev)
     n_alive = count(sim%groups(i_group)%particles(:)%i_elm .gt. 0)
     w_alive = sum(sim%groups(i_group)%particles(:)%weight, mask=sim%groups(i_group)%particles(:)%i_elm .gt. 0)
 
-    call MPI_Reduce(n_alive, n_alive_total, 1, MPI_INTEGER, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
-    call MPI_Reduce(w_alive, w_alive_total, 1, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+    call MPI_AllReduce(n_alive, n_alive_total, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+    call MPI_AllReduce(w_alive, w_alive_total, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
     if (sim%my_id .eq. 0) then
       write(*,'(A,g16.8,A,i2,A,i9,A,2g16.8)') 'Number of particles at ', sim%time, " in group ", i_group, ": ", n_alive_total,&
                                                ", w=", w_alive_total, sim%groups(i_group)%particles(1)%weight*n_alive_total
     end if
+
+    sim%groups(i_group)%average_weight = w_alive_total / n_alive_total
   end do
 end subroutine do_count_action
 

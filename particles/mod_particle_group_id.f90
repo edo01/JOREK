@@ -82,20 +82,11 @@ contains
       !> loop over actually defined configs
       if ( (part_group_configs(i)%type /= 'none') .or. (part_group_configs(i)%n_particles > 0)) then
 
-        !> check if the ID of the group has been manually assigned
+        !> check if the ID of the group has been assigned
         if (trim(part_group_configs(i)%id) == 'non') then
-          part_group_configs(i)%id = generate_part_group_id()
-          write(*,*) "WARNING: No ID defined for particle group in slot: ", i
-          write(*,*) " Assigning it the system generated ID: '", part_group_configs(i)%id, "'."
-
-        else
-        !> if manually assigned, ensure that it does not start with 'P'
-        !> (Which are reserved for system generated groups IDs)
-          if (part_group_configs(i)%id(1:1) == 'P') then
-            write(*,*) "Error: Self assigned particle ids cannot start with 'P'  " // &
-                  "as it is reserved for system assigned ids."
-            stop
-          endif
+          write(*,*) "ERROR: No %id defined for particle group in slot: ", i
+          write(*,*) "You have to define a unique %id for every part_groups_config you use"
+          stop
         endif 
 
         !> check if the assigned ID has been used before
@@ -108,17 +99,5 @@ contains
       endif
     enddo
   end subroutine generate_part_groups_in_use
-
-  !> generates a unique particle group ID starting with 'P', 
-  !> followed by two numerical digits
-  function generate_part_group_id() result(id)
-    implicit none
-    character(len=3)        :: id
-    character(len=2)        :: temp
-
-    id_counter = id_counter + 1
-    write(temp, '(I2.2)') id_counter
-    id = 'P' // temp
-  end function generate_part_group_id
 
 end module mod_particle_group_id

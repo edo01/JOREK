@@ -80,11 +80,6 @@ contains
       allocate(particle_fieldline::sim%groups(group_num)%particles(n_particles_per_mpi))
     case ("particle_kinetic_relativistic")
       allocate(particle_kinetic_relativistic::sim%groups(group_num)%particles(n_particles_per_mpi))
-      select type (particles => sim%groups(group_num)%particles)
-      type is (particle_kinetic_relativistic)
-        particles(:)%q      = -1 !< default charge of the runaway electrons
-        particles(:)%weight = sim%groups(group_num)%av_weight
-      end select
     case ("particle_gc_relativistic")
       allocate(particle_gc_relativistic::sim%groups(group_num)%particles(n_particles_per_mpi))
     case default

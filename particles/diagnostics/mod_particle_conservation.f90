@@ -70,7 +70,7 @@ subroutine conservation_checks(sim)
               mom_par_tot+all_momentum, mom_par_tot, all_momentum, &
               pressure+kin_par_tot+all_energy, pressure, all_energy, kin_par_tot
 
-      write(*,'(A,I13,A,E8.2,A,F13.10,A)') 'Superparticles in use ',all_superparticles,' of ', sim%groups(i)%n_particles, '| in use :', &
+      write(*,'(A,I13,A,E9.2,A,F17.10,A)') 'Superparticles in use ',all_superparticles,' of ', sim%groups(i)%n_particles, '| in use :', &
         real(all_superparticles)/sim%groups(i)%n_particles*100.d0,'%'
 
       if ( all_superparticles .gt. 0 ) then

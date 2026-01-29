@@ -45,8 +45,17 @@ module mod_initialise_particles
 
     select case (trim(init_function_name))
       case ("basic")
+        !> Call initialiser subroutine
         if (sim%my_id == 0) write(*,*) "  Using the 'basic_initialization' function, with PDF: ", trim(init_pdf_name)
-        call basic_initialization(sim, group_num, pcg32_rng(), init_pdf_name, config%re_energy, config%pitch, config%std_energy)
+        call basic_initialization(sim, group_num, pcg32_rng(), init_pdf_name, config%re_energy, config%re_pitch, config%re_std_energy)
+
+        !> Set particle charge and weight
+        select type (particles => sim%groups(group_num)%particles)
+        type is (particle_kinetic_relativistic)
+          particles(:)%q = -1  !> default electron charge
+          particles(:)%weight = config%num_re / config%n_particles
+        end select
+
         if (sim%my_id == 0) then 
           write(*,*) "----- Finished initialisation for group '", config%id, "' with coupling scheme '", config%coupling_scheme, "' -----"
           write(*,*) ""

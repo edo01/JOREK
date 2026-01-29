@@ -33,27 +33,32 @@ module mod_particle_recomb
     integer       :: Nrec_part, particles_per_element
     real*8        :: total_rec,total_rec_all ,total_volume,total_volume_all
     real*8        :: total_Erec_neutral,total_Erec_neutral_all, total_Erec_rad,total_Erec_rad_all
-    integer       :: n_free, i, j, k,ielm,ife, i_rng, ierr
-    real*8        :: s, t,R, Z, st_ran(2)
+    real*8, dimension(n_plane) :: total_rec_nplane, total_volume_nplane, total_rec_nplane_all, total_volume_nplane_all
+    integer       :: n_free, i, j, k,ielm,ife, i_rng, ierr, mp
+    real*8        :: s, t,R, Z, phi_plane, delta_phi, st_ran(3)
   
     !debug rec
     real*8                :: sanity_rec_local,total_sanity_rec
     !rec variables
-    real*8, dimension(:), allocatable  :: rec_rate_local , rec_v_R, rec_v_Z, rec_v_phi 
-    real*8, dimension(:), allocatable  :: volume_check, energy_neutrals, energy_radiation
+    real*8, dimension(:,:), allocatable  :: rec_rate_local , rec_v_R, rec_v_Z, rec_v_phi 
+    real*8, dimension(:,:), allocatable  :: volume_check, energy_neutrals, energy_radiation
   
     !Call mod_integrate_recombination
     call integrate_recombination(sim%my_id,sim%n_mpi, rec_rate_local, rec_v_R, rec_v_Z, rec_v_phi,volume_check, energy_neutrals, energy_radiation)
 
     sanity_rec_local = 0.d0
     !calculate total recombination per mpi proces
-    total_volume = sum( volume_check(:) )
-    total_Erec_neutral = sum( energy_neutrals(:) )
-    total_Erec_rad = sum( energy_radiation(:) )
-    total_rec = sum( rec_rate_local(:) )
+    total_volume = sum(sum( volume_check, DIM = 1 ), DIM=1)
+    total_Erec_neutral = sum(sum( energy_neutrals, DIM = 1 ), DIM=1)
+    total_Erec_rad = sum(sum( energy_radiation, DIM = 1 ), DIM=1)
+    total_rec = sum(sum( rec_rate_local, DIM = 1 ), DIM=1)
+    total_rec_nplane = sum( rec_rate_local, DIM = 1 )
+    total_volume_nplane = sum( volume_check, DIM = 1 )
     ! total recombination
     call MPI_REDUCE(total_rec, total_rec_all, 1, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     call MPI_REDUCE(total_volume, total_volume_all, 1, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+    call MPI_REDUCE(total_rec_nplane, total_rec_nplane_all, n_plane, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+    call MPI_REDUCE(total_volume_nplane, total_volume_nplane_all, n_plane, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     call MPI_REDUCE(total_Erec_neutral, total_Erec_neutral_all, 1, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     call MPI_REDUCE(total_Erec_rad, total_Erec_rad_all, 1, MPI_DOUBLE_PRECISION, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
     if (sim%my_id .eq. 0) then
@@ -66,6 +71,10 @@ module mod_particle_recomb
       write(*,*) 'total power lost to Prb [MW]: ' , total_Erec_rad_all *1.5d0 / MU_ZERO/tstep_fluid_si /1.d6
       write(*,'(A15,6E14.6)') 'TOTAL RECOMB: ',sim%time, total_rec_all* central_density* 1.d20 , total_Erec_neutral_all *1.5d0 / MU_ZERO, total_Erec_neutral_all *1.5d0 / MU_ZERO/tstep_fluid_si /1.d6, &
                   total_Erec_rad_all *1.5d0 / MU_ZERO, total_Erec_rad_all *1.5d0 / MU_ZERO/tstep_fluid_si /1.d6
+      if(n_plane > 1) then
+        write(*,'(A,100E16.8)') 'total recombination weight per plane : ' , total_rec_nplane_all* central_density* 1.d20 
+        write(*,'(A,100E16.8)') 'total volume per plane: ' , total_volume_nplane_all
+      endif
     endif
     !Nrec_part amount of particles needed for this amount of recombination
     Nrec_part = int( max(sim%groups(target_group)%n_particles * 1.d-2 ,total_rec/1.d14 ) )!< assumed average weight per particle (not necesarily the actual weight, as that depends on Srec)
@@ -98,7 +107,8 @@ module mod_particle_recomb
       end if
     end do
     ! ==================
-  
+    delta_phi     = 2.d0 * PI / real(n_plane,8) / real(n_period,8)
+
     ! loop over all elements
     k = 0 !< first free particle
     particles_per_element = 1  
@@ -114,58 +124,61 @@ module mod_particle_recomb
       !$omp parallel do default(shared) & ! workaround for Error: �__vtab_mod_pcg32_rng_Pcg32_rng� not specified in enclosing �parallel�
 #else
       !$omp parallel do default(shared) &
-      !$omp shared(sim, particles,jorek_stepper, element_list, node_list, target_group, rec_v_R,rec_v_Z,rec_v_phi, &
-      !$omp i_free,rng,rec_rate_local, &
+      !$omp shared(sim,jorek_stepper, element_list, node_list, target_group, rec_v_R,rec_v_Z,rec_v_phi, &
+      !$omp i_free,rng,rec_rate_local, delta_phi, &
       !$omp CENTRAL_DENSITY, CENTRAL_MASS,sqrt_mu0_over_rho0,particles_per_element ) &
 #endif
       !$omp schedule(runtime)    &
       !$omp private(ife,ielm,k,i,element,s,t,R, Z , &
-      !$omp st_ran, i_rng ) &
+      !$omp st_ran, i_rng,phi_plane) &
       !$omp reduction(+:sanity_rec_local)
-        do ife = 1, size(rec_rate_local) ! loop over all local elements
+        do ife = 1, size(rec_rate_local,1) ! loop over all local elements
   
-          !if (isnan(rec_v_R(ife)) .or. isnan(rec_v_Z(ife)) .or. isnan(rec_v_phi(ife))) CYCLE !NaN check
-          if (rec_v_R(ife) /= rec_v_R(ife) .or. &
-              rec_v_Z(ife) /= rec_v_Z(ife) .or. &
-              rec_v_phi(ife) /= rec_v_phi(ife)) CYCLE !NaN check
-          if (rec_rate_local(ife) * central_density * 1.d20 .le. 1.d3) CYCLE
-    
           !$ i_rng = omp_get_thread_num()+1
-    
-          k = ife !< every OMP thread gets different values
-          !< every MPI process has it's own list of i_free.
-    
+
           ! --- Get element
           ielm  = (sim%my_id+1) + sim%n_mpi*(ife - 1)
           element = element_list%element(ielm)
+          
+          do mp = 1, n_plane
+            if (rec_v_R(ife,mp) /= rec_v_R(ife,mp) .and. rec_v_Z(ife,mp) /= rec_v_Z(ife,mp) .and. rec_v_phi(ife,mp) /= rec_v_phi(ife,mp))  CYCLE !NaN check
+            if (rec_rate_local(ife,mp) * central_density * 1.d20 .le. (1.d3/n_plane)) CYCLE
     
-          ! initialise particle in the element with Position, Weight, Energy, Momentum
-          do i = 1, particles_per_element
-            k = k *i !< update free particle index ! at begin of loop as k is initialized at k =0
-            particles(i_free(k))%weight = rec_rate_local(ife) / real(particles_per_element,8)* central_density* 1.d20 !< rec_rate = in jorek units?
-            particles(i_free(k))%i_elm  = ielm  !x, i_elm, st
-            particles(i_free(k))%q    = 0
-                
-            sanity_rec_local = sanity_rec_local + particles(i_free(k))%weight
-                
-            call rng(i_rng)%next(st_ran)
-            !< sample random st combination
-            particles(i_free(k))%st(1) = 0.5d0
-            particles(i_free(k))%st(2) = 0.5d0
+            phi_plane     = delta_phi * (mp-1)
             
-            s = particles(i_free(k))%st(1)
-            t = particles(i_free(k))%st(2)
+            k = ife +(mp-1)* size(rec_rate_local,1)!< every OMP thread gets different values
+            !< every MPI process has it's own list of i_free.
+
+
+            ! initialise particle in the element with Position, Weight, Energy, Momentum
+            do i = 1, particles_per_element
+              k = k *i !< update free particle index ! at begin of loop as k is initialized at k =0
+              particles(i_free(k))%weight = rec_rate_local(ife,mp) / real(particles_per_element,8)* central_density* 1.d20 !< rec_rate = in jorek units?
+              particles(i_free(k))%i_elm  = ielm  !x, i_elm, st
+              particles(i_free(k))%q    = 0
+                
+              sanity_rec_local = sanity_rec_local + particles(i_free(k))%weight
+                
+              call rng(i_rng)%next(st_ran)
+              !< sample random st combination
+              particles(i_free(k))%st(1) = 0.5d0
+              particles(i_free(k))%st(2) = 0.5d0
+              
+              s = particles(i_free(k))%st(1)
+              t = particles(i_free(k))%st(2)
   
-            !> uses i_elm and s,t to give us R,Z
-            call interp_RZ(node_list,element_list,ielm,s,t,R,Z)
-            particles(i_free(k))%x(1:2)  = [R, Z]!  = [R, Z, phi] no phi for axisymmetrix particles
-            
-            particles(i_free(k))%v(1)  = rec_v_R(ife)   / (particles(i_free(k))%weight * CENTRAL_MASS * ATOMIC_MASS_UNIT )/ sqrt_mu0_over_rho0 !m/s
-            particles(i_free(k))%v(2)  = rec_v_Z(ife)   / (particles(i_free(k))%weight * CENTRAL_MASS * ATOMIC_MASS_UNIT )/ sqrt_mu0_over_rho0
-            particles(i_free(k))%v(3)  = rec_v_phi(ife) / (particles(i_free(k))%weight * CENTRAL_MASS * ATOMIC_MASS_UNIT )/ sqrt_mu0_over_rho0
-            !< v = momentum fluid lost to recombination / (mass of superparticle)
-          end do ! parts_per_element
-    
+              !> uses i_elm and s,t to give us R,Z
+              call interp_RZ(node_list,element_list,ielm,s,t,R,Z)
+              particles(i_free(k))%x(1:2)  = [R, Z]
+              particles(i_free(k))%x(3)    = phi_plane + delta_phi*(st_ran(3)-0.5d0)
+              
+              particles(i_free(k))%v(1)  = rec_v_R(ife,mp)   / (particles(i_free(k))%weight * CENTRAL_MASS * ATOMIC_MASS_UNIT )/ sqrt_mu0_over_rho0 !m/s
+              particles(i_free(k))%v(2)  = rec_v_Z(ife,mp)   / (particles(i_free(k))%weight * CENTRAL_MASS * ATOMIC_MASS_UNIT )/ sqrt_mu0_over_rho0
+              particles(i_free(k))%v(3)  = rec_v_phi(ife,mp) / (particles(i_free(k))%weight * CENTRAL_MASS * ATOMIC_MASS_UNIT )/ sqrt_mu0_over_rho0
+              !< v = momentum fluid lost to recombination / (mass of superparticle)
+            end do ! parts_per_element
+        
+          end do !mp = 1, n_plane
         enddo   !ife 
       !$omp end parallel do
     end select

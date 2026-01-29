@@ -276,7 +276,7 @@ end subroutine calc_puff_rate_linear
 subroutine do_particle_puffing(this,sim, ev)
   use mpi_mod
   use phys_module, only: tstep, central_mass, central_density
-  use constants, only: MASS_PROTON, MU_ZERO
+  use constants, only: ATOMIC_MASS_UNIT, MU_ZERO
   ! use mod_particle_create, only: free_particle_indices ! TODO
   ! !$ use omp_lib
 
@@ -310,7 +310,7 @@ subroutine do_particle_puffing(this,sim, ev)
   i_elm = this%val_i_elm
 
   !> get SI time ----------------
-  tstep_fluid_si = tstep*sqrt((MU_ZERO * CENTRAL_MASS * MASS_PROTON * CENTRAL_DENSITY * 1.d20))
+  tstep_fluid_si = tstep*sqrt((MU_ZERO * CENTRAL_MASS * ATOMIC_MASS_UNIT * CENTRAL_DENSITY * 1.d20))
 
   ! TODO rm
   !============== Finding free particles !< make into a function?
@@ -364,12 +364,12 @@ subroutine do_particle_puffing(this,sim, ev)
   if (sim%my_id .eq. 0) then
     write(*,"(2X,A12)") "Set-up:     "
     write(*,"(4X,A18, ' = ', I12)")        "puff segment      ", this%current_puff_seg
-    write(*,"(4X,A18, ' = ', G12.6)")      "puff_rate_0       " , puff_rate_0
-    write(*,"(4X,A18, ' = ', G12.6)")      "puff_rate_1       " , puff_rate_1
-    write(*,"(4X,A18, ' = ', G12.6,A)")    "puff_rate         "   , puff_rate, " atoms/s"
+    write(*,"(4X,A18, ' = ', G13.6)")      "puff_rate_0       " , puff_rate_0
+    write(*,"(4X,A18, ' = ', G13.6)")      "puff_rate_1       " , puff_rate_1
+    write(*,"(4X,A18, ' = ', G13.6,A)")    "puff_rate         "   , puff_rate, " atoms/s"
     if (trim(this%create_scheme%scheme) == "num") write(*,"(4X,A18, ' = ', I12)") "supers_num_puff   ", this%puff_ctrl%supers_num_puff
-    if (trim(this%create_scheme%scheme) == "weight") write(*,"(4X,A18, ' = ', G12.6)") "supers_weight_puff", this%puff_ctrl%supers_weight_puff
-    if (trim(this%create_scheme%scheme) == "ratio") write(*,"(4X,A18, ' = ', G12.6)") "supers_ratio_puff ", this%puff_ctrl%supers_ratio_puff
+    if (trim(this%create_scheme%scheme) == "weight") write(*,"(4X,A18, ' = ', G13.6)") "supers_weight_puff", this%puff_ctrl%supers_weight_puff
+    if (trim(this%create_scheme%scheme) == "ratio") write(*,"(4X,A18, ' = ', G13.6)") "supers_ratio_puff ", this%puff_ctrl%supers_ratio_puff
     write(*,*) ""
   endif
       
@@ -457,7 +457,7 @@ call MPI_REDUCE(puff_weight_local,all_puff_weight,1, MPI_DOUBLE_PRECISION, MPI_S
 if (sim%my_id .eq. 0) then
   write(*,"(2X,A12)") "Puffed:     "
   write(*,"(4X,A18, ' = ', I12)")    "Superparticles    ", all_puffed_this_step
-  write(*,"(4X,A18, ' = ', E12.6)")  "Total Weight      ", all_puff_weight
+  write(*,"(4X,A18, ' = ', E13.6)")  "Total Weight      ", all_puff_weight
 endif
   
   

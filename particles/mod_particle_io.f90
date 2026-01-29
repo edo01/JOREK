@@ -351,6 +351,7 @@ use_hdf5_access_properties,collective_mpio_in,mpi_comm_in,mpi_info_in)
         call HDF5_real_saving(file_id,sim%groups(ii)%mass,trim(group_name)//"mass")
         call HDF5_char_saving(file_id,sim%groups(ii)%coupling_scheme,trim(group_name)//"coupling_scheme")
         call HDF5_char_saving(file_id,sim%groups(ii)%id,trim(group_name)//"id")
+        call HDF5_real_saving(file_id,sim%groups(ii)%average_weight,trim(group_name)//"average_weight")
       endif
       !> deallocate structures
       call deallocate_particle_arrays(n_particles,i_elm_arr,i_life_arr,q_arr,&
@@ -453,7 +454,7 @@ mpi_comm_in,mpi_info_in,test_in)
 
   ! temp group attributes
   integer            :: tmp_Z
-  real*8             :: tmp_mass
+  real*8             :: tmp_mass, tmp_average_weight
   character(len=3)   :: tmp_cs
   character(len=8)   :: tmp_ad_suffix 
 
@@ -540,6 +541,7 @@ mpi_comm_in,mpi_info_in,test_in)
         call HDF5_real_reading(file_id,tmp_mass,trim(group_name)//"mass")
         call HDF5_char_reading(file_id,tmp_cs,trim(group_name)//"coupling_scheme")
         call HDF5_char_reading(file_id,tmp_ad_suffix,trim(group_name)//"adas_suffix")
+        call HDF5_real_reading(file_id,tmp_average_weight,trim(group_name)//"average_weight")
         call HDF5_get_dataset_rank_dims(file_id,trim(group_name)//"i_elm",&
         rank,n_particles_tot,n_particles_max) ! n_particles_tot
 
@@ -598,6 +600,8 @@ mpi_comm_in,mpi_info_in,test_in)
         sim%groups(i)%Z = tmp_Z
         sim%groups(i)%mass = tmp_mass
         sim%groups(i)%coupling_scheme = tmp_cs
+        if(tmp_average_weight /= tmp_average_weight) tmp_average_weight = -1 !avoid NaNs if the average_weight was not saved (backwards compatibility), will get updated before first particle loop call
+        sim%groups(i)%average_weight  = tmp_average_weight
         ! overriding n_particles_tot from import with n_particles from config
         sim%groups(i)%n_particles = config%n_particles
         n_particles_tot(1) = config%n_particles

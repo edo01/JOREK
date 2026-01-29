@@ -11,7 +11,7 @@ contains
   !> subroutine that will construct elementary matrices
   subroutine elementary_matrix_build(element, nodes, xpoint2, xcase2, R_axis,         &
        &                             Z_axis, psi_axis, psi_bnd, R_xpoint, Z_xpoint,   &
-       &                             omp_tid, ife, n_local_elms, node_list, i_tor_min, i_tor_max, &
+       &                             omp_tid, ife, ielm, n_local_elms, node_list, i_tor_min, i_tor_max, &
                                      aux_nodes)
 
     ! --- Modules
@@ -36,6 +36,7 @@ contains
     real*8,                           intent(in)     :: Z_xpoint(2)
     integer,                          intent(in)     :: omp_tid
     integer,                          intent(in)     :: ife
+    integer,                          intent(in)     :: ielm
     integer,                          intent(in)     :: n_local_elms
     integer,                          intent(in)     :: i_tor_min   
     integer,                          intent(in)     :: i_tor_max   
@@ -134,7 +135,15 @@ contains
         else
           ! --- The target has boundary 1 or 3
           direction(1) = 1
-          if (     (  ((bnd1 .eq. 1) .or. (bnd1 .eq. 3)) .and. ((bnd2 .eq. 1) .or. (bnd2 .eq. 3))  ) &
+          if ((bnd1 .eq. 9) .and. (bnd2 .eq. 9)) then ! for removed triangle, we get 9 - 9 boundary, where it could be either s=const or t=const
+            ! so we use the fact that the nodes are consistently defining which sides are the s and t sides (identical to that in grids/mod_boundary.f90)
+            if ( mod(iv,2) == 1 ) then
+              direction(2) = 2
+            else
+              direction(2) = 3
+            end if
+              
+          elseif ( (  ((bnd1 .eq. 1) .or. (bnd1 .eq. 3)) .and. ((bnd2 .eq. 1) .or. (bnd2 .eq. 3))  ) &
               .or. (  ((bnd1 .eq. 1) .or. (bnd1 .eq. 9)) .and. ((bnd2 .eq. 1) .or. (bnd2 .eq. 9))  ) &
               .or. (  ((bnd1 .eq. 4) .or. (bnd1 .eq. 9)) .and. ((bnd2 .eq. 4) .or. (bnd2 .eq. 9))  ) &
               .or. (  ((bnd1 .eq. 1) .or. (bnd1 .eq. 4)) .and. ((bnd2 .eq. 4) .or. (bnd2 .eq. 1))  ) ) then
@@ -158,12 +167,26 @@ contains
             cycle
           endif
         endif
+
+        ! sanity check of the above code: the side between node 1 and 2 (iv=1), and nodes 3 and 4 (iv=3) should have direction(2)=2 (i.e. t=const.), while 
+        ! the other two sides between nodes 2 and 3 (iv=2), and 4 and 1 (iv=4) should have direction(2)=3 (i.e. s=cont.)
+        if (((direction(2)==2) .and. ( mod(iv,2) /= 1 )) .or. ((direction(2)==3) .and. (mod(iv,2) /= 0))) then
+          !$omp critical
+          write(*,"(A,3I6)") "ERROR: There seems to be an inconsistency in direction(2) in matrix/construct_matrix_mod.f90, (direction(2) / iv / node)=", direction(2),iv,inode1
+          !$omp end critical
+        end if
           
 
         ! --- Build matrix elements for boundary
+#if JOREK_MODEL == 183
         call boundary_matrix_open(vertex, direction, element, nodes, & 
                                   xpoint2, xcase2, R_axis, Z_axis, psi_axis, psi_bnd, R_xpoint, Z_xpoint, &
+                                  thread_struct(omp_tid)%ELM, thread_struct(omp_tid)%RHS, i_tor_min, i_tor_max, ielm)
+#else
+        call boundary_matrix_open(vertex, direction, element, nodes, &
+                                  xpoint2, xcase2, R_axis, Z_axis, psi_axis, psi_bnd, R_xpoint, Z_xpoint, &
                                   thread_struct(omp_tid)%ELM, thread_struct(omp_tid)%RHS, i_tor_min, i_tor_max)
+#endif
        
       enddo
     endif
@@ -512,11 +535,11 @@ subroutine construct_matrix(mhd_sim, local_elms, n_local_elms, a_mat, rhs_vec, h
     endif
 
     call elementary_matrix_build(element, nodes, xpoint2, xcase2, R_axis, Z_axis, psi_axis,        &
-      psi_bnd, R_xpoint, Z_xpoint, omp_tid, ife, n_local_elms, node_list, a_mat%i_tor_min, a_mat%i_tor_max, aux_nodes)
+      psi_bnd, R_xpoint, Z_xpoint, omp_tid, ife, ielm, n_local_elms, node_list, a_mat%i_tor_min, a_mat%i_tor_max, aux_nodes)
 
     ! Transform basis functions for the axis nodes. mhd_sim% will solve for new degrees of freedom at the axis.
     if(treat_axis .and. (nodes(1)%axis_node .or. nodes(2)%axis_node .or. nodes(3)%axis_node .or. nodes(4)%axis_node) ) then
-      call transform_basis_for_axis_element(nodes, thread_struct(omp_tid)%ELM, thread_struct(omp_tid)%RHS, i_v, n_var, i_harm, n_tor_local)
+      call transform_basis_for_axis_element(nodes, ielm, thread_struct(omp_tid)%ELM, thread_struct(omp_tid)%RHS, i_v, n_var, i_harm, n_tor_local)
     endif
 
 #ifdef PRINT_ELM_RHS

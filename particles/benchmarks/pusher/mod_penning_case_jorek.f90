@@ -13,12 +13,12 @@ contains
 
 subroutine jorek_penning_fields(node_list, element_list, apply_dirichlet_in, &
 rank_in, master_in, ifail_out)
-  use mod_project_particles, only             : prepare_mumps_par_n0
+  use mod_uncoupled_projection, only: assemble_projection_matrix_n0
   use projection_helpers,   only              : calc_rhs_f
   use mod_projection_helpers_test_tools, only : broadcast_dmumps_project_struct
   use mod_projection_helpers_test_tools, only : map_matrix_to_MUMPS_datastructure
   use phys_module, only       : F0, central_mass, central_density, tstep
-  use constants, only         : mass_proton, mu_zero, el_chg, atomic_mass_unit
+  use constants, only         : mu_zero, el_chg, atomic_mass_unit
   use mpi_mod
   implicit none
 
@@ -58,7 +58,7 @@ rank_in, master_in, ifail_out)
   F0 = F0_CHEAT_FACTOR ! Set a very small F0 to have nearly no toroidal magnetic field
 
   ! Initialize fields in JOREK units
-  t_norm  = sqrt(mu_zero * mass_proton * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
+  t_norm  = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
   qom     = real(charge) * el_chg / (mass * atomic_mass_unit)
   B0      = omega_b/qom ! In T
   Phi0    = epsilon*omega_e**2/qom/2.d0*t_norm ! In JOREK units: E_SI*t_norm
@@ -71,7 +71,7 @@ rank_in, master_in, ifail_out)
   i_tor_local = 1
   n_tor_local = 1
 
-  call prepare_mumps_par_n0(node_list, element_list, n_tor_local, i_tor_local, mpi_comm_world, mpi_comm_n, mpi_comm_master, &
+  call assemble_projection_matrix_n0(node_list, element_list, n_tor_local, i_tor_local, mpi_comm_world, mpi_comm_n, mpi_comm_master, &
                             a_mat,  area, volume, filter=0.d0, filter_hyper=0.d0, filter_parallel=0.d0, &
                             apply_dirichlet_condition_in=apply_dirichlet , integral_weights=integral_weights )
   

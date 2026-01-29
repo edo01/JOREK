@@ -320,7 +320,7 @@ subroutine do_jorek_timestep(this, sim, ev)
   if (.not. this%setup_done) then
     t_now = sim%time / sim%t_norm  
     index_now = index_start
-    if (sim%my_id .eq. 0) write(*,"(A,f16.8,A,g12.6,A)") "INFO: JOREK timestep: ", dt_jorek, " = ", dt, " s"
+    if (sim%my_id .eq. 0) write(*,"(A,f16.8,A,g13.6,A)") "INFO: JOREK timestep: ", dt_jorek, " = ", dt, " s"
     call setup_solvers(this, sim)
   end if
 

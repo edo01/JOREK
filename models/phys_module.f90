@@ -39,7 +39,7 @@ module phys_module
   real*8  :: TiTe_ratio           !< ratio to set ion and electron temperature from T (in model 180): Ti=TiTe_ratio*T; Te=(1.0-TiTe_ratio)*T
   real*8  :: F0                   !< Determines fixed toroidal magnetic field: \f$ B_\phi = F_0/R \f$
   real*8  :: central_density      !< particle density at the magnetic axis (in units of \f$10^{20} m^{-3}\f$)
-  real*8  :: central_mass         !< average ion mass in atomic mass units (constant in time and space)
+  real*8  :: central_mass         !< average ion mass in atomic mass units (constant in time and space, including electron mass)
   real*8  :: sqrt_mu0_rho0        !< Normalization factor \f$\sqrt(\mu_0 \rho_0)\f$ calculated from input
   real*8  :: sqrt_mu0_over_rho0   !< Normalization factor \f$\sqrt(\mu_0/\rho_0)\f$ calculated from input
   real*8  :: gamma                !< ratio of specific heat (typically 5/3)
@@ -74,6 +74,7 @@ module phys_module
   integer :: nout                 !< Output a restart file every nout timesteps
   integer :: nout_projection      !< Output particle projection every nout_projection timesteps (only for diagnostics)
                                   !< Note that the 'to_h5' or 'to_vtk' flag should be .true. in the 'new_projection' function for this parameter to be in play
+  integer :: nout_particles       !< Output particle restart file every nout_particles timesteps
   integer :: xcase                !< 1->LowerXpoint. 2->UpperXpoint. 3->doubleNull
   logical :: forceSDN             !< Force a symmetric double null, within the accuracy of SDN_threshold
   real*8  :: SDN_threshold        !< threshold, in absolute psi, for a symmetric-double-null grid construction
@@ -87,6 +88,7 @@ module phys_module
   real*8  :: Z_xpoint_limit(2)    !< Search the lower X-point in the region Z < Z_xpoint_limit(1) and the upper X-point in the region Z > Z_xpoint_limit(2) 
   integer :: xpoint_search_tries  !< The number of candidate elements to check for being the element containing the upper or lower X-point.
   logical :: bootstrap            !< Evolve the Bootstrap current consistently with time?
+  real*8  :: bootstrap_psin_cutoff!< Bootstrap-current hard cutoff if simulating X-point plasma.
   real*8  :: minRad               !< Approximation of minor radius for bootstrap current calculation
   logical :: refinement           !< Use mesh refinement? (not presently available)
   logical :: force_central_node   !< Force all nodes in the center to have the same values in flux aligned grids or independent values?
@@ -228,6 +230,9 @@ module phys_module
    
   ! Stellarator parameters
   logical :: gvec_grid_import     !< Generate grid fourier representation with GVEC
+  logical :: extended_boundary    !< Choose if extended boundary conditions (Biot-Savart version) should be used, default (false) is grad_chi with Dommaschk potentials
+  real*8  :: j_cutoff_rcoord      !< Radial location from which the current is set to zero as it approaches the boundary - rcoord corresponds to the normalised toroidal flux
+  real*8  :: j_cutoff_sig         !< Radial width over which the current is ramped down to zero towards the boundary
 
   !> Points used as blocks to extend grid into complex wall structures, see https://www.jorek.eu/wiki/doku.php?id=wallgrid_tutorial
   real*8  :: surface_cross_tol                                                  !< Tolerance when looking for crossing of polar lines and surfaces, needs to be > 1.0
@@ -1009,11 +1014,18 @@ module phys_module
   ! ------------------------------------------------
   ! --- Structures for settings wall_action
   ! ------------------------------------------------
-  !> Contains settings to define one wall_action (see mod_particle_wall_interaction)
+  integer, parameter  :: nmax_poly=10    !< maxixmum number of points in a polygon (used for part2self wall_actions)
+
+  !> Contains settings to define one wall_action (see mod_particle_wall_interaction for implementation
+  !> and the wiki for documentation at https://jorek.eu/wiki/doku.php?id=particles:wall_actions)
   type :: type_wall_act_config
-    character(len=20) :: type            !< type of the wall interaction, namely "self sputter" (e.g. W -> W), "fluid sputter" (e.g. fluid D+ -> W), "other sputter" (e.g. kinetic N -> W), "reflection" (e.g. kinetic D -> D) or "wall recomb" (e.g. kinetic D+ -> D)
-    character(len=3)  :: target_group_id !< which particle group (as identified by its %id) this wall interaction affects
-    real*8            :: weight_factor   !< additional weight factor of the yield (e.g. useful to simulate a non-unity wall albedo for a wall that partially absorbs incoming flux)
+    character(len=20) :: type               !< type of the wall interaction, namely "self sputter" (e.g. W -> W), "fluid sputter" (e.g. fluid D+ -> W), "other sputter" (e.g. kinetic N -> W), "reflection" (e.g. kinetic D -> D) or "wall recomb" (e.g. kinetic D+ -> D)
+    character(len=3)  :: target_group_id    !< which particle group (as identified by its %id) this wall interaction affects
+    real*8            :: weight_factor      !< additional weight factor of the yield (e.g. useful to simulate a non-unity wall albedo for a wall that partially absorbs incoming flux)
+    logical           :: only_in_polygon    !< whether to execute this wall_action only on the specified polygon (.true.) or on the full domain (.false.)
+    real*8            :: poly_R(nmax_poly)  !< R coordinates of the polygon. Make sure to define the polygon in order (the polygon is defined as linesegments drawn from point 1 to point 2 to point 3, etc.)
+    real*8            :: poly_Z(nmax_poly)  !< Z coordinates of the polygon.
+    character(len=10) :: nametag            !< for easy recognition of which action this is (with which polygon), used in the output file and for diagnostics (if left blank, it will be set to wall_act_configs(i) number i)
     
     ! settings for number of superparticles created when new super particles must be initialised
     integer           :: supers_num_wall    !< number of new superparticles initialised at each puff action
@@ -1056,10 +1068,16 @@ module phys_module
     logical             :: use_kin_cx              !< switch on charge-exchange for group 
     logical             :: use_kin_recombination   !< switch on recombination from the plasma fluid to this kinetic neutrals group*
                                                    !  *if 2+ ncs groups are present, how the fluid recombination is divided amongst the groups is not yet implemented
-                                                  
+    logical             :: use_kin_neutral_coll    !< switch on neutral self-collisions*
+                                                   !  *cross collisions between different neutrals species is not yet supported
+                                                   !   For more information on the neutral neutral collisions, see https://jorek.eu/wiki/doku.php?id=particles:neutral_neutral_collisions
+    real*8              :: neutral_coll_dTw(3)     !< the reference diameter d_ref [m], reference temperatrue T_ref [K] and viscosity index omega [-] of the variable hard sphere model for this neutral species
 
     ! ---- impurities (ics) specific
     logical             :: use_kin_bg_collisions   !< switch on collisions with the background plasma
+    character(len=9)    :: kin_bg_coll_type        !< choose type of heat flux used in collisions, either Homma2013 or Homma2020 at the moment
+    real*8              :: homma2020_alpha         !< alpha factor in Homma2020 heat flux to limit,
+                                                   !< recommended value is 1.5 for ion heat flux, see Homma 2020 and Fundamenski 2005
     integer             :: ics_group_idx           !< internal index given to this specific impurities group, used to obtain the variable index of charge density
                                                    !< projectons specific to this group, as we require a charge density projection for each impurities group for coupling
                                              
@@ -1077,8 +1095,8 @@ module phys_module
 
     real*8              :: num_re                  !< number of runaway electrons in the group
     real*8              :: re_energy               !< energy [eV] of the runaway electrons in the group
-    real*8              :: std_energy              !< standard deviation of the energy [eV] of the runaway electrons in the group
-    real*8              :: pitch                   !< pitch between RE momentum and magnetic field line (i.e. p_re_par/p_re_tot)
+    real*8              :: re_std_energy           !< standard deviation of the energy [eV] of the runaway electrons in the group
+    real*8              :: re_pitch                !< pitch between RE momentum and magnetic field line (i.e. p_re_par/p_re_tot)
 
   end type type_part_group_config
 
@@ -1086,6 +1104,8 @@ module phys_module
   character(len=3), dimension(n_part_groups_max) :: part_groups_in_use  
 
   type (type_part_group_config), dimension(n_part_groups_max) :: part_group_configs 
+
+  real*8 :: part_kill_ratio !< the ratio weight/average_weight at which kinetic particles will be destroyed rather than get their weight reduced (by interactions such as ionisation and wall pumping)
 
   ! ------------------------------------------------
   ! --- Structures for fluid groups

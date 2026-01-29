@@ -9,6 +9,7 @@ subroutine preset_parameters
   implicit none
 
   integer :: i, j ! for iterations
+  character(len=20) :: tmp !< for temporary name tag
 
   time_evol_scheme = 'Crank-Nicholson'
   
@@ -52,8 +53,8 @@ subroutine preset_parameters
   visco_par_heating = 0.d0
   visco_old_setup   = .false.
   
-  central_density = 1.d0        ! the central density in units 10^20 m^-3
-  central_mass    = 2.d0        ! the central average ion mass (D)
+  central_density = 1.d0            ! the central density in units 10^20 m^-3
+  central_mass    = 2.01410177811d0 ! the central average mass (atomic mass of deuterium, including electron)
 
   n_tor_restart= 0
   restart      = .false.
@@ -63,6 +64,9 @@ subroutine preset_parameters
   rst_format   = 0             ! use 'old' format for restart import
   write_ps     = .true.           ! write postscript file at the end of the run 
   gvec_grid_import = .false.
+  extended_boundary = .false.
+  j_cutoff_rcoord = 99.0
+  j_cutoff_sig = 0.025
 
   freeboundary_equil = .false. ! use free or fixed boundary equilibrium
   freeboundary       = .false. ! use free or fixed boundary?
@@ -193,6 +197,7 @@ subroutine preset_parameters
   T_jropes       = 0.d0
 
   bootstrap = .false.
+  bootstrap_psin_cutoff = 0.9995
 
   ellip  = 1.d0
   tria_u = 0.d0
@@ -560,6 +565,7 @@ subroutine preset_parameters
 
   nout = 9999999
   nout_projection = -1
+  nout_particles  = 9999999
 
   rst_hdf5 = 1   ! =0,restart with binary files; =1, with HDF5 files
 
@@ -642,15 +648,15 @@ subroutine preset_parameters
   current_prof_initialized = .false.
   
   use_mumps          = .false.              ! Use MUMPS solver
-  use_pastix         = .true.               ! Use PASTIX solver
-  use_strumpack      = .false.              ! Use STRUMPACK solver  
+  use_pastix         = .false.              ! Use PASTIX solver
+  use_strumpack      = .true.               ! Use STRUMPACK solver  
   use_wsmp           = .false.              ! Use WSMP solver (use with care, still in development!)
   
   use_mumps_eq       = .false.              ! Use MUMPS equilibrium solver
   use_pastix_eq      = .false.              ! Use PASTIX equilibrium solver
   use_strumpack_eq   = .false.              ! Use STRUMPACK equilibrium olver  
   
-  use_mumps_prj      = .false.              ! Use MUMPS equilibrium solver
+  use_mumps_prj      = .true.               ! Use MUMPS equilibrium solver
   use_pastix_prj     = .false.              ! Use PASTIX equilibrium solver
   use_strumpack_prj  = .false.              ! Use STRUMPACK equilibrium olver  
 
@@ -892,15 +898,21 @@ part_group_configs(:)%use_kin_ionisation     = .false.
 ! --- ncs only
 part_group_configs(:)%use_kin_recombination  = .false.
 part_group_configs(:)%use_kin_cx             = .false.
+part_group_configs(:)%use_kin_neutral_coll   = .false.
+do i=1,n_part_groups_max
+  part_group_configs(i)%neutral_coll_dTw(:)  = -1.d99
+end do
 ! --- ics only
 part_group_configs(:)%use_kin_bg_collisions  = .false.
+part_group_configs(:)%kin_bg_coll_type       = 'Homma2020'
+part_group_configs(:)%homma2020_alpha        = 1.5d0
 part_group_configs(:)%ics_group_idx          = -1
 
 !----- specific to ics and ncs 
 part_group_configs(:)%num_re                 = 0.d0
 part_group_configs(:)%re_energy              = 0.d0
-part_group_configs(:)%std_energy             = 0.d0
-part_group_configs(:)%pitch                  = 0.d0
+part_group_configs(:)%re_std_energy          = 0.d0
+part_group_configs(:)%re_pitch               = 0.d0
 
 do i=1, n_part_groups_max
   do j=1, n_valves_max
@@ -920,6 +932,11 @@ do i=1, n_part_groups_max
     part_group_configs(i)%wall_act_configs(j)%type            = "none"
     part_group_configs(i)%wall_act_configs(j)%target_group_id = "non"
     part_group_configs(i)%wall_act_configs(j)%weight_factor   = 1.d0
+    part_group_configs(i)%wall_act_configs(j)%only_in_polygon = .false.
+    part_group_configs(i)%wall_act_configs(j)%poly_R          = -1.d99
+    part_group_configs(i)%wall_act_configs(j)%poly_Z          = -1.d99
+    write(tmp,"(I5)") j
+    write(part_group_configs(i)%wall_act_configs(j)%nametag,"(A)") adjustl(trim(tmp)) ! sets the default nametag to the wall_act_configs(j) number j
 
     part_group_configs(i)%wall_act_configs(j)%supers_num_wall    = -1
     part_group_configs(i)%wall_act_configs(j)%supers_weight_wall = -1.d0
@@ -928,6 +945,8 @@ do i=1, n_part_groups_max
     !< will be used, with its default value being set by supers_ratio_wall_default in mod_particle_wall_interaction.f90
   enddo
 enddo
+
+part_kill_ratio = 1.d-3
 
 ! --- fluid groups
 n_fluid_groups = 0
@@ -941,6 +960,11 @@ do i=1, n_fluid_groups_max
     fluid_configs(i)%wall_act_configs(j)%type            = "none"
     fluid_configs(i)%wall_act_configs(j)%target_group_id = "non"
     fluid_configs(i)%wall_act_configs(j)%weight_factor   = 1.d0
+    fluid_configs(i)%wall_act_configs(j)%only_in_polygon = .false.
+    fluid_configs(i)%wall_act_configs(j)%poly_R          = -1.d99
+    fluid_configs(i)%wall_act_configs(j)%poly_Z          = -1.d99
+    write(tmp,"(I5)") j
+    write(fluid_configs(i)%wall_act_configs(j)%nametag,"(A)") adjustl(trim(tmp))
 
     fluid_configs(i)%wall_act_configs(j)%supers_num_wall    = -1
     fluid_configs(i)%wall_act_configs(j)%supers_weight_wall = -1.d0

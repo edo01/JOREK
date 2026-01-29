@@ -23,6 +23,7 @@ namelist /in1/  tstep, nstep, tstep_n, nstep_n,                     &
                 rst_hdf5, rst_hdf5_version, keep_current_prof,      &
                 eta, visco, visco_par, visco_par_par,               &
                 restart, rst_format, regrid, bootstrap, write_ps,   &
+                bootstrap_psin_cutoff,                              &
                 regrid_from_rz,                                     &
                 n_R, n_Z, n_radial, n_pol, n_tht, n_flux,           &
                 n_open, n_private, n_leg, n_leg_out, n_ext,         &
@@ -35,7 +36,8 @@ namelist /in1/  tstep, nstep, tstep_n, nstep_n,                     &
                 SIG_up_leg_0, SIG_up_leg_1, SIG_up_priv,            &
                 SIG_outer, SIG_inner, SIG_theta_up,                 &
                 dPSI_outer, dPSI_inner, dPSI_up_priv,               &
-                nout, nout_projection, xr1, sig1, xr2, sig2,        &
+                nout, nout_projection, nout_particles,              &
+                xr1, sig1, xr2, sig2,                               &
                 R_begin, R_end, Z_begin, Z_end,                     &
                 rect_grid_vac_psi,                                  &
                 R_geo, Z_geo, amin, mf, fbnd, fpsi, mode,           &
@@ -201,7 +203,7 @@ namelist /in1/  tstep, nstep, tstep_n, nstep_n,                     &
                 apply_dirichlet_proj, restart_particles,            &
                 part_group_configs, part_groups_in_use, valves,     &
                 fluid_configs, init_particles_only,                 &
-                min_sheath_angle, bcs,                              &
+                min_sheath_angle, bcs, part_kill_ratio,             &
                 use_sc, add_sources_in_sc, visco_sc_num,            &
                 D_perp_sc_num, D_par_sc_num, ZK_perp_sc_num,        &
                 ZK_par_sc_num, ZK_i_perp_sc_num, ZK_i_par_sc_num,   &

@@ -39,7 +39,7 @@ function initial_run () {
 
 # --- Carry out the test case
 function restart_run () {
-  ${codedir}/util/setinput.sh input restart_particles=.t. restart=.t. nstep_n=1 tstep_n=10.                               || exit 1
+  ${codedir}/util/setinput.sh input restart_particles=.t. restart=.t. nstep_n=2 tstep_n=10.                               || exit 1
   export OMP_NUM_THREADS=$num_threads                                                                                     || exit 1
   echo "setting OMP_NUM_THREADS=$num_threads, due to the requirements of the test"                                        || exit 1
   $MPIRUN $mpitasks ./kinetic_main < input | tee logfile                                                                  || exit 1
