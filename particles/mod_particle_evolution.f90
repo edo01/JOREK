@@ -285,7 +285,7 @@ contains
   
       do j=start_idx,size(particles,1)
         do k=1,nstep_particles
-if (j .eq. 0) write(*,*) "k = ", k
+          if (j .eq. 0) write(*,*) "k = ", k
           if (particles(j)%i_elm .le. 0) exit
   
           call basisfunctions(particles(j)%st(1), particles(j)%st(2), HH, HH_s, HH_t)
@@ -438,7 +438,12 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     start_time = MPI_WTIME()
 
 #ifdef USE_GPU
-      !> TODO: Move it in the setup phase
+      !> When we enter the target region, we need to be carefull with the data structures that are
+      !> deallocated/reallocated during the simulation (e.g. feedback_rhs). These need to be DELETED from
+      !> the device memory and then re-MAPPED when we enter again otherwise after few iteration the runtime
+      !> crashes because of out-of-date pointers on the device.
+
+      !> TODO: Move it in the setup phase and check TOFROM
       !$omp target enter data                                                                         &
       !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &
       !$omp         fields%element_list_SoA, fields%node_list_SoA,                                    &
@@ -447,9 +452,11 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp         fields%element_list_SoA%size,                                                     &
       !$omp         group_mass, tstep_part_adj, nstep_particles,                                      &  
       !$omp         P_par_idx_kin, P_perp_idx_kin,j_phi_idx_kin,                                      &
-      !$omp         feedback_rhs, particles_SoA, particles_SoA%x, particles_SoA%p,                    &
+      !$omp         particles_SoA, particles_SoA%x, particles_SoA%p,                                  &
       !$omp         particles_SoA%st, particles_SoA%i_elm,                                            &
       !$omp         particles_SoA%weight, particles_SoA%q)                                            
+
+      !$omp target enter data map(to: feedback_rhs)
 
       !$omp target                                                           &
       !$omp update to(feedback_rhs, particles_SoA%x, particles_SoA%p,        &
@@ -536,6 +543,9 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp             particles_SoA%st, particles_SoA%i_elm)    &
       !$omp device(sim%gpu_id)                                    &
       !$omp nowait depend(in:gpu_token)    
+
+      !$omp target exit data                                      &
+      !$omp map(from: feedback_rhs)
 #endif
     
 
