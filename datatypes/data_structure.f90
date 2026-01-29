@@ -12,8 +12,8 @@ module data_structure
   type type_node                                  !< type definition of a node (i.e. a vertex)
   
   real*8     :: x(n_coord_tor,n_degrees,n_dim)        !< x,y,z coordinates of points and additional nodal geometry
-  real*8     :: values(n_tor, n_degrees, n_var) !< Variable values and derivatives (contiguous)
-  real*8     :: deltas(n_tor, n_degrees, n_var) !< Change of variable values and derivatives in last timestep (contiguous)  
+  real*8, dimension(:,:,:), allocatable  :: values   !< Variable values and derivatives
+  real*8, dimension(:,:,:), allocatable  :: deltas   !< Change of variable values and derivatives in last timestep
 #if STELLARATOR_MODEL
   real*8     :: r_tor_eq(n_degrees)                     !< radial coordinate from GVEC (square root of normalised toroidal flux)
 #if JOREK_MODEL == 180
@@ -236,12 +236,11 @@ contains
     type(type_node), intent(inout)    :: node       !< the node to be initialized
     integer, intent(in)               :: n_values   !< number of values to be stored in node
     
-    ! THIS IS COMMENTED OUT TO KEEP COMPATIBILITY WITH OLD ALLOCATABLE TYPE
-    !if (allocated(node%values)) deallocate(node%values)
-    !if (allocated(node%deltas)) deallocate(node%deltas)
+    if (allocated(node%values)) deallocate(node%values)
+    if (allocated(node%deltas)) deallocate(node%deltas)
 
-    !allocate(node%values(n_tor, n_degrees, n_values))
-    !allocate(node%deltas(n_tor, n_degrees, n_values))
+    allocate(node%values(n_tor, n_degrees, n_values))
+    allocate(node%deltas(n_tor, n_degrees, n_values))
 
   end subroutine init_node
 
@@ -271,11 +270,10 @@ contains
     implicit none
     type(type_node), intent(inout)    :: node       !< the node to have its values array deallocated
     
-    ! THIS IS COMMENTED OUT TO KEEP COMPATIBILITY WITH OLD ALLOCATABLE TYPE
-    !if (allocated(node%values)) then
-    !  deallocate(node%values)
-    !  deallocate(node%deltas)
-    !endif
+    if (allocated(node%values)) then
+      deallocate(node%values)
+      deallocate(node%deltas)
+    endif
 
   end subroutine dealloc_node
 
