@@ -428,12 +428,17 @@ contains
   end subroutine copy_particles_to_SoA
 
   !> Copy particles from a Structure of Arrays to an Array of Structures
-  subroutine copy_particles_from_SoA(particle_list_out, particle_SoA_in)
+  subroutine copy_particles_from_SoA(particle_list_out, particle_SoA_in, alive_particle_count)
     class(particle_base), dimension(:), intent(inout)  :: particle_list_out
     class(particle_SoA_base), intent(in)        :: particle_SoA_in
-    integer :: n_particles, i
+    integer, optional, intent(in)               :: alive_particle_count
+    integer                                     :: n_particles, i
 
-    n_particles = size(particle_SoA_in%i_elm)
+    if (present(alive_particle_count)) then
+      n_particles  = alive_particle_count
+    else 
+      n_particles = size(particle_SoA_in%i_elm)
+    endif
 
     do i=1,n_particles
       particle_list_out(i)%x       = particle_SoA_in%x(:,i)

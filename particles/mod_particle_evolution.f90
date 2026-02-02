@@ -138,6 +138,11 @@ contains
 
       !> wait for GPU to finish
       !$omp taskwait
+
+      !> ------------------COPY BACK---------------------
+      !> copy the SoA data structures back to the particles AFTER omp taskwait
+      call copy_particles_from_SoA(sim%groups(group_num)%particles, sim%groups(group_num)%particles_SoA, alive_particle_count)
+
 #else
       call evolve_REs(sim, group_num, feedback_rhs_inv_CPU, rng, tstep_part_adj)
 #endif
@@ -233,7 +238,7 @@ contains
     type(count_action)                                        :: counter
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8, intent(in)                                        :: tstep_part_adj
-    integer, optional                                         :: start_idx_param
+    integer, optional, intent(in)                             :: start_idx_param
     
     character(len=3) :: cs
     integer :: start_idx
@@ -336,8 +341,8 @@ contains
     
   end subroutine evolve_REs
 
-!> Kernel to evolve REs on GPU
-subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, alive_particle_count)
+  !> Kernel to evolve REs on GPU
+  subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, alive_particle_count)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
@@ -374,10 +379,6 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     integer   :: j, k, m, n, ifail, i_tor
     real*8    :: group_mass, sim_time
     integer   :: num_particles
-    
-    !> sorting 
-    integer                       :: n_sort, s !< Multiple sorting
-    real*8                        :: start_time, end_time, tot_time(3)
 
     !> hybrid GPU-CPU
     integer :: gpu_token
@@ -399,7 +400,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
 
     ! TODO: not used
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
-    rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm                  ! rho_SI = rho_norm * rho
+    rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm             ! rho_SI = rho_norm * rho
 
     !> save simulation parameters
     group_mass      = sim%groups(group_num)%mass
@@ -411,30 +412,11 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
     !> -----------------------------------------
     if (sim%my_id .eq. 0) write(*,*) 'INFO: Preparing GPU data structures...'
 
-    !> Breaks the evolution in n_sort stage, and at each stage it orders the particles by i_elm to improve data locality
-    n_sort = 1 !10 ! TODO: move it to input file
-
-    do s=1,n_sort
-
-#ifdef USE_ORDERING
-    !> if we use multiple sorting, from the 2nd sort onwards we need to reorder the particles again
-    if (s .gt. 1) then
-      !> reorder particles by i_elm to improve data locality
-      call sort_particles(sim, group_num, particle_global_sort, alive_particle_count)
-      !> update SoA after sorting
-      call copy_particles_to_SoA(sim%groups(group_num)%particles_SoA, sim%groups(group_num)%particles)
-    endif
-#endif
-
-
     select type (particles_SoA => sim%groups(group_num)%particles_SoA)
     type is (particle_SoA_kinetic_relativistic)
 
     select type (fields => sim%fields)
     type is (jorek_fields_interp_linear)
-
-    !> Start timing the kernel section
-    start_time = MPI_WTIME()
 
 #ifdef USE_GPU
       !> When we enter the target region, we need to be carefull with the data structures that are
@@ -442,7 +424,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !> the device memory and then re-MAPPED when we enter again otherwise after few iteration the runtime
       !> crashes because of out-of-date pointers on the device.
 
-      !> TODO: Move it in the setup phase and check TOFROM
+      !> TODO: Move it in the setup phase
       !$omp target enter data                                                                         &
       !$omp map(to: fields, fields%element_list, fields%node_list, fields%node_list%node,             &
       !$omp         fields%element_list_SoA, fields%node_list_SoA,                                    &
@@ -468,7 +450,7 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp        fields,  feedback_rhs,                                      &
       !$omp        sim_time, group_mass, tstep_part_adj, nstep_particles,      & 
       !$omp        P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin,               &
-      !$omp        alive_particle_count, n_sort)                               &
+      !$omp        alive_particle_count)                                       &
       !$omp private(ifail, j, k)                                               &
       !$omp private(E, B, psi, U, HH, HH_s, HH_t, HZ,                          &
       !$omp         cylindrical_momentum, B_norm2, v_par, v_perp,              &
@@ -479,8 +461,8 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
 
 #endif
       do j=1, alive_particle_count
-        do k=1, nstep_particles/n_sort
-        
+        do k=1, nstep_particles
+
           if (particles_SoA%i_elm(j) .le. 0) cycle
 
           ! HH_s and HH_t are not used
@@ -546,25 +528,10 @@ subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, rng, tstep_part_adj, ali
       !$omp target exit data                                      &
       !$omp map(from: feedback_rhs)
 #endif
-    
-
-    
-    !> End timing the sorting section
-    end_time = MPI_WTIME()
-    tot_time = mpi_minmeanmax(end_time-start_time)
-    if (sim%my_id .eq. 0) then
-        write(*,"(A,3f10.3,A)") , "Time taken for the kernel (min/mean/max): ", tot_time, " seconds"
-    endif
 
     end select ! select type (fields)
     end select ! select type (particles)
-    
-    
-    !> ------------------COPY BACK---------------------
-    !> copy the SoA data structures back to the particles
-    call copy_particles_from_SoA(sim%groups(group_num)%particles, sim%groups(group_num)%particles_SoA)
 
-    enddo !< n_sort
   end subroutine evolve_REs_gpu
 
 
