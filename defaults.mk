@@ -239,7 +239,7 @@ ifeq (1, $(USE_GPU))
 endif
 
 ifeq (1, $(USE_GPU_TEST))
-  DEFINES  := $(DEFINES) -DUSE_GPU_TEST -DUSE_ORDERING
+  DEFINES  := $(DEFINES) -DUSE_GPU_TEST
 endif
 
 ifeq (1, $(USE_ORDERING))
