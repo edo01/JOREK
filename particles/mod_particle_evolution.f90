@@ -98,10 +98,6 @@ contains
     !> reorder particles by i_elm to improve data locality
     call sort_particles(sim, group_num, particle_global_sort, alive_particle_count)
 #endif
-#ifdef USE_GPU
-    !> when using the GPU, we must keep the SoA updated
-    call copy_particles_to_SoA(sim%groups(group_num)%particles_SoA, sim%groups(group_num)%particles)
-#endif
 
     !> count number of particles in system, and update sim%groups(...)%average_weight
     call with(sim, counter)
@@ -131,7 +127,12 @@ contains
         write(*,*) 'INFO: Evolving ', size(sim%groups(group_num)%particles,1) - alive_particle_count, ' particles on CPU'
       endif
 
-      ! GPU evolution
+      !> When using the GPU, we must keep the particle SoA data structure updated
+      call copy_particles_to_SoA(sim%groups(group_num)%particles_SoA, sim%groups(group_num)%particles, alive_particle_count)
+      !> Update values and deltas after the fluid execution
+      call update_SoA_values_and_deltas(sim%fields%node_list_SoA, sim%fields%node_list)
+
+      ! GPU evolution BEFORE CPU execution
       call evolve_REs_gpu(sim, group_num, feedback_rhs_inv_GPU, rng, tstep_part_adj, alive_particle_count)
       ! CPU evolution
       call evolve_REs(sim, group_num, feedback_rhs_inv_CPU, rng, tstep_part_adj, start_idx)
@@ -139,7 +140,6 @@ contains
       !> wait for GPU to finish
       !$omp taskwait
 
-      !> ------------------COPY BACK---------------------
       !> copy the SoA data structures back to the particles AFTER omp taskwait
       call copy_particles_from_SoA(sim%groups(group_num)%particles, sim%groups(group_num)%particles_SoA, alive_particle_count)
 
@@ -439,10 +439,10 @@ contains
 
       !$omp target enter data map(to: feedback_rhs)
 
-      !$omp target                                                           &
-      !$omp update to(feedback_rhs, particles_SoA%x, particles_SoA%p,        &
-      !$omp         particles_SoA%p, particles_SoA%st, particles_SoA%i_elm,  &
-      !$omp         particles_SoA%weight, particles_SoA%q)                   &
+      !$omp target                                                            &
+      !$omp update to(feedback_rhs, particles_SoA%x, particles_SoA%p,         &
+      !$omp         particles_SoA%p, particles_SoA%st, particles_SoA%i_elm,   &
+      !$omp         fields%node_list_SoA%values, fields%node_list_SoA%deltas) &
       !$omp nowait depend(out:gpu_token)
 
       !$omp target teams distribute parallel do default(none)                  &

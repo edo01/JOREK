@@ -315,51 +315,82 @@ contains
 
   subroutine init_node_list_SoA(node_list_SoA, node_list)
     implicit none
-    type(type_node_list_SoA), intent(inout) :: node_list_SoA       !< the node list in SoA format
-    type(type_node_list), intent(in)        :: node_list     !< the node list in AoS format
-    integer   :: j
+    type(type_node_list_SoA), intent(inout) :: node_list_SoA
+    type(type_node_list), intent(in)        :: node_list
+
+    integer :: j
 
     node_list_SoA%n_nodes = node_list%n_nodes
     
-    !> ATTENTION: this order of allocation follows the gpu implementation
-    allocate(node_list_SoA%x(n_coord_tor,n_degrees,n_dim,node_list%n_nodes))
-    allocate(node_list_SoA%values(n_tor,n_degrees,n_var,node_list%n_nodes))
-    allocate(node_list_SoA%deltas(n_tor,n_degrees,n_var,node_list%n_nodes))
-    
-    do j = 1,node_list%n_nodes
-      node_list_SoA%x(:,:,:,j)       = node_list%node(j)%x(:,:,:)
-      node_list_SoA%values(:,:,:,j)  = node_list%node(j)%values(:,:,:)
-      node_list_SoA%deltas(:,:,:,j)  = node_list%node(j)%deltas(:,:,:)
+    ! Clear existing memory
+    if (allocated(node_list_SoA%x))      deallocate(node_list_SoA%x)
+    if (allocated(node_list_SoA%values)) deallocate(node_list_SoA%values)
+    if (allocated(node_list_SoA%deltas)) deallocate(node_list_SoA%deltas)
+
+    ! ATTENTION: this layout follow the GPU implementation
+    allocate(node_list_SoA%x(n_coord_tor, n_degrees, n_dim, node_list%n_nodes))
+    allocate(node_list_SoA%values(n_tor, n_degrees, n_var, node_list%n_nodes))
+    allocate(node_list_SoA%deltas(n_tor, n_degrees, n_var, node_list%n_nodes))
+
+    node_list_SoA%n_nodes = node_list%n_nodes
+
+    do j = 1, node_list%n_nodes
+      node_list_SoA%x(:,:,:,j)      = node_list%node(j)%x(:,:,:)
+      node_list_SoA%values(:,:,:,j) = node_list%node(j)%values(:,:,:)
+      node_list_SoA%deltas(:,:,:,j) = node_list%node(j)%deltas(:,:,:)
     enddo
 
   end subroutine init_node_list_SoA
 
+  subroutine update_SoA_values_and_deltas(node_list_SoA, node_list)
+    implicit none
+    type(type_node_list_SoA), intent(inout) :: node_list_SoA
+    type(type_node_list), intent(in)        :: node_list
+    integer :: j
+
+    do j = 1, node_list%n_nodes
+      node_list_SoA%values(:,:,:,j) = node_list%node(j)%values(:,:,:)
+      node_list_SoA%deltas(:,:,:,j) = node_list%node(j)%deltas(:,:,:)
+    enddo
+
+  end subroutine update_SoA_values_and_deltas
+
   subroutine dealloc_node_list_SoA(node_list_SoA)
     implicit none
-    type(type_node_list_SoA), intent(inout)    :: node_list_SoA
+    type(type_node_list_SoA), intent(inout) :: node_list_SoA
 
-    if (allocated(node_list_SoA%x)) then
-      deallocate(node_list_SoA%x)
-      deallocate(node_list_SoA%values)
-      deallocate(node_list_SoA%deltas)
-    endif
+    ! Check each component individually before deallocating
+    if (allocated(node_list_SoA%x))      deallocate(node_list_SoA%x)
+    if (allocated(node_list_SoA%values)) deallocate(node_list_SoA%values)
+    if (allocated(node_list_SoA%deltas)) deallocate(node_list_SoA%deltas)
 
-  end subroutine dealloc_node_list_SoA 
+    ! Reset the node counter
+    node_list_SoA%n_nodes = 0
+    
+  end subroutine dealloc_node_list_SoA
 
   subroutine init_element_list_SoA(element_list_SoA, element_list)
     implicit none
-    type(type_element_list_SoA), intent(inout)    :: element_list_SoA       !< the element list in SoA format
-    type(type_element_list), intent(in)      :: element_list     !< the element list in AoS format
-    integer   :: j
+    type(type_element_list_SoA), intent(inout) :: element_list_SoA
+    type(type_element_list), intent(in)        :: element_list
+
+    integer :: j
 
     element_list_SoA%n_elements = element_list%n_elements
 
-    !> ATTENTION: this order of allocation follows the gpu implementation
-    allocate(element_list_SoA%vertex(element_list%n_elements,n_vertex_max))
-    allocate(element_list_SoA%neighbours(element_list%n_elements,n_vertex_max))
-    allocate(element_list_SoA%size(element_list%n_elements,n_vertex_max,n_degrees))
+    ! Deallocate if already allocated
+    if (allocated(element_list_SoA%vertex))     deallocate(element_list_SoA%vertex)
+    if (allocated(element_list_SoA%neighbours)) deallocate(element_list_SoA%neighbours)
+    if (allocated(element_list_SoA%size))       deallocate(element_list_SoA%size)
 
-    do j = 1,element_list%n_elements
+    !> ATTENTION: this layout follows the gpu implementation
+    allocate(element_list_SoA%vertex(element_list%n_elements, n_vertex_max))
+    allocate(element_list_SoA%neighbours(element_list%n_elements, n_vertex_max))
+    allocate(element_list_SoA%size(element_list%n_elements, n_vertex_max, n_degrees))
+
+    element_list_SoA%n_elements = element_list%n_elements
+
+    do j = 1, element_list%n_elements
       element_list_SoA%vertex(j,:)     = element_list%element(j)%vertex(:)
       element_list_SoA%neighbours(j,:) = element_list%element(j)%neighbours(:)
       element_list_SoA%size(j,:,:)     = element_list%element(j)%size(:,:)
@@ -369,13 +400,14 @@ contains
 
   subroutine dealloc_element_list_SoA(element_list_SoA)
     implicit none
-    type(type_element_list_SoA), intent(inout)    :: element_list_SoA
+    type(type_element_list_SoA), intent(inout) :: element_list_SoA
 
-    if (allocated(element_list_SoA%vertex)) then
-      deallocate(element_list_SoA%vertex)
-      deallocate(element_list_SoA%neighbours)
-      deallocate(element_list_SoA%size)
-    endif
+    ! Guard: Check each component individually before deallocating
+    if (allocated(element_list_SoA%vertex))     deallocate(element_list_SoA%vertex)
+    if (allocated(element_list_SoA%neighbours)) deallocate(element_list_SoA%neighbours)
+    if (allocated(element_list_SoA%size))       deallocate(element_list_SoA%size)
+
+    element_list_SoA%n_elements = 0
 
   end subroutine dealloc_element_list_SoA
 
