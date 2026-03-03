@@ -115,6 +115,10 @@ ifdef IBMFC
 endif
 # TODO set the option to output module files to a specific directory for XLF
 
+# Default HIP compiler and flags (override in Makefile.inc if needed)
+HIPCC      ?= hipcc
+HIPCCFLAGS ?=
+
 # Make rules for specific files
 # This is needed because the file stems must match and we do not really want to recreate the directory structure in $(OBJDIR) and $(DEPDIR)
 # Also, it will make everything slightly nicer later
@@ -131,6 +135,11 @@ $(OBJDIR)/%.o:: $(1)%.f
 
 $(OBJDIR)/%.o:: $(1)%.c
 	$$(CC) $$(FLAGS) $$(CFLAGS) $$(DEFINES) $$(INCLUDES) $$(EXTRA_FLAGS) -c $$< -o $(OBJDIR)/$$*.o
+
+# .hip.cpp rule must come before the generic .cpp rule so the more specific
+# stem (without .hip) wins when both patterns could match.
+$(OBJDIR)/%.hip.o:: $(1)%.hip.cpp
+	$$(HIPCC) $$(HIPCCFLAGS) $$(DEFINES) $$(INCLUDES) -c $$< -o $(OBJDIR)/$$*.hip.o
 
 $(OBJDIR)/%.o:: $(1)%.cpp
 	$$(CXX) $$(FLAGS) $$(CXXFLAGS) $$(DEFINES) $$(INCLUDES) $$(EXTRA_FLAGS) -c $$< -o $(OBJDIR)/$$*.o

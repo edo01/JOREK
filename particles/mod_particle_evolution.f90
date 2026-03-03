@@ -50,6 +50,35 @@ contains
     !> Coupling scheme specific
     integer :: imp_q_idx
 
+
+
+
+    interface
+      subroutine launch_test_kernel(arr, n) bind(C, name="launch_test_kernel")
+        use iso_c_binding
+        implicit none
+        integer(c_int), value        :: n
+        integer(c_int), intent(inout) :: arr(n)
+      end subroutine launch_test_kernel
+    end interface
+
+    integer, allocatable :: test_arr(:)
+    integer :: n_test
+    integer :: i
+
+    n_test = 100
+    allocate(test_arr(n_test))
+    test_arr = 0
+    if (sim%my_id .eq. 0) then
+      call launch_test_kernel(test_arr, n_test)
+      print *, "HIP test kernel result:"
+      do i = 1, n_test
+        print *, i, test_arr(i)
+      end do
+    end if
+
+
+
     !> ================================ INITIALISATION =======================================
     part_group => sim%groups(group_num)
     if (sim%my_id .eq. 0) write(*,*) '---------- Evolving particle group: ', part_group%id, " ----------"
@@ -150,6 +179,24 @@ contains
     real*8    :: v_par, v_perp, gamma_m, proj_factor
     integer   :: j, k, m, n, ifail, i_tor, n_lost
 
+    interface
+      subroutine compute_re_kinematics(cylindrical_velocity, B_norm2, &
+                                       cylindrical_momentum, mass_electron, &
+                                       atomic_mass_unit, speed_of_light, &
+                                       v_par, v_perp, gamma_m) bind(C, name="compute_re_kinematics")
+        use iso_c_binding, only: c_double
+        real(c_double), intent(in)  :: cylindrical_velocity(3)
+        real(c_double), intent(in)  :: B_norm2(3)
+        real(c_double), intent(in)  :: cylindrical_momentum(3)
+        real(c_double), intent(in)  :: mass_electron
+        real(c_double), intent(in)  :: atomic_mass_unit
+        real(c_double), intent(in)  :: speed_of_light
+        real(c_double), intent(out) :: v_par
+        real(c_double), intent(out) :: v_perp
+        real(c_double), intent(out) :: gamma_m
+      end subroutine compute_re_kinematics
+    end interface
+
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm                  ! rho_SI = rho_norm * rho
 
@@ -187,9 +234,10 @@ contains
           call sim%fields%calc_EBpsiU(sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
           B_norm2 = B/norm2(B)
   
-          v_par   = dot_product(cylindrical_velocity, B_norm2)
-          v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
-          gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
+          call compute_re_kinematics(cylindrical_velocity, B_norm2, &
+                                     cylindrical_momentum, MASS_ELECTRON, &
+                                     ATOMIC_MASS_UNIT, SPEED_OF_LIGHT, &
+                                     v_par, v_perp, gamma_m)
   
           do n=1,n_degrees
             do m=1,n_vertex_max

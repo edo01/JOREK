@@ -18,8 +18,14 @@ main: jorek_model$(MODEL_NUMBER)
 include defaults.mk
 
 # Build the main executable with a different name from the source file jorek2_main.o
-jorek_model$(MODEL_NUMBER): $(OBJDIR)/jorek2_main.o $(shell ./util/obj_deps $(DEPDIR)/jorek2_main.d)
+jorek_model$(MODEL_NUMBER): $(OBJDIR)/jorek2_main.o $(shell ./util/obj_deps $(DEPDIR)/jorek2_main.d) $(HIP_OBJS)
 	$(FC) $(FLAGS) $(DEFINES) $(INCLUDES) -o $@ $^ $(LIBS)
+
+# When HIP_OBJS is set (via Makefile.inc), append them as prerequisites to all
+# program targets so they are compiled and linked in. 
+ifneq ($(HIP_OBJS),)
+kinetic_main: $(HIP_OBJS)
+endif
 
 
 .PHONY: clean cleanall cleandep duplicates
