@@ -13,12 +13,27 @@ module mod_particle_evolution
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
+    use, intrinsic :: iso_c_binding
     !$ use omp_lib
 
     implicit none
     private
     public :: evolve_particle_group, evolve_REs
-    
+
+    type, bind(C) :: test_derived_type
+      type(c_ptr) :: arr_ptr
+      integer(c_int) :: n
+    end type test_derived_type
+
+    interface
+      subroutine launch_test_kernel(test_struct) bind(C, name="launch_test_kernel")
+        use, intrinsic :: iso_c_binding
+        import :: test_derived_type
+        implicit none
+        type(test_derived_type), value :: test_struct
+      end subroutine launch_test_kernel
+    end interface
+
 contains
 
   !> For each particle group, this function does the following:
@@ -53,26 +68,18 @@ contains
     integer :: imp_q_idx
 
 
-    
-
-    interface
-      subroutine launch_test_kernel(arr, n) bind(C, name="launch_test_kernel")
-        use, intrinsic :: iso_c_binding
-        implicit none
-        type(c_ptr), value, intent(in) :: arr
-        integer(c_int), value, intent(in)         :: n
-      end subroutine launch_test_kernel
-    end interface
-
     integer(c_int), allocatable, target :: test_arr(:, :)
     integer(c_int) :: n_test
+    type(test_derived_type) :: test_struct
     integer :: i, j
 
     n_test = 10
     allocate(test_arr(n_test, n_test))
     test_arr = 0
     if (sim%my_id .eq. 0) then
-      call launch_test_kernel(c_loc(test_arr), n_test)
+      test_struct%arr_ptr = c_loc(test_arr)
+      test_struct%n = n_test
+      call launch_test_kernel(test_struct)
       print *, "HIP test kernel result:"
       do i = 1, n_test
         do j = 1, n_test

@@ -1,6 +1,12 @@
 #include <hip/hip_runtime.h>
 #include <iostream>
 
+struct test_derived_type_c
+{
+    int* arr_ptr;
+    int n;
+};
+
 #define HIP_CHECK(call) \
 { \
     hipError_t err = call; \
@@ -30,9 +36,11 @@ void test_kernel(int* arr, int n)
 }
 
 extern "C"
-void launch_test_kernel(int* arr, int n)
+void launch_test_kernel(struct test_derived_type_c test_struct)
 {
     int* d_arr = nullptr;
+    int* arr = test_struct.arr_ptr;
+    int n = test_struct.n;
     int total = n * n;
 
     printf("BEFORE KERNEL LAUNCH\n");
