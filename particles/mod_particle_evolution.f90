@@ -20,17 +20,25 @@ module mod_particle_evolution
     private
     public :: evolve_particle_group, evolve_REs
 
-    type, bind(C) :: test_derived_type
-      type(c_ptr) :: arr_ptr
-      integer(c_int) :: n
-    end type test_derived_type
+    !> Inner struct: holds a single scale factor m
+    type, bind(C) :: test_inner_type
+      integer(c_int) :: m
+    end type test_inner_type
+
+    !> Outer struct: pointer to inner array, pointer to flat result buffer, sizes
+    type, bind(C) :: test_outer_type
+      type(c_ptr)    :: inners_ptr  !< c_loc(inner_arr)
+      type(c_ptr)    :: result_ptr  !< c_loc(result_arr)
+      integer(c_int) :: n           !< number of inner structs
+      integer(c_int) :: arr_size    !< elements per inner result row
+    end type test_outer_type
 
     interface
-      subroutine launch_test_kernel(test_struct) bind(C, name="launch_test_kernel")
+      subroutine launch_test_kernel(outer) bind(C, name="launch_test_kernel")
         use, intrinsic :: iso_c_binding
-        import :: test_derived_type
+        import :: test_outer_type
         implicit none
-        type(test_derived_type), value :: test_struct
+        type(test_outer_type), value :: outer
       end subroutine launch_test_kernel
     end interface
 
@@ -67,27 +75,47 @@ contains
     !> Coupling scheme specific
     integer :: imp_q_idx
 
-
-    integer(c_int), allocatable, target :: test_arr(:, :)
-    integer(c_int) :: n_test
-    type(test_derived_type) :: test_struct
+    !> ---- Nested derived-type interoperability test ----
+    integer, parameter :: n_inner = 4, arr_sz = 5
+    type(test_inner_type), target  :: inner_arr(n_inner)
+    !> result_arr is column-major: result_arr(j, i) maps to C result[i*arr_sz + j]
+    integer(c_int),        target  :: result_arr(arr_sz, n_inner)
+    type(test_outer_type)          :: outer_struct
     integer :: i, j
+    integer :: expected
 
-    n_test = 10
-    allocate(test_arr(n_test, n_test))
-    test_arr = 0
+    !> Initialise inner structs: inner i gets scale factor m = i
+    do i = 1, n_inner
+      inner_arr(i)%m = int(i, c_int)
+    end do
+    result_arr = 0_c_int
+
+    outer_struct%inners_ptr = c_loc(inner_arr(1))
+    outer_struct%result_ptr = c_loc(result_arr(1,1))
+    outer_struct%n          = int(n_inner, c_int)
+    outer_struct%arr_size   = int(arr_sz,  c_int)
+
     if (sim%my_id .eq. 0) then
-      test_struct%arr_ptr = c_loc(test_arr)
-      test_struct%n = n_test
-      call launch_test_kernel(test_struct)
-      print *, "HIP test kernel result:"
-      do i = 1, n_test
-        do j = 1, n_test
-          write(*,'(I8,1X)', advance='no') test_arr(i, j)
+      call launch_test_kernel(outer_struct)
+
+      !> Verify: result_arr(j, i) == (j-1) * i
+      !> (C fills result[i*arr_sz + j] = j * m[i], 0-based j;
+      !>  Fortran sees result_arr(j+1, i+1) = j * inner_arr(i+1)%m)
+      print *, "[Fortran] Nested struct kernel result (expected: result(j,i) = (j-1)*i):"
+      do i = 1, n_inner
+        write(*, '(A,I2,A,I2,A)', advance='no') "  inner[", i, "] m=", inner_arr(i)%m, ": "
+        do j = 1, arr_sz
+          expected = (j-1) * int(inner_arr(i)%m)
+          if (result_arr(j,i) /= expected) then
+            write(*, '(I4,A)', advance='no') result_arr(j,i), "(FAIL) "
+          else
+            write(*, '(I4,A)', advance='no') result_arr(j,i), "(ok)  "
+          end if
         end do
-        write(*, *)   ! newline after each row
+        write(*, *)
       end do
     end if
+    !> ---- End of interoperability test ----
 
 
 

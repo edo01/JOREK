@@ -1,11 +1,17 @@
 #include <hip/hip_runtime.h>
-#include <iostream>
+#include <cstdio>
 
-struct test_derived_type_c
-{
-    int* arr_ptr;
-    int n;
-};
+// ---------------------------------------------------------------------------
+// Nested derived-type interoperability test
+//
+// Layout (matches Fortran bind(C) types):
+//   test_inner_type  { int m; }
+//   test_outer_type  { test_inner_type* inners; int* result; int n; int arr_size; }
+//
+// Computation:  result[i * arr_size + j] = j * inners[i].m
+//
+// Fortran verification (column-major, 1-based):  result(j+1, i+1) == j * m_i
+// ---------------------------------------------------------------------------
 
 #define HIP_CHECK(call) \
 { \
@@ -17,62 +23,70 @@ struct test_derived_type_c
     } \
 }
 
-// Kernel now works on flattened 2D matrix
-__global__
-void test_kernel(int* arr, int n)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;  // linear index
-    int total = n * n;
-    if (idx < total)
-    {
-        int row = idx / n;
-        int col = idx % n;
-        arr[idx] = row * n + col;  // example: fill with linear index
-    }
+struct test_inner_type {
+    int m;  // scale factor
+};
 
-    // ATTENTION: in C we are filling matrix row-wise (the memory actually contains contiguous elements).
-    // Since Fortran is column-major, the continuous elements for Fortran are column-wise.
-    // Actually, C works on the transpose matrix of Fortran's one!!
+struct test_outer_type {
+    test_inner_type* inners;  // array of n inner structs
+    int*             result;  // flat output buffer [n * arr_size]
+    int              n;       // number of inner structs
+    int              arr_size;
+};
+
+// Each block handles one inner struct (blockIdx.x == i).
+// Each thread handles one element (threadIdx.x == j).
+__global__
+void nested_kernel(test_inner_type* inners, int* result, int arr_size)
+{
+    int i = blockIdx.x;
+    int j = threadIdx.x;
+    if (j < arr_size)
+        result[i * arr_size + j] = j * inners[i].m;
 }
 
 extern "C"
-void launch_test_kernel(struct test_derived_type_c test_struct)
+void launch_test_kernel(struct test_outer_type outer)
 {
-    int* d_arr = nullptr;
-    int* arr = test_struct.arr_ptr;
-    int n = test_struct.n;
-    int total = n * n;
+    int n        = outer.n;
+    int arr_size = outer.arr_size;
 
-    printf("BEFORE KERNEL LAUNCH\n");
-    for (int i = 0; i < total; ++i)
-        printf("%d ", arr[i]);
+    // --- print host input ---
+    printf("[C] BEFORE KERNEL: inner scale factors: ");
+    for (int i = 0; i < n; ++i)
+        printf("m[%d]=%d  ", i, outer.inners[i].m);
     printf("\n");
 
-    HIP_CHECK(hipMalloc(&d_arr, total * sizeof(int)));
-    HIP_CHECK(hipMemcpy(d_arr, arr,
-                        total * sizeof(int),
+    // --- copy inners to device ---
+    test_inner_type* d_inners = nullptr;
+    HIP_CHECK(hipMalloc(&d_inners, n * sizeof(test_inner_type)));
+    HIP_CHECK(hipMemcpy(d_inners, outer.inners, n * sizeof(test_inner_type),
                         hipMemcpyHostToDevice));
 
-    int blockSize = 64;
-    int gridSize  = (total + blockSize - 1) / blockSize;
+    // --- allocate device result ---
+    int* d_result = nullptr;
+    HIP_CHECK(hipMalloc(&d_result, n * arr_size * sizeof(int)));
 
-    hipLaunchKernelGGL(test_kernel,
-                       dim3(gridSize),
-                       dim3(blockSize),
-                       0, 0,
-                       d_arr, n);
-
+    // --- launch: n blocks x arr_size threads ---
+    hipLaunchKernelGGL(nested_kernel,
+                       dim3(n), dim3(arr_size), 0, 0,
+                       d_inners, d_result, arr_size);
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
 
-    HIP_CHECK(hipMemcpy(arr, d_arr,
-                        total * sizeof(int),
+    // --- copy result back ---
+    HIP_CHECK(hipMemcpy(outer.result, d_result, n * arr_size * sizeof(int),
                         hipMemcpyDeviceToHost));
 
-    printf("AFTER KERNEL LAUNCH\n");
-    for (int i = 0; i < total; ++i)
-        printf("%d ", arr[i]);
-    printf("\n");
+    // --- print host output ---
+    printf("[C] AFTER KERNEL: result[i][j] = j * m[i]\n");
+    for (int i = 0; i < n; ++i) {
+        printf("  inner[%d] m=%d: ", i, outer.inners[i].m);
+        for (int j = 0; j < arr_size; ++j)
+            printf("%3d ", outer.result[i * arr_size + j]);
+        printf("\n");
+    }
 
-    HIP_CHECK(hipFree(d_arr));
+    HIP_CHECK(hipFree(d_inners));
+    HIP_CHECK(hipFree(d_result));
 }
