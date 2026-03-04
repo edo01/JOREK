@@ -18,6 +18,7 @@ module mod_particle_evolution
     implicit none
     private
     public :: evolve_particle_group, evolve_REs
+    
 contains
 
   !> For each particle group, this function does the following:
@@ -31,6 +32,7 @@ contains
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
+    use, intrinsic :: ISO_C_BINDING, only: C_INT
     
     implicit none
     class(particle_sim), target, intent(inout)                :: sim
@@ -51,29 +53,32 @@ contains
     integer :: imp_q_idx
 
 
-
+    
 
     interface
       subroutine launch_test_kernel(arr, n) bind(C, name="launch_test_kernel")
-        use iso_c_binding
+        use, intrinsic :: iso_c_binding
         implicit none
-        integer(c_int), value        :: n
-        integer(c_int), intent(inout) :: arr(n)
+        type(c_ptr), value, intent(in) :: arr
+        integer(c_int), value, intent(in)         :: n
       end subroutine launch_test_kernel
     end interface
 
-    integer, allocatable :: test_arr(:)
-    integer :: n_test
-    integer :: i
+    integer(c_int), allocatable, target :: test_arr(:, :)
+    integer(c_int) :: n_test
+    integer :: i, j
 
-    n_test = 100
-    allocate(test_arr(n_test))
+    n_test = 10
+    allocate(test_arr(n_test, n_test))
     test_arr = 0
     if (sim%my_id .eq. 0) then
-      call launch_test_kernel(test_arr, n_test)
+      call launch_test_kernel(c_loc(test_arr), n_test)
       print *, "HIP test kernel result:"
       do i = 1, n_test
-        print *, i, test_arr(i)
+        do j = 1, n_test
+          write(*,'(I8,1X)', advance='no') test_arr(i, j)
+        end do
+        write(*, *)   ! newline after each row
       end do
     end if
 
