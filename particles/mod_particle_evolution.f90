@@ -14,33 +14,39 @@ module mod_particle_evolution
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
     use, intrinsic :: iso_c_binding
+#ifdef USE_GPU
+    use mod_particle_types, only: particle_SoA_kinetic_relativistic_c, &
+                                  particle_group_c, node_list_SoA_c,   &
+                                  element_list_SoA_c,                   &
+                                  jorek_fields_interp_linear_c,         &
+                                  particle_sim_c,                       &
+                                  particles_AoS_to_SoA,                 &
+                                  particles_SoA_to_AoS,                 &
+                                  node_list_to_SoA,                     &
+                                  element_list_to_SoA,                  &
+                                  dealloc_particle_SoA,                 &
+                                  dealloc_node_list_SoA,                &
+                                  dealloc_element_list_SoA
+    use mod_particle_types, only: particle_kinetic_relativistic
+#endif
     !$ use omp_lib
 
     implicit none
     private
     public :: evolve_particle_group, evolve_REs
 
-    !> Inner struct: holds a single scale factor m
-    type, bind(C) :: test_inner_type
-      integer(c_int) :: m
-    end type test_inner_type
-
-    !> Outer struct: pointer to inner array, pointer to flat result buffer, sizes
-    type, bind(C) :: test_outer_type
-      type(c_ptr)    :: inners_ptr  !< c_loc(inner_arr)
-      type(c_ptr)    :: result_ptr  !< c_loc(result_arr)
-      integer(c_int) :: n           !< number of inner structs
-      integer(c_int) :: arr_size    !< elements per inner result row
-    end type test_outer_type
-
+#ifdef USE_GPU
+    !> Interface to the HIP C function that launches the GPU kernel
     interface
-      subroutine launch_test_kernel(outer) bind(C, name="launch_test_kernel")
-        use, intrinsic :: iso_c_binding
-        import :: test_outer_type
-        implicit none
-        type(test_outer_type), value :: outer
-      end subroutine launch_test_kernel
+      subroutine launch_evolve_REs(sim_c, h_feedback_rhs, tstep_part_adj, nstep_part_adj) bind(C, name='launch_evolve_REs')
+        import :: c_double, c_int, c_ptr, particle_sim_c
+        type(particle_sim_c), value, intent(in) :: sim_c
+        type(c_ptr), value, intent(in)          :: h_feedback_rhs   ! TODO: check if intent(in) actually is needed
+        real(c_double), value, intent(in)       :: tstep_part_adj
+        integer(c_int), value, intent(in)       :: nstep_part_adj
+      end subroutine launch_evolve_REs
     end interface
+#endif
 
 contains
 
@@ -75,50 +81,6 @@ contains
     !> Coupling scheme specific
     integer :: imp_q_idx
 
-    !> ---- Nested derived-type interoperability test ----
-    integer, parameter :: n_inner = 4, arr_sz = 5
-    type(test_inner_type), target  :: inner_arr(n_inner)
-    !> result_arr is column-major: result_arr(j, i) maps to C result[i*arr_sz + j]
-    integer(c_int),        target  :: result_arr(arr_sz, n_inner)
-    type(test_outer_type)          :: outer_struct
-    integer :: i, j
-    integer :: expected
-
-    !> Initialise inner structs: inner i gets scale factor m = i
-    do i = 1, n_inner
-      inner_arr(i)%m = int(i, c_int)
-    end do
-    result_arr = 0_c_int
-
-    outer_struct%inners_ptr = c_loc(inner_arr(1))
-    outer_struct%result_ptr = c_loc(result_arr(1,1))
-    outer_struct%n          = int(n_inner, c_int)
-    outer_struct%arr_size   = int(arr_sz,  c_int)
-
-    if (sim%my_id .eq. 0) then
-      call launch_test_kernel(outer_struct)
-
-      !> Verify: result_arr(j, i) == (j-1) * i
-      !> (C fills result[i*arr_sz + j] = j * m[i], 0-based j;
-      !>  Fortran sees result_arr(j+1, i+1) = j * inner_arr(i+1)%m)
-      print *, "[Fortran] Nested struct kernel result (expected: result(j,i) = (j-1)*i):"
-      do i = 1, n_inner
-        write(*, '(A,I2,A,I2,A)', advance='no') "  inner[", i, "] m=", inner_arr(i)%m, ": "
-        do j = 1, arr_sz
-          expected = (j-1) * int(inner_arr(i)%m)
-          if (result_arr(j,i) /= expected) then
-            write(*, '(I4,A)', advance='no') result_arr(j,i), "(FAIL) "
-          else
-            write(*, '(I4,A)', advance='no') result_arr(j,i), "(ok)  "
-          end if
-        end do
-        write(*, *)
-      end do
-    end if
-    !> ---- End of interoperability test ----
-
-
-
     !> ================================ INITIALISATION =======================================
     part_group => sim%groups(group_num)
     if (sim%my_id .eq. 0) write(*,*) '---------- Evolving particle group: ', part_group%id, " ----------"
@@ -147,7 +109,11 @@ contains
       case ('ics')
         call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, nstep_part_adj, imp_q_idx)
       case ('rep')
+#ifdef USE_GPU
+        call evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj)
+#else
         call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj)
+#endif
       case default
         write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
         stop 1
@@ -219,24 +185,6 @@ contains
     real*8    :: v_par, v_perp, gamma_m, proj_factor
     integer   :: j, k, m, n, ifail, i_tor, n_lost
 
-    interface
-      subroutine compute_re_kinematics(cylindrical_velocity, B_norm2, &
-                                       cylindrical_momentum, mass_electron, &
-                                       atomic_mass_unit, speed_of_light, &
-                                       v_par, v_perp, gamma_m) bind(C, name="compute_re_kinematics")
-        use iso_c_binding, only: c_double
-        real(c_double), intent(in)  :: cylindrical_velocity(3)
-        real(c_double), intent(in)  :: B_norm2(3)
-        real(c_double), intent(in)  :: cylindrical_momentum(3)
-        real(c_double), intent(in)  :: mass_electron
-        real(c_double), intent(in)  :: atomic_mass_unit
-        real(c_double), intent(in)  :: speed_of_light
-        real(c_double), intent(out) :: v_par
-        real(c_double), intent(out) :: v_perp
-        real(c_double), intent(out) :: gamma_m
-      end subroutine compute_re_kinematics
-    end interface
-
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm                  ! rho_SI = rho_norm * rho
 
@@ -274,10 +222,9 @@ contains
           call sim%fields%calc_EBpsiU(sim%time, particles(j)%i_elm, particles(j)%st, particles(j)%x(3), E, B, psi, U)
           B_norm2 = B/norm2(B)
   
-          call compute_re_kinematics(cylindrical_velocity, B_norm2, &
-                                     cylindrical_momentum, MASS_ELECTRON, &
-                                     ATOMIC_MASS_UNIT, SPEED_OF_LIGHT, &
-                                     v_par, v_perp, gamma_m)
+          v_par   = dot_product(cylindrical_velocity, B_norm2)
+          v_perp  = norm2(cylindrical_velocity - v_par * B_norm2)
+          gamma_m = sqrt(MASS_ELECTRON**2 + dot_product(cylindrical_momentum,cylindrical_momentum)*ATOMIC_MASS_UNIT**2/SPEED_OF_LIGHT**2)
   
           do n=1,n_degrees
             do m=1,n_vertex_max
@@ -317,6 +264,157 @@ contains
     
   end subroutine evolve_REs
 
+#ifdef USE_GPU
+  !> GPU implementation of evolve_REs via the HIP kernel.
+  !> Builds the SoA data structures, calls the C launch function,
+  !> converts the results back to the Fortran AoS layout.
+  subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj)
+    use mod_settings, only: n_tor, n_degrees, n_vertex_max, n_coord_tor
+    use phys_module, only: F0, mode_coord
+    use constants, only: mu_zero, atomic_mass_unit
+    use mod_fields_linear, only: jorek_fields_interp_linear
+    implicit none
+    class(particle_sim), target, intent(inout) :: sim
+    integer, intent(in) :: group_num
+    real(8), allocatable, intent(inout) :: feedback_rhs(:,:,:,:,:)
+    real(8), intent(in) :: tstep_part_adj
+    integer, intent(in) :: nstep_part_adj
+
+    ! Local variables
+    type(particle_sim_c) :: sim_c
+    type(particle_SoA_kinetic_relativistic_c) :: part_soa
+    type(node_list_SoA_c) :: nl_soa
+    type(element_list_SoA_c) :: el_soa
+    integer(c_int), target :: mode_coord_c(n_coord_tor)
+
+    ! Feedback buffer in C layout: (n_elements, n_fb_vars, n_tor, n_vertex_max, n_degrees)
+    integer, parameter :: N_FB_VARS = 8
+    integer :: ne, np, n_alive, n_fb
+    real(c_double), allocatable, target :: fb_c(:,:,:,:,:)
+    integer :: ie, iv, it, kv, kf
+
+    ! --- Count active particles ---
+    ne = sim%fields%element_list%n_elements
+    np = size(sim%groups(group_num)%particles, 1)
+    n_fb = size(feedback_rhs, 5)  ! n_proj2
+
+    n_alive = 0
+    select type (p => sim%groups(group_num)%particles)
+    type is (particle_kinetic_relativistic)
+      do ie = 1, np
+        if (p(ie)%i_elm > 0) n_alive = n_alive + 1
+      end do
+    end select
+
+    ! --- Build particle SoA ---
+    select type (p => sim%groups(group_num)%particles)
+    type is (particle_kinetic_relativistic)
+      call particles_AoS_to_SoA(p, np, part_soa)
+    end select
+
+    ! --- Build node list SoA ---
+    call node_list_to_SoA(sim%fields%node_list, nl_soa)
+
+    ! --- Build element list SoA ---
+    call element_list_to_SoA(sim%fields%element_list, el_soa)
+
+    ! --- Build mode_coord ---
+    mode_coord_c(:) = int(mode_coord(:), c_int)
+
+    ! --- Build jorek_fields_interp_linear_c ---
+    sim_c%fields%node_list    = nl_soa
+    sim_c%fields%element_list = el_soa
+
+    select type (f => sim%fields)
+    type is (jorek_fields_interp_linear)
+      sim_c%fields%time_now  = f%time_now
+      sim_c%fields%time_prev = f%time_prev
+    class default
+      sim_c%fields%time_now  = sim%time
+      sim_c%fields%time_prev = sim%time
+    end select
+
+    if (sim%fields%static) then
+      sim_c%fields%flag_static = 1_c_int
+    else
+      sim_c%fields%flag_static = 0_c_int
+    end if
+    if (sim%fields%flag_zero_dpsidt) then
+      sim_c%fields%flag_zero_dpsidt = 1_c_int
+    else
+      sim_c%fields%flag_zero_dpsidt = 0_c_int
+    end if
+    sim_c%fields%F0    = F0
+    sim_c%fields%t_norm = sim%t_norm
+    sim_c%fields%mode_coord = c_loc(mode_coord_c(1))
+
+    ! --- Build particle_group_c ---
+    sim_c%group%mass                 = sim%groups(group_num)%mass
+    select type (p => sim%groups(group_num)%particles)
+    type is (particle_kinetic_relativistic)
+      sim_c%group%charge = real(p(1)%q, c_double)
+    end select
+    sim_c%group%percentage_on_gpu    = 1.0_c_double
+    sim_c%group%num_particles        = int(np, c_int)
+    sim_c%group%alive_particle_count = int(n_alive, c_int)
+    sim_c%group%P_par_idx            = int(P_par_idx_kin, c_int)
+    sim_c%group%P_perp_idx           = int(P_perp_idx_kin, c_int)
+    sim_c%group%j_phi_idx            = int(j_Phi_idx_kin, c_int)
+    sim_c%group%particles            = part_soa
+
+    ! --- Build particle_sim_c ---
+    sim_c%sim_time = sim%time
+    sim_c%my_id    = int(sim%my_id, c_int)
+    sim_c%n_mpi    = int(sim%n_mpi, c_int)
+    sim_c%gpu_id   = 0_c_int
+
+    ! --- Allocate C-layout feedback buffer ---
+    ! C layout: (n_elements, N_FB_VARS, n_tor, n_vertex_max, n_degrees)
+    allocate(fb_c(ne, N_FB_VARS, n_tor, n_vertex_max, n_degrees))
+    fb_c = 0.0_c_double
+
+    ! --- Copy existing feedback into C layout for the 3 RE indices ---
+    ! Fortran: feedback_rhs(kf, kv, ie, it, iv) where kf=1..n_degrees, kv=1..n_vertex_max, ie=1..n_elements_max, it=1..n_tor, iv=1..n_fb
+    ! C:       fb_c(ie, iv, it, kv, kf)         where ie=1..ne, iv=1..8, it=1..n_tor, kv=1..n_vertex_max, kf=1..n_degrees
+    ! feedback_rhs starts at zero for 'rep', so we don't need to copy existing values.
+
+    ! --- Call GPU kernel ---
+    if (sim%my_id == 0) write(*,*) 'Launching evolve_REs on GPU...'
+    call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj, int(nstep_part_adj, c_int))
+    if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
+
+    ! --- Convert C-layout feedback back to Fortran layout ---
+    ! Only the 3 relevant indices (P_par, P_perp, j_Phi) were written by the GPU.
+    !$omp parallel do default(none) collapse(4) &
+    !$omp shared(fb_c, feedback_rhs, ne, P_par_idx_kin, P_perp_idx_kin, j_Phi_idx_kin) &
+    !$omp private(kf, kv, ie, it)
+    do kf = 1, n_degrees
+      do kv = 1, n_vertex_max
+        do ie = 1, ne
+          do it = 1, n_tor
+            feedback_rhs(kf, kv, ie, it, P_par_idx_kin)  = fb_c(ie, P_par_idx_kin,  it, kv, kf)
+            feedback_rhs(kf, kv, ie, it, P_perp_idx_kin) = fb_c(ie, P_perp_idx_kin, it, kv, kf)
+            feedback_rhs(kf, kv, ie, it, j_Phi_idx_kin)  = fb_c(ie, j_Phi_idx_kin,  it, kv, kf)
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+
+    ! --- Copy updated particle data back to AoS ---
+    select type (p => sim%groups(group_num)%particles)
+    type is (particle_kinetic_relativistic)
+      call particles_SoA_to_AoS(part_soa, np, p)
+    end select
+
+    ! --- Cleanup ---
+    deallocate(fb_c)
+    call dealloc_particle_SoA(part_soa, np)
+    call dealloc_node_list_SoA(nl_soa)
+    call dealloc_element_list_SoA(el_soa)
+
+  end subroutine evolve_REs_gpu
+#endif /* USE_GPU */
 
 
   !> Internal function for gathering the feedback rhs values when using the ncs or ics coupling scheme

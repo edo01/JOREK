@@ -3,6 +3,7 @@
 !> [[particle_base]], and update [[mod_particle_io]] (search for `particle_kinetic`
 !> and add your particle at each spot)
 module mod_particle_types
+  use, intrinsic :: iso_c_binding
   implicit none
   private
   public :: particle_base_id,particle_fieldline_id,particle_gc_id
@@ -26,6 +27,23 @@ module mod_particle_types
   public :: particle_arrays_from_list,particle_list_from_arrays
   public :: initialize_particle_list_to_zero,initialize_particle_to_zero
   public :: deallocate_particle_arrays
+
+#ifdef USE_GPU
+  public :: particle_SoA_kinetic_relativistic_c
+  public :: particle_group_c
+  public :: node_list_SoA_c
+  public :: element_list_SoA_c
+  public :: jorek_fields_interp_linear_c
+  public :: particle_sim_c
+  public :: particles_AoS_to_SoA
+  public :: particles_SoA_to_AoS
+  public :: node_list_to_SoA
+  public :: element_list_to_SoA
+  public :: dealloc_particle_SoA
+  public :: dealloc_node_list_SoA
+  public :: dealloc_element_list_SoA
+#endif
+
   !> publicity only for unit testing
 #ifdef UNIT_TESTS
   public :: find_active_particle_id_seq
@@ -127,6 +145,78 @@ module mod_particle_types
     real(kind=8), dimension(2) :: p  !< 1: parallel momentum [AMU m/s], 2: magnetic moment [(AMU*m**2)/(T*s**2)]
     integer(kind=1) :: q !< charge [e]
  end type particle_gc_relativistic
+
+#ifdef USE_GPU
+! =====================================================================================
+!  bind(C) Structure-of-Arrays types for GPU interoperability
+!  These match the C structs in kernel_re_evolution.hip.cpp exactly.
+! =====================================================================================
+
+  !> SoA particle data for relativistic kinetic particles (bind(C))
+  type, bind(C) :: particle_SoA_kinetic_relativistic_c
+    type(c_ptr) :: x       = c_null_ptr !< (3, num_particles) position (R, Z, phi)
+    type(c_ptr) :: p       = c_null_ptr !< (3, num_particles) momentum (Cartesian)
+    type(c_ptr) :: st      = c_null_ptr !< (2, num_particles) element-local coords
+    type(c_ptr) :: weight  = c_null_ptr !< (num_particles)    macro-particle weight
+    type(c_ptr) :: i_elm   = c_null_ptr !< (num_particles)    element index (C_INT)
+    type(c_ptr) :: i_life  = c_null_ptr !< (num_particles)    life-step counter (C_INT)
+    type(c_ptr) :: t_birth = c_null_ptr !< (num_particles)    birth time-step (C_INT)
+  end type particle_SoA_kinetic_relativistic_c
+
+  !> Particle group for GPU (bind(C))
+  type, bind(C) :: particle_group_c
+    real(c_double) :: mass                  !< species mass in AMU
+    real(c_double) :: charge                !< charge number (e.g. -1.0 for electrons)
+    real(c_double) :: percentage_on_gpu     !< fraction of particles handled on GPU
+    integer(c_int) :: num_particles         !< total number of particles allocated
+    integer(c_int) :: alive_particle_count  !< number of active (non-lost) particles
+    integer(c_int) :: P_par_idx             !< 1-based index into feedback_rhs for P_parallel
+    integer(c_int) :: P_perp_idx            !< 1-based index for P_perpendicular
+    integer(c_int) :: j_phi_idx             !< 1-based index for j_phi current
+    type(particle_SoA_kinetic_relativistic_c) :: particles !< SoA particle data
+  end type particle_group_c
+
+  !> Node list in SoA layout for GPU (bind(C))
+  type, bind(C) :: node_list_SoA_c
+    integer(c_int) :: n_nodes  !< total number of nodes
+    integer(c_int) :: n_var    !< number of fluid variables per node
+    type(c_ptr)    :: x        = c_null_ptr !< (n_coord_tor, n_degrees, n_dim, n_nodes)
+    type(c_ptr)    :: values   = c_null_ptr !< (n_tor, n_degrees, n_var, n_nodes)
+    type(c_ptr)    :: deltas   = c_null_ptr !< (n_tor, n_degrees, n_var, n_nodes)
+  end type node_list_SoA_c
+
+  !> Element list in SoA layout for GPU (bind(C))
+  type, bind(C) :: element_list_SoA_c
+    integer(c_int) :: n_elements !< total number of elements
+    type(c_ptr)    :: vertex     = c_null_ptr !< (n_elements, n_vertex_max)
+    type(c_ptr)    :: neighbours = c_null_ptr !< (n_elements, n_vertex_max)
+    type(c_ptr)    :: size       = c_null_ptr !< (n_elements, n_vertex_max, n_degrees)
+  end type element_list_SoA_c
+
+  !> Fields accessor for GPU (bind(C))
+  type, bind(C) :: jorek_fields_interp_linear_c
+    type(node_list_SoA_c)    :: node_list
+    type(element_list_SoA_c) :: element_list
+    real(c_double) :: time_now
+    real(c_double) :: time_prev
+    integer(c_int) :: flag_static
+    integer(c_int) :: flag_zero_dpsidt
+    real(c_double) :: F0
+    real(c_double) :: t_norm
+    type(c_ptr)    :: mode_coord = c_null_ptr !< (n_coord_tor)
+  end type jorek_fields_interp_linear_c
+
+  !> Top-level simulation context for GPU (bind(C))
+  type, bind(C) :: particle_sim_c
+    type(jorek_fields_interp_linear_c) :: fields
+    type(particle_group_c)             :: group
+    real(c_double) :: sim_time
+    integer(c_int) :: my_id
+    integer(c_int) :: n_mpi
+    integer(c_int) :: gpu_id
+  end type particle_sim_c
+
+#endif /* USE_GPU */
 
 !> interfaces ------------------------------------------------------------------------------
 interface codify_particle_type
@@ -1029,5 +1119,267 @@ Bn_k_arr,dBn_k_arr,Bnorm_k_arr,E_k_arr,dAstar_k_arr)
   if(allocated(E_k_arr))           deallocate(E_k_arr)
   if(allocated(v_2d_arr))          deallocate(v_2d_arr)
 end subroutine deallocate_particle_arrays
+
+#ifdef USE_GPU
+! =====================================================================================
+!  AoS <-> SoA conversion utilities for GPU interoperability
+! =====================================================================================
+
+  !> Convert an AoS array of particle_kinetic_relativistic into SoA buffers.
+  !> The SoA arrays are allocated here; the caller must free them with dealloc_particle_SoA.
+  subroutine particles_AoS_to_SoA(particles, np, soa)
+    use mod_settings, only: n_tor  ! just needed for parameter consistency
+    implicit none
+    type(particle_kinetic_relativistic), intent(in) :: particles(:)
+    integer, intent(in) :: np  !< number of particles to convert
+    type(particle_SoA_kinetic_relativistic_c), intent(out) :: soa
+
+    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
+    integer(c_int), pointer :: ielm_arr(:), ilife_arr(:), tbirth_arr(:)
+    integer :: j
+
+    allocate(x_arr(3*np), p_arr(3*np), st_arr(2*np), w_arr(np))
+    allocate(ielm_arr(np), ilife_arr(np), tbirth_arr(np))
+
+    !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr) private(j)
+    do j = 1, np
+      x_arr(1 + 3*(j-1))  = particles(j)%x(1)
+      x_arr(2 + 3*(j-1))  = particles(j)%x(2)
+      x_arr(3 + 3*(j-1))  = particles(j)%x(3)
+      p_arr(1 + 3*(j-1))  = particles(j)%p(1)
+      p_arr(2 + 3*(j-1))  = particles(j)%p(2)
+      p_arr(3 + 3*(j-1))  = particles(j)%p(3)
+      st_arr(1 + 2*(j-1)) = particles(j)%st(1)
+      st_arr(2 + 2*(j-1)) = particles(j)%st(2)
+      w_arr(j)             = particles(j)%weight
+      ielm_arr(j)          = int(particles(j)%i_elm, c_int)
+      ilife_arr(j)         = int(particles(j)%i_life, c_int)
+      tbirth_arr(j)        = int(particles(j)%t_birth, c_int)
+    end do
+    !$omp end parallel do
+
+    soa%x       = c_loc(x_arr(1))
+    soa%p       = c_loc(p_arr(1))
+    soa%st      = c_loc(st_arr(1))
+    soa%weight  = c_loc(w_arr(1))
+    soa%i_elm   = c_loc(ielm_arr(1))
+    soa%i_life  = c_loc(ilife_arr(1))
+    soa%t_birth = c_loc(tbirth_arr(1))
+  end subroutine particles_AoS_to_SoA
+
+  !> Copy SoA buffers back into an AoS array of particle_kinetic_relativistic.
+  !> Only copies fields that the GPU kernel may have modified (x, p, st, i_elm).
+  subroutine particles_SoA_to_AoS(soa, np, particles)
+    implicit none
+    type(particle_SoA_kinetic_relativistic_c), intent(in) :: soa
+    integer, intent(in) :: np
+    type(particle_kinetic_relativistic), intent(inout) :: particles(:)
+
+    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:)
+    integer(c_int), pointer :: ielm_arr(:)
+    integer :: j
+
+    call c_f_pointer(soa%x,     x_arr,    [3*np])
+    call c_f_pointer(soa%p,     p_arr,    [3*np])
+    call c_f_pointer(soa%st,    st_arr,   [2*np])
+    call c_f_pointer(soa%i_elm, ielm_arr, [np])
+
+    !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, ielm_arr) private(j)
+    do j = 1, np
+      particles(j)%x(1)  = x_arr(1 + 3*(j-1))
+      particles(j)%x(2)  = x_arr(2 + 3*(j-1))
+      particles(j)%x(3)  = x_arr(3 + 3*(j-1))
+      particles(j)%p(1)  = p_arr(1 + 3*(j-1))
+      particles(j)%p(2)  = p_arr(2 + 3*(j-1))
+      particles(j)%p(3)  = p_arr(3 + 3*(j-1))
+      particles(j)%st(1) = st_arr(1 + 2*(j-1))
+      particles(j)%st(2) = st_arr(2 + 2*(j-1))
+      particles(j)%i_elm = int(ielm_arr(j), 4)
+    end do
+    !$omp end parallel do
+  end subroutine particles_SoA_to_AoS
+
+  !> Deallocate the SoA buffers allocated by particles_AoS_to_SoA
+  subroutine dealloc_particle_SoA(soa, np)
+    implicit none
+    type(particle_SoA_kinetic_relativistic_c), intent(inout) :: soa
+    integer, intent(in) :: np
+
+    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
+    integer(c_int), pointer :: ielm_arr(:), ilife_arr(:), tbirth_arr(:)
+
+    call c_f_pointer(soa%x,       x_arr,      [3*np])
+    call c_f_pointer(soa%p,       p_arr,      [3*np])
+    call c_f_pointer(soa%st,      st_arr,     [2*np])
+    call c_f_pointer(soa%weight,  w_arr,      [np])
+    call c_f_pointer(soa%i_elm,   ielm_arr,   [np])
+    call c_f_pointer(soa%i_life,  ilife_arr,  [np])
+    call c_f_pointer(soa%t_birth, tbirth_arr, [np])
+
+    deallocate(x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr)
+
+    soa%x       = c_null_ptr
+    soa%p       = c_null_ptr
+    soa%st      = c_null_ptr
+    soa%weight  = c_null_ptr
+    soa%i_elm   = c_null_ptr
+    soa%i_life  = c_null_ptr
+    soa%t_birth = c_null_ptr
+  end subroutine dealloc_particle_SoA
+
+  !> Convert the Fortran AoS type_node_list to a SoA node_list_SoA_c.
+  !> The SoA arrays are allocated here; the caller must free them with dealloc_node_list_SoA.
+  subroutine node_list_to_SoA(node_list, nl_soa)
+    use mod_settings, only: n_tor, n_degrees, n_dim, n_coord_tor
+    use data_structure, only: type_node_list
+    implicit none
+    type(type_node_list), intent(in), target :: node_list
+    type(node_list_SoA_c), intent(out) :: nl_soa
+
+    real(c_double), pointer :: x_flat(:), val_flat(:), del_flat(:)
+    integer :: i, nn, nv_node
+    integer :: idx, kc, kf, kd, kt
+
+    nn = node_list%n_nodes
+    nv_node = size(node_list%node(1)%values, 3)  ! n_var
+
+    nl_soa%n_nodes = int(nn, c_int)
+    nl_soa%n_var   = int(nv_node, c_int)
+
+    ! Allocate flat arrays in the same order as the C code expects:
+    !   x:      (n_coord_tor, n_degrees, n_dim, n_nodes)
+    !   values: (n_tor, n_degrees, n_var, n_nodes)
+    !   deltas: (n_tor, n_degrees, n_var, n_nodes)
+    allocate(x_flat(n_coord_tor * n_degrees * n_dim * nn))
+    allocate(val_flat(n_tor * n_degrees * nv_node * nn))
+    allocate(del_flat(n_tor * n_degrees * nv_node * nn))
+
+    ! Copy node coordinates: node(i)%x(kc, kf, kd)
+    ! C layout: x_flat[ kc + n_coord_tor * (kf + n_degrees * (kd + n_dim * (i-1))) ]
+    ! Fortran column-major: same indexing, 1-based
+    !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
+    do i = 1, nn
+      do kd = 1, n_dim
+        do kf = 1, n_degrees
+          do kc = 1, n_coord_tor
+            idx = kc + n_coord_tor * ((kf-1) + n_degrees * ((kd-1) + n_dim * (i-1)))
+            x_flat(idx) = node_list%node(i)%x(kc, kf, kd)
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+
+    ! Copy values: node(i)%values(kt, kf, kv)
+    ! C layout: val_flat[ kt + n_tor * (kf + n_degrees * (kv + n_var * (i-1))) ]
+    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn, nv_node) private(i, kt, kf, kd, idx) collapse(2)
+    do i = 1, nn
+      do kd = 1, nv_node
+        do kf = 1, n_degrees
+          do kt = 1, n_tor
+            idx = kt + n_tor * ((kf-1) + n_degrees * ((kd-1) + nv_node * (i-1)))
+            val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
+            del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+
+    nl_soa%x      = c_loc(x_flat(1))
+    nl_soa%values = c_loc(val_flat(1))
+    nl_soa%deltas = c_loc(del_flat(1))
+  end subroutine node_list_to_SoA
+
+  !> Deallocate the SoA buffers allocated by node_list_to_SoA
+  subroutine dealloc_node_list_SoA(nl_soa)
+    use mod_settings, only: n_tor, n_degrees, n_dim, n_coord_tor
+    implicit none
+    type(node_list_SoA_c), intent(inout) :: nl_soa
+
+    real(c_double), pointer :: tmp(:)
+    integer :: nn, nv
+
+    nn = nl_soa%n_nodes
+    nv = nl_soa%n_var
+
+    call c_f_pointer(nl_soa%x, tmp, [n_coord_tor * n_degrees * n_dim * nn])
+    deallocate(tmp)
+    call c_f_pointer(nl_soa%values, tmp, [n_tor * n_degrees * nv * nn])
+    deallocate(tmp)
+    call c_f_pointer(nl_soa%deltas, tmp, [n_tor * n_degrees * nv * nn])
+    deallocate(tmp)
+
+    nl_soa%x      = c_null_ptr
+    nl_soa%values = c_null_ptr
+    nl_soa%deltas = c_null_ptr
+  end subroutine dealloc_node_list_SoA
+
+  !> Convert the Fortran AoS type_element_list to SoA element_list_SoA_c.
+  !> The SoA arrays are allocated here; the caller must free them with dealloc_element_list_SoA.
+  subroutine element_list_to_SoA(element_list, el_soa)
+    use mod_settings, only: n_vertex_max, n_degrees
+    use data_structure, only: type_element_list
+    implicit none
+    type(type_element_list), intent(in), target :: element_list
+    type(element_list_SoA_c), intent(out) :: el_soa
+
+    integer(c_int), pointer :: vert_flat(:), neigh_flat(:)
+    real(c_double), pointer :: size_flat(:)
+    integer :: ne, i, kv, kf, idx
+
+    ne = element_list%n_elements
+    el_soa%n_elements = int(ne, c_int)
+
+    ! vertex:     (n_elements, n_vertex_max)
+    ! neighbours: (n_elements, n_vertex_max)
+    ! size:       (n_elements, n_vertex_max, n_degrees)
+    allocate(vert_flat(ne * n_vertex_max))
+    allocate(neigh_flat(ne * n_vertex_max))
+    allocate(size_flat(ne * n_vertex_max * n_degrees))
+
+    !$omp parallel do default(none) shared(element_list, vert_flat, neigh_flat, size_flat, ne) private(i, kv, kf, idx) collapse(2)
+    do kv = 1, n_vertex_max
+      do i = 1, ne
+        idx = i + ne * (kv - 1)
+        vert_flat(idx)  = int(element_list%element(i)%vertex(kv), c_int)
+        neigh_flat(idx) = int(element_list%element(i)%neighbours(kv), c_int)
+        do kf = 1, n_degrees
+          size_flat(i + ne * ((kv-1) + n_vertex_max * (kf-1))) = element_list%element(i)%size(kv, kf)
+        end do
+      end do
+    end do
+    !$omp end parallel do
+
+    el_soa%vertex     = c_loc(vert_flat(1))
+    el_soa%neighbours = c_loc(neigh_flat(1))
+    el_soa%size       = c_loc(size_flat(1))
+  end subroutine element_list_to_SoA
+
+  !> Deallocate the SoA buffers allocated by element_list_to_SoA
+  subroutine dealloc_element_list_SoA(el_soa)
+    use mod_settings, only: n_vertex_max, n_degrees
+    implicit none
+    type(element_list_SoA_c), intent(inout) :: el_soa
+
+    integer(c_int), pointer :: itmp(:)
+    real(c_double), pointer :: dtmp(:)
+    integer :: ne
+
+    ne = el_soa%n_elements
+
+    call c_f_pointer(el_soa%vertex, itmp, [ne * n_vertex_max])
+    deallocate(itmp)
+    call c_f_pointer(el_soa%neighbours, itmp, [ne * n_vertex_max])
+    deallocate(itmp)
+    call c_f_pointer(el_soa%size, dtmp, [ne * n_vertex_max * n_degrees])
+    deallocate(dtmp)
+
+    el_soa%vertex     = c_null_ptr
+    el_soa%neighbours = c_null_ptr
+    el_soa%size       = c_null_ptr
+  end subroutine dealloc_element_list_SoA
+
+#endif /* USE_GPU */
 
 end module mod_particle_types
