@@ -30,10 +30,17 @@
 #define N_ORDER 3
 #endif
 
-static constexpr int NV   = 4;                              // n_vertex_max
-static constexpr int NDEG = (N_ORDER + 1) * (N_ORDER + 1) / 4; // n_degrees
-static constexpr int NDIM = 2;                              // n_dim
-static constexpr int NMODE = (N_TOR - 1) / 2;              // number of modes excl 0
+// TODO: Since all these are hard-coded parameters before compilation, it should be possible to set them
+// using precompiler defines and static arrays whenever possible
+// Otherwise I need to pass them as arguments to the extern "C" function, and handle everythin dynamically
+// at runtime
+
+
+static constexpr int NV       = 4;                          // n_vertex_max
+static constexpr int NDEG     = (N_ORDER + 1) * (N_ORDER + 1) / 4; // n_degrees
+static constexpr int NDIM     = 2;                          // n_dim
+static constexpr int NMODE    = (N_TOR - 1) / 2;           // number of modes excl 0
+static constexpr int N_FB_VARS = 8;                         // max feedback variables (n_proj2)
 
 // ---------------------------------------------------------------------------
 // Physical constants (matching jorek/models/constants.f90)
@@ -1088,7 +1095,7 @@ void evolve_REs_kernel(
     // Coupling indices (0-based for C)
     int P_par_idx, int P_perp_idx, int j_phi_idx,
     // Feedback RHS (atomically updated)
-    double* __restrict__ feedback_rhs, // (n_elements, 8, N_TOR, NV, NDEG)
+    double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, N_FB_VARS) = Fortran layout
     // mode_coord for interp_RZP_1_gpu
     const int* __restrict__ mode_coord)
 {
@@ -1101,6 +1108,13 @@ void evolve_REs_kernel(
     double st[2] = {p_st[0 + 2*j], p_st[1 + 2*j]};
     int    i_elm = p_i_elm[j];
     double w = p_weight[j];
+
+#ifdef GPU_DEBUG
+    if (j < 3) {
+        printf("[GPU_DEBUG j=%d] START: i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g]\n",
+               j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2]);
+    }
+#endif
 
     for (int k = 0; k < nstep_particles; ++k) {
 
@@ -1151,9 +1165,18 @@ void evolve_REs_kernel(
         double v_Pperp = gamma_m * v_perp * v_perp * 0.5 * MU_ZERO;
         double v_jPhi  = -charge * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
 
-        // Accumulate to feedback_rhs with atomicAdd
-        // Fortran dims: (n_elements, 8, N_TOR, NV, NDEG)
+        // Accumulate to feedback_rhs with atomicAdd.
+        // Layout (column-major, same order as Fortran feedback_rhs):
+        //   (NDEG, NV, n_elements, N_TOR, N_FB_VARS)
+        //   index = n + NDEG*(m + NV*(ie + n_elements*(it + N_TOR*var)))  (all 0-based)
         int ie = i_elm - 1;
+        const int stride_var = NDEG * NV * n_elements * N_TOR;
+#ifdef GPU_DEBUG
+        if (j < 3 && k == 0) {
+            printf("[GPU_DEBUG j=%d k=0] ie=%d v_Ppar=%.4g v_Pperp=%.4g v_jPhi=%.4g\n",
+                   j, ie, v_Ppar, v_Pperp, v_jPhi);
+        }
+#endif
         for (int n = 0; n < NDEG; ++n) {
             for (int m = 0; m < NV; ++m) {
                 double proj_factor = HH[m * NDEG + n]
@@ -1161,13 +1184,12 @@ void evolve_REs_kernel(
                                    * w;
                 for (int it = 0; it < N_TOR; ++it) {
                     double hz = HZ_proj[it];
-                    // base = offset for (ie, 0, it, m, n) in (n_el, 8, N_TOR, NV, NDEG)
-                    int base = ie + n_elements * (0 + 8 * (it + N_TOR * (m + NV * n)));
-                    atomicAdd(&feedback_rhs[base + n_elements * P_par_idx],
+                    int base = n + NDEG * (m + NV * (ie + n_elements * it));
+                    atomicAdd(&feedback_rhs[base + stride_var * P_par_idx],
                               hz * v_Ppar * proj_factor);
-                    atomicAdd(&feedback_rhs[base + n_elements * P_perp_idx],
+                    atomicAdd(&feedback_rhs[base + stride_var * P_perp_idx],
                               hz * v_Pperp * proj_factor);
-                    atomicAdd(&feedback_rhs[base + n_elements * j_phi_idx],
+                    atomicAdd(&feedback_rhs[base + stride_var * j_phi_idx],
                               hz * v_jPhi * proj_factor);
                 }
             }
@@ -1186,8 +1208,21 @@ void evolve_REs_kernel(
                                F0, t_norm,
                                group_mass, sim_time, tstep_part_adj,
                                ifail);
+#ifdef GPU_DEBUG
+        if (ifail != 0) {
+            printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.4g,%.4g,%.4g]\n",
+                   j, k, ifail, i_elm, x[0], x[1], x[2]);
+        }
+#endif
 
     } // end time-step loop
+
+#ifdef GPU_DEBUG
+    if (j < 3) {
+        printf("[GPU_DEBUG j=%d] END: i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g]\n",
+               j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2]);
+    }
+#endif
 
     // Store particle data back to global memory
     p_x[0 + 3*j] = x[0]; p_x[1 + 3*j] = x[1]; p_x[2 + 3*j] = x[2];
@@ -1253,7 +1288,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_el_neigh  = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_size   = (size_t)n_elements * NV   * NDEG * sizeof(double);
 
-    const size_t sz_feedback   = (size_t)n_elements * 8 * N_TOR * NV * NDEG * sizeof(double);
+    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * N_FB_VARS * sizeof(double);
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
 
     // --- Allocate device memory ---
@@ -1304,6 +1339,22 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     constexpr int BLOCK_SIZE = 256;
     int grid_size = (alive_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+#ifdef GPU_DEBUG
+    fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: alive=%d num=%d n_el=%d n_nodes=%d n_var=%d\n",
+            alive_count, num_particles, n_elements, n_nodes, n_var);
+    fprintf(stderr, "[GPU_DEBUG host]   sim_time=%.6g  tstep=%.6g  nstep=%d\n",
+            sim_time, tstep_part_adj, nstep_particles);
+    fprintf(stderr, "[GPU_DEBUG host]   P_par=%d P_perp=%d j_phi=%d (0-based)\n",
+            P_par_idx, P_perp_idx, j_phi_idx);
+    fprintf(stderr, "[GPU_DEBUG host]   feedback: %zu bytes  grid=%d  block=%d\n",
+            sz_feedback, grid_size, BLOCK_SIZE);
+    if (alive_count > 0) {
+        fprintf(stderr, "[GPU_DEBUG host]   p[0]: i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g] w=%.4g\n",
+                part->i_elm[0], part->x[0], part->x[1], part->x[2],
+                part->p[0],     part->p[1], part->p[2], part->weight[0]);
+    }
+#endif
+
     hipLaunchKernelGGL(evolve_REs_kernel,
         dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
         // Particle SoA
@@ -1327,6 +1378,12 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         d_mode_coord);
 
     HIP_CHECK(hipGetLastError());
+#ifdef GPU_DEBUG
+    // Synchronise before reading results so any kernel printf output is flushed
+    // and device-side errors are caught immediately rather than at the next API call.
+    HIP_CHECK(hipDeviceSynchronize());
+    fprintf(stderr, "[GPU_DEBUG host] kernel completed, copying results back.\n");
+#endif
 
     // --- Copy results back: device -> host ---
     HIP_CHECK(hipMemcpy(part->x,       d_x,            sz_x,        hipMemcpyDeviceToHost));

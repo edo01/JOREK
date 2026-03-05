@@ -1127,15 +1127,19 @@ end subroutine deallocate_particle_arrays
 
   !> Convert an AoS array of particle_kinetic_relativistic into SoA buffers.
   !> The SoA arrays are allocated here; the caller must free them with dealloc_particle_SoA.
-  subroutine particles_AoS_to_SoA(particles, np, soa)
+  !> Backing arrays (x_arr … tbirth_arr) are allocated here and returned to the caller.
+  !> The caller must keep them alive until the GPU call completes and then deallocate them
+  !> directly.  c_f_pointer + DEALLOCATE on a pointer recovered from c_loc is non-standard
+  !> and raises Intel Fortran error 173.
+  subroutine particles_AoS_to_SoA(particles, np, soa, &
+      x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr)
     use mod_settings, only: n_tor  ! just needed for parameter consistency
     implicit none
     type(particle_kinetic_relativistic), intent(in) :: particles(:)
     integer, intent(in) :: np  !< number of particles to convert
     type(particle_SoA_kinetic_relativistic_c), intent(out) :: soa
-
-    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
-    integer(c_int), pointer :: ielm_arr(:), ilife_arr(:), tbirth_arr(:)
+    real(c_double), allocatable, intent(out), target :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
+    integer(c_int), allocatable, intent(out), target :: ielm_arr(:), ilife_arr(:), tbirth_arr(:)
     integer :: j
 
     allocate(x_arr(3*np), p_arr(3*np), st_arr(2*np), w_arr(np))
@@ -1200,24 +1204,12 @@ end subroutine deallocate_particle_arrays
   end subroutine particles_SoA_to_AoS
 
   !> Deallocate the SoA buffers allocated by particles_AoS_to_SoA
+  !> Null out the c_ptr fields of a particle SoA struct.
+  !> The backing memory is owned by the caller and must be freed there via DEALLOCATE.
   subroutine dealloc_particle_SoA(soa, np)
     implicit none
     type(particle_SoA_kinetic_relativistic_c), intent(inout) :: soa
     integer, intent(in) :: np
-
-    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
-    integer(c_int), pointer :: ielm_arr(:), ilife_arr(:), tbirth_arr(:)
-
-    call c_f_pointer(soa%x,       x_arr,      [3*np])
-    call c_f_pointer(soa%p,       p_arr,      [3*np])
-    call c_f_pointer(soa%st,      st_arr,     [2*np])
-    call c_f_pointer(soa%weight,  w_arr,      [np])
-    call c_f_pointer(soa%i_elm,   ielm_arr,   [np])
-    call c_f_pointer(soa%i_life,  ilife_arr,  [np])
-    call c_f_pointer(soa%t_birth, tbirth_arr, [np])
-
-    deallocate(x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr)
-
     soa%x       = c_null_ptr
     soa%p       = c_null_ptr
     soa%st      = c_null_ptr
@@ -1229,14 +1221,15 @@ end subroutine deallocate_particle_arrays
 
   !> Convert the Fortran AoS type_node_list to a SoA node_list_SoA_c.
   !> The SoA arrays are allocated here; the caller must free them with dealloc_node_list_SoA.
-  subroutine node_list_to_SoA(node_list, nl_soa)
+  !> x_flat, val_flat, del_flat are allocated here and returned to the caller.
+  !> The caller must keep them alive until the GPU call completes and then DEALLOCATE them.
+  subroutine node_list_to_SoA(node_list, nl_soa, x_flat, val_flat, del_flat)
     use mod_settings, only: n_tor, n_degrees, n_dim, n_coord_tor
     use data_structure, only: type_node_list
     implicit none
     type(type_node_list), intent(in), target :: node_list
     type(node_list_SoA_c), intent(out) :: nl_soa
-
-    real(c_double), pointer :: x_flat(:), val_flat(:), del_flat(:)
+    real(c_double), allocatable, intent(out), target :: x_flat(:), val_flat(:), del_flat(:)
     integer :: i, nn, nv_node
     integer :: idx, kc, kf, kd, kt
 
@@ -1292,24 +1285,11 @@ end subroutine deallocate_particle_arrays
   end subroutine node_list_to_SoA
 
   !> Deallocate the SoA buffers allocated by node_list_to_SoA
+  !> Null out the c_ptr fields of a node_list SoA struct.
+  !> The backing memory is owned by the caller and must be freed there via DEALLOCATE.
   subroutine dealloc_node_list_SoA(nl_soa)
-    use mod_settings, only: n_tor, n_degrees, n_dim, n_coord_tor
     implicit none
     type(node_list_SoA_c), intent(inout) :: nl_soa
-
-    real(c_double), pointer :: tmp(:)
-    integer :: nn, nv
-
-    nn = nl_soa%n_nodes
-    nv = nl_soa%n_var
-
-    call c_f_pointer(nl_soa%x, tmp, [n_coord_tor * n_degrees * n_dim * nn])
-    deallocate(tmp)
-    call c_f_pointer(nl_soa%values, tmp, [n_tor * n_degrees * nv * nn])
-    deallocate(tmp)
-    call c_f_pointer(nl_soa%deltas, tmp, [n_tor * n_degrees * nv * nn])
-    deallocate(tmp)
-
     nl_soa%x      = c_null_ptr
     nl_soa%values = c_null_ptr
     nl_soa%deltas = c_null_ptr
@@ -1317,15 +1297,16 @@ end subroutine deallocate_particle_arrays
 
   !> Convert the Fortran AoS type_element_list to SoA element_list_SoA_c.
   !> The SoA arrays are allocated here; the caller must free them with dealloc_element_list_SoA.
-  subroutine element_list_to_SoA(element_list, el_soa)
+  !> vert_flat, neigh_flat, size_flat are allocated here and returned to the caller.
+  !> The caller must keep them alive until the GPU call completes and then DEALLOCATE them.
+  subroutine element_list_to_SoA(element_list, el_soa, vert_flat, neigh_flat, size_flat)
     use mod_settings, only: n_vertex_max, n_degrees
     use data_structure, only: type_element_list
     implicit none
     type(type_element_list), intent(in), target :: element_list
     type(element_list_SoA_c), intent(out) :: el_soa
-
-    integer(c_int), pointer :: vert_flat(:), neigh_flat(:)
-    real(c_double), pointer :: size_flat(:)
+    integer(c_int), allocatable, intent(out), target :: vert_flat(:), neigh_flat(:)
+    real(c_double), allocatable, intent(out), target :: size_flat(:)
     integer :: ne, i, kv, kf, idx
 
     ne = element_list%n_elements
@@ -1357,24 +1338,11 @@ end subroutine deallocate_particle_arrays
   end subroutine element_list_to_SoA
 
   !> Deallocate the SoA buffers allocated by element_list_to_SoA
+  !> Null out the c_ptr fields of an element_list SoA struct.
+  !> The backing memory is owned by the caller and must be freed there via DEALLOCATE.
   subroutine dealloc_element_list_SoA(el_soa)
-    use mod_settings, only: n_vertex_max, n_degrees
     implicit none
     type(element_list_SoA_c), intent(inout) :: el_soa
-
-    integer(c_int), pointer :: itmp(:)
-    real(c_double), pointer :: dtmp(:)
-    integer :: ne
-
-    ne = el_soa%n_elements
-
-    call c_f_pointer(el_soa%vertex, itmp, [ne * n_vertex_max])
-    deallocate(itmp)
-    call c_f_pointer(el_soa%neighbours, itmp, [ne * n_vertex_max])
-    deallocate(itmp)
-    call c_f_pointer(el_soa%size, dtmp, [ne * n_vertex_max * n_degrees])
-    deallocate(dtmp)
-
     el_soa%vertex     = c_null_ptr
     el_soa%neighbours = c_null_ptr
     el_soa%size       = c_null_ptr

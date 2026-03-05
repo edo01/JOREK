@@ -271,7 +271,6 @@ contains
   subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj)
     use mod_settings, only: n_tor, n_degrees, n_vertex_max, n_coord_tor
     use phys_module, only: F0, mode_coord
-    use constants, only: mu_zero, atomic_mass_unit
     use mod_fields_linear, only: jorek_fields_interp_linear
     implicit none
     class(particle_sim), target, intent(inout) :: sim
@@ -286,37 +285,65 @@ contains
     type(node_list_SoA_c) :: nl_soa
     type(element_list_SoA_c) :: el_soa
     integer(c_int), target :: mode_coord_c(n_coord_tor)
+    real(c_double) :: tstep_part_adj_c
+    integer(c_int) :: nstep_part_adj_c
 
-    ! Feedback buffer in C layout: (n_elements, n_fb_vars, n_tor, n_vertex_max, n_degrees)
-    integer, parameter :: N_FB_VARS = 8
-    integer :: ne, np, n_alive, n_fb
+    ! Feedback buffer in same column-major order as Fortran feedback_rhs:
+    !   fb_c(n_degrees, n_vertex_max, ne, n_tor, N_FB_VARS)     (no index reordering)
+    integer, parameter :: N_FB_VARS = 8   ! TODO: should this be hardcoded?
+    integer :: ne, np, n_alive, ip      !n of elements, n of particles, n of alive particles, particle index
     real(c_double), allocatable, target :: fb_c(:,:,:,:,:)
-    integer :: ie, iv, it, kv, kf
+
+    ! Backing arrays for SoA conversions.
+    ! Must be kept alive until after the C call and then freed here directly
+    ! Since retrieving them from the structures for deallocation triggers memory errors.
+    real(c_double), allocatable, target :: part_x(:), part_p(:), part_st(:), part_w(:)
+    integer(c_int), allocatable, target :: part_ielm(:), part_ilife(:), part_tbirth(:)
+    real(c_double), allocatable, target :: nl_x_flat(:), nl_val_flat(:), nl_del_flat(:)
+    integer(c_int), allocatable, target :: el_vert_flat(:), el_neigh_flat(:)
+    real(c_double), allocatable, target :: el_size_flat(:)
 
     ! --- Count active particles ---
     ne = sim%fields%element_list%n_elements
     np = size(sim%groups(group_num)%particles, 1)
-    n_fb = size(feedback_rhs, 5)  ! n_proj2
 
     n_alive = 0
     select type (p => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
-      do ie = 1, np
-        if (p(ie)%i_elm > 0) n_alive = n_alive + 1
+      do ip = 1, np
+        if (p(ip)%i_elm > 0) n_alive = n_alive + 1
       end do
     end select
 
-    ! --- Build particle SoA ---
     select type (p => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
-      call particles_AoS_to_SoA(p, np, part_soa)
+    #ifdef GPU_DEBUG
+      if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Allocating particle SoA for np=', np
+    #endif
+      call particles_AoS_to_SoA(p, np, part_soa, &
+          part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
+    #ifdef GPU_DEBUG
+      if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] particle SoA built'
+    #endif
     end select
 
     ! --- Build node list SoA ---
-    call node_list_to_SoA(sim%fields%node_list, nl_soa)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Building node_list SoA'
+  #endif
+    call node_list_to_SoA(sim%fields%node_list, nl_soa, nl_x_flat, nl_val_flat, nl_del_flat)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] node_list SoA built'
+  #endif
 
     ! --- Build element list SoA ---
-    call element_list_to_SoA(sim%fields%element_list, el_soa)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Building element_list SoA (ne=', ne,')'
+  #endif
+    call element_list_to_SoA(sim%fields%element_list, el_soa, el_vert_flat, el_neigh_flat, el_size_flat)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] element_list SoA built'
+  #endif
 
     ! --- Build mode_coord ---
     mode_coord_c(:) = int(mode_coord(:), c_int)
@@ -368,38 +395,44 @@ contains
     sim_c%n_mpi    = int(sim%n_mpi, c_int)
     sim_c%gpu_id   = 0_c_int
 
-    ! --- Allocate C-layout feedback buffer ---
-    ! C layout: (n_elements, N_FB_VARS, n_tor, n_vertex_max, n_degrees)
-    allocate(fb_c(ne, N_FB_VARS, n_tor, n_vertex_max, n_degrees))
+    ! --- Allocate feedback buffer matching Fortran column-major layout ---
+    ! feedback_rhs starts at zero for 'rep', so initialising fb_c to zero is correct.
+    allocate(fb_c(n_degrees, n_vertex_max, ne, n_tor, N_FB_VARS))
     fb_c = 0.0_c_double
 
-    ! --- Copy existing feedback into C layout for the 3 RE indices ---
-    ! Fortran: feedback_rhs(kf, kv, ie, it, iv) where kf=1..n_degrees, kv=1..n_vertex_max, ie=1..n_elements_max, it=1..n_tor, iv=1..n_fb
-    ! C:       fb_c(ie, iv, it, kv, kf)         where ie=1..ne, iv=1..8, it=1..n_tor, kv=1..n_vertex_max, kf=1..n_degrees
-    ! feedback_rhs starts at zero for 'rep', so we don't need to copy existing values.
+    tstep_part_adj_c = real(tstep_part_adj, c_double)
+    nstep_part_adj_c = int(nstep_part_adj, c_int)
 
     ! --- Call GPU kernel ---
+#ifdef GPU_DEBUG
+    if (sim%my_id == 0) then
+      write(*,'(A,I0,A,I0,A,I0,A,I0)') &
+        '[GPU_DEBUG Fortran] np=', np, '  alive=', n_alive, '  ne=', ne, '  n_tor=', n_tor
+      write(*,'(A,ES14.6,A,ES14.6)') &
+        '[GPU_DEBUG Fortran] tstep=', tstep_part_adj, '  t=', sim%time
+      write(*,'(A,I0,A,I0,A,I0)') &
+        '[GPU_DEBUG Fortran] P_par_idx=', P_par_idx_kin, &
+        '  P_perp_idx=', P_perp_idx_kin, '  j_Phi_idx=', j_Phi_idx_kin
+    end if
+#endif
     if (sim%my_id == 0) write(*,*) 'Launching evolve_REs on GPU...'
-    call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj, int(nstep_part_adj, c_int))
+    call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj_c, nstep_part_adj_c)
     if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
 
-    ! --- Convert C-layout feedback back to Fortran layout ---
-    ! Only the 3 relevant indices (P_par, P_perp, j_Phi) were written by the GPU.
-    !$omp parallel do default(none) collapse(4) &
-    !$omp shared(fb_c, feedback_rhs, ne, P_par_idx_kin, P_perp_idx_kin, j_Phi_idx_kin) &
-    !$omp private(kf, kv, ie, it)
-    do kf = 1, n_degrees
-      do kv = 1, n_vertex_max
-        do ie = 1, ne
-          do it = 1, n_tor
-            feedback_rhs(kf, kv, ie, it, P_par_idx_kin)  = fb_c(ie, P_par_idx_kin,  it, kv, kf)
-            feedback_rhs(kf, kv, ie, it, P_perp_idx_kin) = fb_c(ie, P_perp_idx_kin, it, kv, kf)
-            feedback_rhs(kf, kv, ie, it, j_Phi_idx_kin)  = fb_c(ie, j_Phi_idx_kin,  it, kv, kf)
-          end do
-        end do
-      end do
-    end do
-    !$omp end parallel do
+#ifdef GPU_DEBUG
+    if (sim%my_id == 0) then
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(:,:,:,:,P_par_idx_kin)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(:,:,:,:,P_perp_idx_kin)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c j_Phi|_max  = ', maxval(abs(fb_c(:,:,:,:,j_Phi_idx_kin)))
+    end if
+#endif
+
+    ! --- Accumulate GPU result into feedback_rhs ---
+    ! fb_c has shape (n_degrees, n_vertex_max, ne, n_tor, N_FB_VARS) which matches
+    ! the first four dimensions of feedback_rhs(:,:,1:ne,:,:).  No index reordering needed.
+    feedback_rhs(:, :, 1:ne, :, P_par_idx_kin)  = feedback_rhs(:, :, 1:ne, :, P_par_idx_kin)  + fb_c(:, :, :, :, P_par_idx_kin)
+    feedback_rhs(:, :, 1:ne, :, P_perp_idx_kin) = feedback_rhs(:, :, 1:ne, :, P_perp_idx_kin) + fb_c(:, :, :, :, P_perp_idx_kin)
+    feedback_rhs(:, :, 1:ne, :, j_Phi_idx_kin)  = feedback_rhs(:, :, 1:ne, :, j_Phi_idx_kin)  + fb_c(:, :, :, :, j_Phi_idx_kin)
 
     ! --- Copy updated particle data back to AoS ---
     select type (p => sim%groups(group_num)%particles)
@@ -408,10 +441,25 @@ contains
     end select
 
     ! --- Cleanup ---
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating fb_c'
+  #endif
     deallocate(fb_c)
-    call dealloc_particle_SoA(part_soa, np)
-    call dealloc_node_list_SoA(nl_soa)
-    call dealloc_element_list_SoA(el_soa)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating particle SoA backing arrays'
+  #endif
+    deallocate(part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating node_list SoA backing arrays'
+  #endif
+    deallocate(nl_x_flat, nl_val_flat, nl_del_flat)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating element_list SoA backing arrays'
+  #endif
+    deallocate(el_vert_flat, el_neigh_flat, el_size_flat)
+  #ifdef GPU_DEBUG
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Cleanup done'
+  #endif
 
   end subroutine evolve_REs_gpu
 #endif /* USE_GPU */
