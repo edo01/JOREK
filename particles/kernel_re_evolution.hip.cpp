@@ -35,12 +35,10 @@
 // Otherwise I need to pass them as arguments to the extern "C" function, and handle everythin dynamically
 // at runtime
 
-
 static constexpr int NV       = 4;                          // n_vertex_max
 static constexpr int NDEG     = (N_ORDER + 1) * (N_ORDER + 1) / 4; // n_degrees
 static constexpr int NDIM     = 2;                          // n_dim
 static constexpr int NMODE    = (N_TOR - 1) / 2;           // number of modes excl 0
-static constexpr int N_FB_VARS = 8;                         // max feedback variables (n_proj2)
 
 // ---------------------------------------------------------------------------
 // Physical constants (matching jorek/models/constants.f90)
@@ -198,6 +196,9 @@ void basisfunctions_2D_0(double s, double t,
     H[3 * NDEG + 3] = -9.0 * sm12 * s * tm1 * t2;
 }
 
+// TODO: in all basisfunctions routines, we are assuming N_ORDER = 3
+// Implement also for N_ORDER = 5 ??
+
 // ---------------------------------------------------------------------------
 // 2D cubic basis functions with first derivatives – non-transposed: [kv][kf]
 // Used by interp_RZP_1_gpu and for the projection in the main kernel
@@ -256,9 +257,9 @@ void basisfunctions_2D_1(double s, double t,
 }
 
 // ---------------------------------------------------------------------------
-// 2D cubic basis functions – transposed: H_T[kf][kv]  (degree x vertex)
-// Used by calc_EBpsiU_linear_gpu_enhanced
-// Stored flat as H_T[kf * NV + kv]
+// 2D cubic basis functions with first derivatives – same layout as basisfunctions_2D_1
+// H[kv][kf]  (vertex x degree), Fortran column-major order
+// Stored flat as H[kv * NDEG + kf]
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
 void basisfunctions_2D_1_T(double s, double t,
@@ -274,57 +275,57 @@ void basisfunctions_2D_1_T(double s, double t,
     double t2   = t * t;
 
     // vertex 1 (kv=0)
-    H  [0*NV+0] = sm12*(1.0+2.0*s) * tm12*(1.0+2.0*t);
-    H_s[0*NV+0] = 6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[0*NV+0] = 6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H  [1*NV+0] = 3.0*sm12*s * tm12*(1.0+2.0*t);
-    H_s[1*NV+0] = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[1*NV+0] = 18.0*sm12*s * tm1*t;
-    H  [2*NV+0] = 3.0*sm12*(1.0+2.0*s) * tm12*t;
-    H_s[2*NV+0] = 18.0*sm1*s * tm12*t;
-    H_t[2*NV+0] = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
-    H  [3*NV+0] = 9.0*sm12*s * tm12*t;
-    H_s[3*NV+0] = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
-    H_t[3*NV+0] = 9.0*sm12*s * tm1*(-1.0+3.0*t);
+    H  [0*NDEG+0] = sm12*(1.0+2.0*s) * tm12*(1.0+2.0*t);
+    H_s[0*NDEG+0] = 6.0*sm1*s * tm12*(1.0+2.0*t);
+    H_t[0*NDEG+0] = 6.0*sm12*(1.0+2.0*s) * tm1*t;
+    H  [0*NDEG+1] = 3.0*sm12*s * tm12*(1.0+2.0*t);
+    H_s[0*NDEG+1] = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
+    H_t[0*NDEG+1] = 18.0*sm12*s * tm1*t;
+    H  [0*NDEG+2] = 3.0*sm12*(1.0+2.0*s) * tm12*t;
+    H_s[0*NDEG+2] = 18.0*sm1*s * tm12*t;
+    H_t[0*NDEG+2] = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
+    H  [0*NDEG+3] = 9.0*sm12*s * tm12*t;
+    H_s[0*NDEG+3] = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
+    H_t[0*NDEG+3] = 9.0*sm12*s * tm1*(-1.0+3.0*t);
     // vertex 2 (kv=1)
-    H  [0*NV+1] = -(s2*(-3.0+2.0*s) * tm12*(1.0+2.0*t));
-    H_s[0*NV+1] = -6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[0*NV+1] = -6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H  [1*NV+1] = -3.0*sm1*s2 * tm12*(1.0+2.0*t);
-    H_s[1*NV+1] = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[1*NV+1] = -18.0*sm1*s2 * tm1*t;
-    H  [2*NV+1] = -3.0*s2*(-3.0+2.0*s) * tm12*t;
-    H_s[2*NV+1] = -18.0*sm1*s * tm12*t;
-    H_t[2*NV+1] = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
-    H  [3*NV+1] = -9.0*sm1*s2 * tm12*t;
-    H_s[3*NV+1] = -9.0*s*(-2.0+3.0*s) * tm12*t;
-    H_t[3*NV+1] = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
+    H  [1*NDEG+0] = -(s2*(-3.0+2.0*s) * tm12*(1.0+2.0*t));
+    H_s[1*NDEG+0] = -6.0*sm1*s * tm12*(1.0+2.0*t);
+    H_t[1*NDEG+0] = -6.0*s2*(-3.0+2.0*s) * tm1*t;
+    H  [1*NDEG+1] = -3.0*sm1*s2 * tm12*(1.0+2.0*t);
+    H_s[1*NDEG+1] = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
+    H_t[1*NDEG+1] = -18.0*sm1*s2 * tm1*t;
+    H  [1*NDEG+2] = -3.0*s2*(-3.0+2.0*s) * tm12*t;
+    H_s[1*NDEG+2] = -18.0*sm1*s * tm12*t;
+    H_t[1*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
+    H  [1*NDEG+3] = -9.0*sm1*s2 * tm12*t;
+    H_s[1*NDEG+3] = -9.0*s*(-2.0+3.0*s) * tm12*t;
+    H_t[1*NDEG+3] = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
     // vertex 3 (kv=2)
-    H  [0*NV+2] = s2*(-3.0+2.0*s) * t2*(-3.0+2.0*t);
-    H_s[0*NV+2] = 6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[0*NV+2] = 6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H  [1*NV+2] = 3.0*sm1*s2 * t2*(-3.0+2.0*t);
-    H_s[1*NV+2] = 3.0*s*(-2.0+3.0*s) * t2*(-3.0+2.0*t);
-    H_t[1*NV+2] = 18.0*sm1*s2 * tm1*t;
-    H  [2*NV+2] = 3.0*s2*(-3.0+2.0*s) * tm1*t2;
-    H_s[2*NV+2] = 18.0*sm1*s * tm1*t2;
-    H_t[2*NV+2] = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
-    H  [3*NV+2] = 9.0*sm1*s2 * tm1*t2;
-    H_s[3*NV+2] = 9.0*s*(-2.0+3.0*s) * tm1*t2;
-    H_t[3*NV+2] = 9.0*sm1*s2 * t*(-2.0+3.0*t);
+    H  [2*NDEG+0] = s2*(-3.0+2.0*s) * t2*(-3.0+2.0*t);
+    H_s[2*NDEG+0] = 6.0*sm1*s * t2*(-3.0+2.0*t);
+    H_t[2*NDEG+0] = 6.0*s2*(-3.0+2.0*s) * tm1*t;
+    H  [2*NDEG+1] = 3.0*sm1*s2 * t2*(-3.0+2.0*t);
+    H_s[2*NDEG+1] = 3.0*s*(-2.0+3.0*s) * t2*(-3.0+2.0*t);
+    H_t[2*NDEG+1] = 18.0*sm1*s2 * tm1*t;
+    H  [2*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * tm1*t2;
+    H_s[2*NDEG+2] = 18.0*sm1*s * tm1*t2;
+    H_t[2*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
+    H  [2*NDEG+3] = 9.0*sm1*s2 * tm1*t2;
+    H_s[2*NDEG+3] = 9.0*s*(-2.0+3.0*s) * tm1*t2;
+    H_t[2*NDEG+3] = 9.0*sm1*s2 * t*(-2.0+3.0*t);
     // vertex 4 (kv=3)
-    H  [0*NV+3] = -(sm12*(1.0+2.0*s) * t2*(-3.0+2.0*t));
-    H_s[0*NV+3] = -6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[0*NV+3] = -6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H  [1*NV+3] = -3.0*sm12*s * t2*(-3.0+2.0*t);
-    H_s[1*NV+3] = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
-    H_t[1*NV+3] = -18.0*sm12*s * tm1*t;
-    H  [2*NV+3] = -3.0*sm12*(1.0+2.0*s) * tm1*t2;
-    H_s[2*NV+3] = -18.0*sm1*s * tm1*t2;
-    H_t[2*NV+3] = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
-    H  [3*NV+3] = -9.0*sm12*s * tm1*t2;
-    H_s[3*NV+3] = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
-    H_t[3*NV+3] = -9.0*sm12*s * t*(-2.0+3.0*t);
+    H  [3*NDEG+0] = -(sm12*(1.0+2.0*s) * t2*(-3.0+2.0*t));
+    H_s[3*NDEG+0] = -6.0*sm1*s * t2*(-3.0+2.0*t);
+    H_t[3*NDEG+0] = -6.0*sm12*(1.0+2.0*s) * tm1*t;
+    H  [3*NDEG+1] = -3.0*sm12*s * t2*(-3.0+2.0*t);
+    H_s[3*NDEG+1] = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
+    H_t[3*NDEG+1] = -18.0*sm12*s * tm1*t;
+    H  [3*NDEG+2] = -3.0*sm12*(1.0+2.0*s) * tm1*t2;
+    H_s[3*NDEG+2] = -18.0*sm1*s * tm1*t2;
+    H_t[3*NDEG+2] = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
+    H  [3*NDEG+3] = -9.0*sm12*s * tm1*t2;
+    H_s[3*NDEG+3] = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
+    H_t[3*NDEG+3] = -9.0*sm12*s * t*(-2.0+3.0*t);
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +787,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  double time_now, double time_prev,
                  int flag_static, int flag_zero_dpsidt,
                  double F0, double t_norm,
-                 int i_elm_f, const double st[2], double phi,
+                 int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
                  double time,
                  double E[3], double B[3], double &psi, double &U)
 {
@@ -806,62 +807,74 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 
     double xR[NDEG * NV], xZ[NDEG * NV];
 
+    // Preload values and multiply with sizes(:, kv)
+    double R = 0.0, R_s = 0.0, R_t = 0.0;
+    double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
     for (int kv = 0; kv < NV; ++kv) {
         int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
             double sz = el_size[idx3(ie, kv, kf, n_elements, NV)];
-            for (int ivar = 0; ivar < 2; ++ivar) {
+            int ifv = idx2(kf, kv, NDEG);
+            double h  = HT [ifv];
+            double hs = HT_s[ifv];
+            double ht = HT_t[ifv];
+
+            // Running without deltas
+            // Afterwards, same computation, but considering deltas (for differentials)
+            for (int ivar = 0; ivar < 2; ++ivar) {      
                 double v = 0.0, vp = 0.0;
                 for (int it = 0; it < N_TOR; ++it) {
                     double val = nl_values[idx4(it, kf, ivar, iv, N_TOR, NDEG, n_var)] * sz;
-                    v  += val * HZ[it];
-                    vp += val * dHZ[it];
+                    v  += val * HZ[it];         // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
+                    vp += val * dHZ[it];        // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                 }
-                double h  = HT [kf * NV + kv];
-                double hs = HT_s[kf * NV + kv];
-                double ht = HT_t[kf * NV + kv];
                 P[ivar]     += v  * h;
                 P_s[ivar]   += v  * hs;
                 P_t[ivar]   += v  * ht;
                 P_phi[ivar] += vp * h;
             }
-            xR[kf * NV + kv] = nl_x[idx4(0, kf, 0, iv, N_COORD_TOR, NDEG, NDIM)] * sz;
-            xZ[kf * NV + kv] = nl_x[idx4(0, kf, 1, iv, N_COORD_TOR, NDEG, NDIM)] * sz;
+
+            xR[idx2(kf, kv, NDEG)] = nl_x[idx4(0, kf, 0, iv, N_COORD_TOR, NDEG, NDIM)] * sz;
+            xZ[idx2(kf, kv, NDEG)] = nl_x[idx4(0, kf, 1, iv, N_COORD_TOR, NDEG, NDIM)] * sz;
+            R   += xR[ifv] * HT[ifv];
+            R_s += xR[ifv] * HT_s[ifv];
+            R_t += xR[ifv] * HT_t[ifv];
+            Zc  += xZ[ifv] * HT[ifv];
+            Z_s += xZ[ifv] * HT_s[ifv];
+            Z_t += xZ[ifv] * HT_t[ifv];
         }
     }
 
-    double R = 0.0, R_s = 0.0, R_t = 0.0;
-    double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
-    for (int i = 0; i < NDEG * NV; ++i) {
-        R   += xR[i] * HT[i];
-        R_s += xR[i] * HT_s[i];
-        R_t += xR[i] * HT_t[i];
-        Zc  += xZ[i] * HT[i];
-        Z_s += xZ[i] * HT_s[i];
-        Z_t += xZ[i] * HT_t[i];
-    }
-
     // Interpolation of differentials (linear time interpolation)
+    // It's here that we consider deltas (for differentials)
+    // The computation is essentially the same
     if (t_norm > 0.0) {
+        // Why they are computed again???
+        basisfunctions_2D_1_T(st[0], st[1], HT, HT_s, HT_t);
+        sincosperiod_moivre(phi, HZ, dHZ);
+
         double Pd[2] = {0.0, 0.0};
         double Pd_s[2] = {0.0, 0.0};
         double Pd_t[2] = {0.0, 0.0};
         double Pd_phi[2] = {0.0, 0.0};
 
+        // Preload values and premultiply with sizes(:, kv)
         for (int kv = 0; kv < NV; ++kv) {
             int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
             for (int kf = 0; kf < NDEG; ++kf) {
                 double sz = el_size[idx3(ie, kv, kf, n_elements, NV)];
+                int ifv = idx2(kf, kv, NDEG);
+                double h  = HT [ifv];
+                double hs = HT_s[ifv];
+                double ht = HT_t[ifv];
+
                 for (int ivar = 0; ivar < 2; ++ivar) {
                     double v = 0.0, vp = 0.0;
                     for (int it = 0; it < N_TOR; ++it) {
                         double d = nl_deltas[idx4(it, kf, ivar, iv, N_TOR, NDEG, n_var)] * sz;
-                        v  += d * HZ[it];
-                        vp += d * dHZ[it];
+                        v  += d * HZ[it];       // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
+                        vp += d * dHZ[it];      // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                     }
-                    double h  = HT [kf * NV + kv];
-                    double hs = HT_s[kf * NV + kv];
-                    double ht = HT_t[kf * NV + kv];
                     Pd[ivar]     += v  * h;
                     Pd_s[ivar]   += v  * hs;
                     Pd_t[ivar]   += v  * ht;
@@ -870,10 +883,10 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             }
         }
 
-        double dt_inv;
+        double dt;
         if (fabs(time_now - time_prev) > 1.0e-10 && !flag_static) {
-            dt_inv = 1.0 / (time_now - time_prev);
-            double df = (time_now - time) * dt_inv;
+            dt = (time_now - time_prev);
+            double df = (time_now - time) / dt;
             for (int i = 0; i < 2; ++i) {
                 P[i]     -= Pd[i]     * df;
                 P_s[i]   -= Pd_s[i]   * df;
@@ -881,19 +894,18 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 P_phi[i] -= Pd_phi[i] * df;
             }
         } else {
-            dt_inv = 1.0 / t_norm;
+            dt = t_norm;
         }
-        P_time[0] = Pd[0] * dt_inv;
-        P_time[1] = Pd[1] * dt_inv;
+        P_time[0] = Pd[0] / dt;
+        P_time[1] = Pd[1] / dt;
     }
 
-    double R_inv      = 1.0 / R;
-    double inv_st_jac = 1.0 / (R_s * Z_t - R_t * Z_s);
+    double st_jac = (R_s * Z_t - R_t * Z_s);
 
-    double psi_R = ( P_s[0] * Z_t - P_t[0] * Z_s) * inv_st_jac;
-    double psi_Z = (-P_s[0] * R_t + P_t[0] * R_s) * inv_st_jac;
-    double U_R   = ( P_s[1] * Z_t - P_t[1] * Z_s) * inv_st_jac;
-    double U_Z   = (-P_s[1] * R_t + P_t[1] * R_s) * inv_st_jac;
+    double psi_R = ( P_s[0] * Z_t - P_t[0] * Z_s) / st_jac;
+    double psi_Z = (-P_s[0] * R_t + P_t[0] * R_s) / st_jac;
+    double U_R   = ( P_s[1] * Z_t - P_t[1] * Z_s) / st_jac;
+    double U_Z   = (-P_s[1] * R_t + P_t[1] * R_s) / st_jac;
     double U_phi = P_phi[1];
 
     psi = P[0];
@@ -902,15 +914,15 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     if (flag_zero_dpsidt) P_time[0] = 0.0;
 
     // Magnetic field (cylindrical)
-    B[0] =  psi_Z * R_inv;
-    B[1] = -psi_R * R_inv;
-    B[2] =  F0    * R_inv;
+    B[0] =  psi_Z / R;
+    B[1] = -psi_R / R;
+    B[2] =  F0    / R;
 
     // Electric field (cylindrical)
-    E[0] = -F0 * U_R          / t_norm;
-    E[1] = -F0 * U_Z          / t_norm;
-    E[2] = -F0 * U_phi * R_inv / t_norm;
-    E[2] -= R_inv * P_time[0];
+    E[0] = -F0 * U_R    / t_norm;
+    E[1] = -F0 * U_Z    / t_norm;
+    E[2] = -F0 * U_phi  / (R * t_norm);
+    E[2] -= P_time[0]   / R;
 
     // Projection: E = E - E * B / |B| (element-wise, matching Fortran)
     double Bnorm = sqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
@@ -1095,7 +1107,7 @@ void evolve_REs_kernel(
     // Coupling indices (0-based for C)
     int P_par_idx, int P_perp_idx, int j_phi_idx,
     // Feedback RHS (atomically updated)
-    double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, N_FB_VARS) = Fortran layout
+    double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, n_var) = Fortran layout
     // mode_coord for interp_RZP_1_gpu
     const int* __restrict__ mode_coord)
 {
@@ -1152,10 +1164,10 @@ void evolve_REs_kernel(
         double B_hat[3] = {B_loc[0]/Bnorm, B_loc[1]/Bnorm, B_loc[2]/Bnorm};
 
         double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
-        double diff0 = cyl_vel[0] - v_par*B_hat[0];
-        double diff1 = cyl_vel[1] - v_par*B_hat[1];
-        double diff2 = cyl_vel[2] - v_par*B_hat[2];
-        double v_perp = sqrt(diff0*diff0 + diff1*diff1 + diff2*diff2);
+        double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
+                                 cyl_vel[1] - v_par*B_hat[1],
+                                 cyl_vel[2] - v_par*B_hat[2]};
+        double v_perp = sqrt(v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2]);
 
         double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
                             + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
@@ -1163,11 +1175,11 @@ void evolve_REs_kernel(
 
         double v_Ppar  = gamma_m * v_par * v_par * MU_ZERO;
         double v_Pperp = gamma_m * v_perp * v_perp * 0.5 * MU_ZERO;
-        double v_jPhi  = -charge * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
+        double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
 
         // Accumulate to feedback_rhs with atomicAdd.
         // Layout (column-major, same order as Fortran feedback_rhs):
-        //   (NDEG, NV, n_elements, N_TOR, N_FB_VARS)
+        //   (NDEG, NV, n_elements, N_TOR, n_var)
         //   index = n + NDEG*(m + NV*(ie + n_elements*(it + N_TOR*var)))  (all 0-based)
         int ie = i_elm - 1;
         const int stride_var = NDEG * NV * n_elements * N_TOR;
@@ -1184,12 +1196,20 @@ void evolve_REs_kernel(
                                    * w;
                 for (int it = 0; it < N_TOR; ++it) {
                     double hz = HZ_proj[it];
-                    int base = n + NDEG * (m + NV * (ie + n_elements * it));
-                    atomicAdd(&feedback_rhs[base + stride_var * P_par_idx],
+
+                    // feedback dims:   NDEG, NV, n_elements, N_TOR, n_var
+                    // int base = n + NDEG * (m + NV * (ie + n_elements * it));
+                    // atomicAdd(&feedback_rhs[base + stride_var * P_par_idx],
+                    //           hz * v_Ppar * proj_factor);
+                    // atomicAdd(&feedback_rhs[base + stride_var * P_perp_idx],
+                    //           hz * v_Pperp * proj_factor);
+                    // atomicAdd(&feedback_rhs[base + stride_var * j_phi_idx],
+                    //           hz * v_jPhi * proj_factor);
+                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_par_idx, NDEG, NV, n_elements, N_TOR)],
                               hz * v_Ppar * proj_factor);
-                    atomicAdd(&feedback_rhs[base + stride_var * P_perp_idx],
+                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_perp_idx, NDEG, NV, n_elements, N_TOR)],
                               hz * v_Pperp * proj_factor);
-                    atomicAdd(&feedback_rhs[base + stride_var * j_phi_idx],
+                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, j_phi_idx, NDEG, NV, n_elements, N_TOR)],
                               hz * v_jPhi * proj_factor);
                 }
             }
@@ -1288,7 +1308,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_el_neigh  = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_size   = (size_t)n_elements * NV   * NDEG * sizeof(double);
 
-    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * N_FB_VARS * sizeof(double);
+    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * n_var * sizeof(double);
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
 
     // --- Allocate device memory ---
