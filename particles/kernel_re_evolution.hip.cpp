@@ -158,10 +158,12 @@ struct particle_sim {
 //                            DEVICE HELPER FUNCTIONS
 // ===========================================================================================
 
+// TODO: in basisfunctions_2D_0 and basisfunctions_2D_1, we are assuming N_ORDER = 3
+// Implement also for N_ORDER = 5 ??
+
 // ---------------------------------------------------------------------------
-// 2D cubic basis functions – non-transposed: H[kv][kf]  (vertex x degree)
-// kv in [0,3], kf in [0, NDEG-1]
-// Stored flat as H[kv * NDEG + kf]
+// 2D cubic basis functions – H indexed as idx2(kf, kv, NDEG) = kf + NDEG * kv
+// kv in [0, NV-1], kf in [0, NDEG-1]  (kf is the fast-varying dimension)
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
 void basisfunctions_2D_0(double s, double t,
@@ -175,33 +177,32 @@ void basisfunctions_2D_0(double s, double t,
     double t2   = t * t;
 
     // vertex 1 (kv=0)
-    H[0 * NDEG + 0] = sm12 * (1.0 + 2.0*s) * tm12 * (1.0 + 2.0*t);
-    H[0 * NDEG + 1] = 3.0 * sm12 * s * tm12 * (1.0 + 2.0*t);
-    H[0 * NDEG + 2] = 3.0 * sm12 * (1.0 + 2.0*s) * tm12 * t;
-    H[0 * NDEG + 3] = 9.0 * sm12 * s * tm12 * t;
+    H[idx2(0, 0, NDEG)] = sm12 * (1.0 + 2.0*s) * tm12 * (1.0 + 2.0*t);
+    H[idx2(1, 0, NDEG)] = 3.0 * sm12 * s * tm12 * (1.0 + 2.0*t);
+    H[idx2(2, 0, NDEG)] = 3.0 * sm12 * (1.0 + 2.0*s) * tm12 * t;
+    H[idx2(3, 0, NDEG)] = 9.0 * sm12 * s * tm12 * t;
     // vertex 2 (kv=1)
-    H[1 * NDEG + 0] = -(s2 * (-3.0 + 2.0*s) * tm12 * (1.0 + 2.0*t));
-    H[1 * NDEG + 1] = -3.0 * sm1 * s2 * tm12 * (1.0 + 2.0*t);
-    H[1 * NDEG + 2] = -3.0 * s2 * (-3.0 + 2.0*s) * tm12 * t;
-    H[1 * NDEG + 3] = -9.0 * sm1 * s2 * tm12 * t;
+    H[idx2(0, 1, NDEG)] = -(s2 * (-3.0 + 2.0*s) * tm12 * (1.0 + 2.0*t));
+    H[idx2(1, 1, NDEG)] = -3.0 * sm1 * s2 * tm12 * (1.0 + 2.0*t);
+    H[idx2(2, 1, NDEG)] = -3.0 * s2 * (-3.0 + 2.0*s) * tm12 * t;
+    H[idx2(3, 1, NDEG)] = -9.0 * sm1 * s2 * tm12 * t;
     // vertex 3 (kv=2)
-    H[2 * NDEG + 0] = s2 * (-3.0 + 2.0*s) * t2 * (-3.0 + 2.0*t);
-    H[2 * NDEG + 1] = 3.0 * sm1 * s2 * t2 * (-3.0 + 2.0*t);
-    H[2 * NDEG + 2] = 3.0 * s2 * (-3.0 + 2.0*s) * tm1 * t2;
-    H[2 * NDEG + 3] = 9.0 * sm1 * s2 * tm1 * t2;
+    H[idx2(0, 2, NDEG)] = s2 * (-3.0 + 2.0*s) * t2 * (-3.0 + 2.0*t);
+    H[idx2(1, 2, NDEG)] = 3.0 * sm1 * s2 * t2 * (-3.0 + 2.0*t);
+    H[idx2(2, 2, NDEG)] = 3.0 * s2 * (-3.0 + 2.0*s) * tm1 * t2;
+    H[idx2(3, 2, NDEG)] = 9.0 * sm1 * s2 * tm1 * t2;
     // vertex 4 (kv=3)
-    H[3 * NDEG + 0] = -(sm12 * (1.0 + 2.0*s) * t2 * (-3.0 + 2.0*t));
-    H[3 * NDEG + 1] = -3.0 * sm12 * s * t2 * (-3.0 + 2.0*t);
-    H[3 * NDEG + 2] = -3.0 * sm12 * (1.0 + 2.0*s) * tm1 * t2;
-    H[3 * NDEG + 3] = -9.0 * sm12 * s * tm1 * t2;
+    H[idx2(0, 3, NDEG)] = -(sm12 * (1.0 + 2.0*s) * t2 * (-3.0 + 2.0*t));
+    H[idx2(1, 3, NDEG)] = -3.0 * sm12 * s * t2 * (-3.0 + 2.0*t);
+    H[idx2(2, 3, NDEG)] = -3.0 * sm12 * (1.0 + 2.0*s) * tm1 * t2;
+    H[idx2(3, 3, NDEG)] = -9.0 * sm12 * s * tm1 * t2;
 }
 
-// TODO: in all basisfunctions routines, we are assuming N_ORDER = 3
-// Implement also for N_ORDER = 5 ??
-
 // ---------------------------------------------------------------------------
-// 2D cubic basis functions with first derivatives – non-transposed: [kv][kf]
-// Used by interp_RZP_1_gpu and for the projection in the main kernel
+// 2D cubic basis functions with first derivatives.
+// H, H_s, H_t all indexed as idx2(kf, kv, NDEG) = kf + NDEG * kv
+// (kf is the fast-varying dimension, matching basisfunctions_2D_0).
+// Used by interp_RZP_1_gpu and calc_EBpsiU.
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
 void basisfunctions_2D_1(double s, double t,
@@ -219,113 +220,41 @@ void basisfunctions_2D_1(double s, double t,
     double t2   = t * t;
 
     // vertex 1
-    H_s[0*NDEG+0] = 6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[0*NDEG+0] = 6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H_s[0*NDEG+1] = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[0*NDEG+1] = 18.0*sm12*s * tm1*t;
-    H_s[0*NDEG+2] = 18.0*sm1*s * tm12*t;
-    H_t[0*NDEG+2] = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
-    H_s[0*NDEG+3] = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
-    H_t[0*NDEG+3] = 9.0*sm12*s * tm1*(-1.0+3.0*t);
+    H_s[idx2(0, 0, NDEG)] = 6.0*sm1*s * tm12*(1.0+2.0*t);
+    H_t[idx2(0, 0, NDEG)] = 6.0*sm12*(1.0+2.0*s) * tm1*t;
+    H_s[idx2(1, 0, NDEG)] = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
+    H_t[idx2(1, 0, NDEG)] = 18.0*sm12*s * tm1*t;
+    H_s[idx2(2, 0, NDEG)] = 18.0*sm1*s * tm12*t;
+    H_t[idx2(2, 0, NDEG)] = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
+    H_s[idx2(3, 0, NDEG)] = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
+    H_t[idx2(3, 0, NDEG)] = 9.0*sm12*s * tm1*(-1.0+3.0*t);
     // vertex 2
-    H_s[1*NDEG+0] = -6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[1*NDEG+0] = -6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H_s[1*NDEG+1] = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[1*NDEG+1] = -18.0*sm1*s2 * tm1*t;
-    H_s[1*NDEG+2] = -18.0*sm1*s * tm12*t;
-    H_t[1*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
-    H_s[1*NDEG+3] = -9.0*s*(-2.0+3.0*s) * tm12*t;
-    H_t[1*NDEG+3] = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
+    H_s[idx2(0, 1, NDEG)] = -6.0*sm1*s * tm12*(1.0+2.0*t);
+    H_t[idx2(0, 1, NDEG)] = -6.0*s2*(-3.0+2.0*s) * tm1*t;
+    H_s[idx2(1, 1, NDEG)] = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
+    H_t[idx2(1, 1, NDEG)] = -18.0*sm1*s2 * tm1*t;
+    H_s[idx2(2, 1, NDEG)] = -18.0*sm1*s * tm12*t;
+    H_t[idx2(2, 1, NDEG)] = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
+    H_s[idx2(3, 1, NDEG)] = -9.0*s*(-2.0+3.0*s) * tm12*t;
+    H_t[idx2(3, 1, NDEG)] = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
     // vertex 3
-    H_s[2*NDEG+0] = 6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[2*NDEG+0] = 6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H_s[2*NDEG+1] = 3.0*s*(-2.0+3.0*s) * t2*(-3.0+2.0*t);
-    H_t[2*NDEG+1] = 18.0*sm1*s2 * tm1*t;
-    H_s[2*NDEG+2] = 18.0*sm1*s * tm1*t2;
-    H_t[2*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
-    H_s[2*NDEG+3] = 9.0*s*(-2.0+3.0*s) * tm1*t2;
-    H_t[2*NDEG+3] = 9.0*sm1*s2 * t*(-2.0+3.0*t);
+    H_s[idx2(0, 2, NDEG)] = 6.0*sm1*s * t2*(-3.0+2.0*t);
+    H_t[idx2(0, 2, NDEG)] = 6.0*s2*(-3.0+2.0*s) * tm1*t;
+    H_s[idx2(1, 2, NDEG)] = 3.0*s*(-2.0+3.0*s) * t2*(-3.0+2.0*t);
+    H_t[idx2(1, 2, NDEG)] = 18.0*sm1*s2 * tm1*t;
+    H_s[idx2(2, 2, NDEG)] = 18.0*sm1*s * tm1*t2;
+    H_t[idx2(2, 2, NDEG)] = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
+    H_s[idx2(3, 2, NDEG)] = 9.0*s*(-2.0+3.0*s) * tm1*t2;
+    H_t[idx2(3, 2, NDEG)] = 9.0*sm1*s2 * t*(-2.0+3.0*t);
     // vertex 4
-    H_s[3*NDEG+0] = -6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[3*NDEG+0] = -6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H_s[3*NDEG+1] = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
-    H_t[3*NDEG+1] = -18.0*sm12*s * tm1*t;
-    H_s[3*NDEG+2] = -18.0*sm1*s * tm1*t2;
-    H_t[3*NDEG+2] = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
-    H_s[3*NDEG+3] = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
-    H_t[3*NDEG+3] = -9.0*sm12*s * t*(-2.0+3.0*t);
-}
-
-// ---------------------------------------------------------------------------
-// 2D cubic basis functions with first derivatives – same layout as basisfunctions_2D_1
-// H[kv][kf]  (vertex x degree), Fortran column-major order
-// Stored flat as H[kv * NDEG + kf]
-// ---------------------------------------------------------------------------
-__device__ __forceinline__
-void basisfunctions_2D_1_T(double s, double t,
-                           double* __restrict__ H,
-                           double* __restrict__ H_s,
-                           double* __restrict__ H_t)
-{
-    double sm1  = s - 1.0;
-    double tm1  = t - 1.0;
-    double sm12 = sm1 * sm1;
-    double s2   = s * s;
-    double tm12 = tm1 * tm1;
-    double t2   = t * t;
-
-    // vertex 1 (kv=0)
-    H  [0*NDEG+0] = sm12*(1.0+2.0*s) * tm12*(1.0+2.0*t);
-    H_s[0*NDEG+0] = 6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[0*NDEG+0] = 6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H  [0*NDEG+1] = 3.0*sm12*s * tm12*(1.0+2.0*t);
-    H_s[0*NDEG+1] = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[0*NDEG+1] = 18.0*sm12*s * tm1*t;
-    H  [0*NDEG+2] = 3.0*sm12*(1.0+2.0*s) * tm12*t;
-    H_s[0*NDEG+2] = 18.0*sm1*s * tm12*t;
-    H_t[0*NDEG+2] = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
-    H  [0*NDEG+3] = 9.0*sm12*s * tm12*t;
-    H_s[0*NDEG+3] = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
-    H_t[0*NDEG+3] = 9.0*sm12*s * tm1*(-1.0+3.0*t);
-    // vertex 2 (kv=1)
-    H  [1*NDEG+0] = -(s2*(-3.0+2.0*s) * tm12*(1.0+2.0*t));
-    H_s[1*NDEG+0] = -6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[1*NDEG+0] = -6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H  [1*NDEG+1] = -3.0*sm1*s2 * tm12*(1.0+2.0*t);
-    H_s[1*NDEG+1] = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[1*NDEG+1] = -18.0*sm1*s2 * tm1*t;
-    H  [1*NDEG+2] = -3.0*s2*(-3.0+2.0*s) * tm12*t;
-    H_s[1*NDEG+2] = -18.0*sm1*s * tm12*t;
-    H_t[1*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
-    H  [1*NDEG+3] = -9.0*sm1*s2 * tm12*t;
-    H_s[1*NDEG+3] = -9.0*s*(-2.0+3.0*s) * tm12*t;
-    H_t[1*NDEG+3] = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
-    // vertex 3 (kv=2)
-    H  [2*NDEG+0] = s2*(-3.0+2.0*s) * t2*(-3.0+2.0*t);
-    H_s[2*NDEG+0] = 6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[2*NDEG+0] = 6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H  [2*NDEG+1] = 3.0*sm1*s2 * t2*(-3.0+2.0*t);
-    H_s[2*NDEG+1] = 3.0*s*(-2.0+3.0*s) * t2*(-3.0+2.0*t);
-    H_t[2*NDEG+1] = 18.0*sm1*s2 * tm1*t;
-    H  [2*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * tm1*t2;
-    H_s[2*NDEG+2] = 18.0*sm1*s * tm1*t2;
-    H_t[2*NDEG+2] = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
-    H  [2*NDEG+3] = 9.0*sm1*s2 * tm1*t2;
-    H_s[2*NDEG+3] = 9.0*s*(-2.0+3.0*s) * tm1*t2;
-    H_t[2*NDEG+3] = 9.0*sm1*s2 * t*(-2.0+3.0*t);
-    // vertex 4 (kv=3)
-    H  [3*NDEG+0] = -(sm12*(1.0+2.0*s) * t2*(-3.0+2.0*t));
-    H_s[3*NDEG+0] = -6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[3*NDEG+0] = -6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H  [3*NDEG+1] = -3.0*sm12*s * t2*(-3.0+2.0*t);
-    H_s[3*NDEG+1] = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
-    H_t[3*NDEG+1] = -18.0*sm12*s * tm1*t;
-    H  [3*NDEG+2] = -3.0*sm12*(1.0+2.0*s) * tm1*t2;
-    H_s[3*NDEG+2] = -18.0*sm1*s * tm1*t2;
-    H_t[3*NDEG+2] = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
-    H  [3*NDEG+3] = -9.0*sm12*s * tm1*t2;
-    H_s[3*NDEG+3] = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
-    H_t[3*NDEG+3] = -9.0*sm12*s * t*(-2.0+3.0*t);
+    H_s[idx2(0, 3, NDEG)] = -6.0*sm1*s * t2*(-3.0+2.0*t);
+    H_t[idx2(0, 3, NDEG)] = -6.0*sm12*(1.0+2.0*s) * tm1*t;
+    H_s[idx2(1, 3, NDEG)] = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
+    H_t[idx2(1, 3, NDEG)] = -18.0*sm12*s * tm1*t;
+    H_s[idx2(2, 3, NDEG)] = -18.0*sm1*s * tm1*t2;
+    H_t[idx2(2, 3, NDEG)] = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
+    H_s[idx2(3, 3, NDEG)] = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
+    H_t[idx2(3, 3, NDEG)] = -9.0*sm12*s * t*(-2.0+3.0*t);
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +336,47 @@ void vector_cylindrical_to_cartesian(double phi, const double* __restrict__ a, d
 }
 
 // ---------------------------------------------------------------------------
+// Cayley transform rotation: rotates momentum `pm` in-place using magnetic
+// field `B_cart` and time-step `scaling`. Implemented as a __device__ helper
+// so the volume_preserving_push kernel code stays concise.
+// ---------------------------------------------------------------------------
+__device__ __forceinline__
+void cayley_transform_rotate(double pm[3], const double B_cart[3], double scaling)
+{
+    double pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
+    double alpha = SPEED_OF_LIGHT * scaling / sqrt(1.0 + pdot);
+
+    // alpha * B
+    double ab0 = alpha * B_cart[0];
+    double ab1 = alpha * B_cart[1];
+    double ab2 = alpha * B_cart[2];
+    // Denominator (1 + |alpha * B|^2)
+    double ab_dot = ab0*ab0 + ab1*ab1 + ab2*ab2;
+    double denom = (1.0 + ab_dot);
+
+    // Apply (I + alpha [B×]) to p
+    // this is equivalent to computing B * p in the Fortran version,
+    // where B = I + alpha * skew(B)
+    double Bp0 =  pm[0] - ab2*pm[1] + ab1*pm[2];
+    double Bp1 =  ab2*pm[0] + pm[1] - ab0*pm[2];
+    double Bp2 = -ab1*pm[0] + ab0*pm[1] + pm[2];
+
+    // Apply A = (I - alpha [B×])^{-1} to the result above
+    // instead of building the matrix A and doing matmul,
+    // the multiplication A*(B_plus*p) is expanded component-wise
+    // this is algebraically identical to the Fortran:
+    //      cayley_transform_mat_tmp = cayley_transform(alpha,B)
+    //      p = matmul(cayley_transform_mat_tmp,p)
+    double p_new0 = ((1.0 + ab0*ab0)*Bp0 + (ab0*ab1 - ab2)*Bp1 + (ab2*ab0 + ab1)*Bp2) / denom;
+    double p_new1 = ((ab1*ab0 + ab2)*Bp0 + (1.0 + ab1*ab1)*Bp1 + (ab2*ab1 - ab0)*Bp2) / denom;
+    double p_new2 = ((ab2*ab0 - ab1)*Bp0 + (ab1*ab2 + ab0)*Bp1 + (1.0 + ab2*ab2)*Bp2) / denom;
+
+    pm[0] = p_new0;
+    pm[1] = p_new1;
+    pm[2] = p_new2;
+}
+
+// ---------------------------------------------------------------------------
 // interp_RZP_1_gpu: interpolate R, Z and first derivatives from the SoA
 // grid data at element i_elm_f (1-based!), local coordinates (s,t,phi).
 // ---------------------------------------------------------------------------
@@ -428,7 +398,6 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
     double HZ_coord[N_COORD_TOR], HZ_coord_p[N_COORD_TOR];
     HZ_coord[0]   = 1.0;
     HZ_coord_p[0] = 0.0;
-#if N_COORD_TOR > 1
     for (int it = 1; it <= (N_COORD_TOR - 1) / 2; ++it) {
         int mc_cos = mode_coord[2*it - 1];
         int mc_sin = mode_coord[2*it];
@@ -437,30 +406,31 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
         HZ_coord  [2*it]     = -sin(double(mc_sin) * phi);
         HZ_coord_p[2*it]     = -double(mc_sin) * cos(double(mc_sin) * phi);
     }
-#endif
 
     R = 0.0; R_s = 0.0; R_t = 0.0; R_p = 0.0;
     Z = 0.0; Z_s = 0.0; Z_t = 0.0; Z_p = 0.0;
-
-    int ie = i_elm_f - 1;
+    int ie = i_elm_f - 1;       // Element idx, 0-based
 
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
+        int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;       // Node number, 0-based
         for (int kf = 0; kf < NDEG; ++kf) {
             double ss = el_size[idx3(ie, kv, kf, n_elements, NV)];
-            double g   = G  [kv * NDEG + kf];
-            double gs  = G_s[kv * NDEG + kf];
-            double gt  = G_t[kv * NDEG + kf];
+            double g   = G  [idx2(kf, kv, NDEG)];
+            double gs  = G_s[idx2(kf, kv, NDEG)];
+            double gt  = G_t[idx2(kf, kv, NDEG)];
+
             for (int it = 0; it < N_COORD_TOR; ++it) {
                 // nl_x layout: (N_COORD_TOR, NDEG, NDIM, n_nodes)
                 double xx1 = nl_x[idx4(it, kf, 0, iv, N_COORD_TOR, NDEG, NDIM)];
                 double xx2 = nl_x[idx4(it, kf, 1, iv, N_COORD_TOR, NDEG, NDIM)];
                 double hz  = HZ_coord[it];
                 double dhz = HZ_coord_p[it];
+
                 R   += xx1 * ss * g  * hz;
                 R_s += xx1 * ss * gs * hz;
                 R_t += xx1 * ss * gt * hz;
                 R_p += xx1 * ss * g  * dhz;
+
                 Z   += xx2 * ss * g  * hz;
                 Z_s += xx2 * ss * gs * hz;
                 Z_t += xx2 * ss * gt * hz;
@@ -490,26 +460,31 @@ void try_interp_gpu(const double* __restrict__ nl_x,
                      x[0], R_s, R_t, R_p, x[1], Z_s, Z_t, Z_p);
     double jac = R_s * Z_t - R_t * Z_s;
     if (fabs(jac) < 1.0e-8)
-        inv_jac = copysign(1.0e8, jac);
+        inv_jac = jac>0 ? 1.0e8 : -1.0e8;
     else
         inv_jac = 1.0 / jac;
 }
 
 // ---------------------------------------------------------------------------
 // neighbours_side_co_counter_gpu
+// Find if two elements (elm1, elm2 which is on side1 of elm1) have the same
+// orientation. Element node numbering must always be consecutive when going
+// co or counter-clockwise around the element.
 // ---------------------------------------------------------------------------
 __device__
 void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
                                     const int* __restrict__ el_neighbours,
                                     int n_elements,
                                     int elm1, int elm2, int side1,
-                                    int &side2, bool &is_nb, bool &co)
+                                    int &side2, bool &is_nb, bool &co)      // elm1, elm2, side1, side2 are 1-based
 {
     co    = false;
     is_nb = false;
     side2 = 0;
+    int ie1 = elm1 - 1, ie2 = elm2 - 1;
 
-    int ie2 = elm2 - 1;
+    // Find the side in elm2 pointing to elm1
+    // If elm2 has no neighbour -> elm1 use the last one that is 0 (i.e. the one on the axis itself)
     for (int i = 0; i < NV; ++i) {
         if (el_neighbours[idx2(ie2, i, n_elements)] == elm1) {
             side2 = i + 1;
@@ -518,10 +493,12 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
     }
     if (side2 > 0) {
         is_nb = true;
-        int n1a = el_vertex[idx2(elm1 - 1, (side1 - 1) % 4, n_elements)];
-        int n1b = el_vertex[idx2(elm1 - 1,  side1      % 4, n_elements)];
-        int n2a = el_vertex[idx2(elm2 - 1, (side2 - 1) % 4, n_elements)];
-        int n2b = el_vertex[idx2(elm2 - 1,  side2      % 4, n_elements)];
+        // Determine node numbers of the sides
+        // Node numbers are related to sides as node1=(side-1)%4+1, node2=side%4+1
+        int n1a = el_vertex[idx2(ie1, (side1 - 1) % 4, n_elements)];
+        int n1b = el_vertex[idx2(ie1,  side1      % 4, n_elements)];
+        int n2a = el_vertex[idx2(ie2, (side2 - 1) % 4, n_elements)];
+        int n2b = el_vertex[idx2(ie2,  side2      % 4, n_elements)];
         co = (n1a == n2b) || (n1b == n2a);
     }
 }
@@ -534,8 +511,9 @@ __device__
 void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
                             const int* __restrict__ el_neighbours,
                             int n_elements,
-                            int i_from, int &i_to, double st[2])
+                            int i_from, int &i_to, double st[2])        // i_from, i_to are 1-based
 {
+    // q for "Quadrant"
     int q_from;
     if (st[0] > st[1]) {
         q_from = (1.0 - st[0] > st[1]) ? 1 : 2;
@@ -546,11 +524,13 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
     i_to = el_neighbours[idx2(i_from - 1, q_from - 1, n_elements)];
     if (i_to <= 0) return;
 
+    // Check once more that they are neighbours and determine the orientation
     int q_to; bool nb, co;
     neighbours_side_co_counter_gpu(el_vertex, el_neighbours, n_elements,
                                    i_from, i_to, q_from, q_to, nb, co);
     if (!nb || q_to == 0) { i_to = 0; return; }
 
+    // x is the coordinate along the boundary from vertex i_side to i_side+1
     double x;
     switch (q_from) {
         case 1: x = st[0];       break;
@@ -558,7 +538,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
         case 3: x = 1.0 - st[0]; break;
         default:x = 1.0 - st[1]; break;
     }
-    if (co) x = 1.0 - x;
+    if (co) x = 1.0 - x;        // if the vectors along the boundary are antiparallel
 
     switch (q_to) {
         case 1: st[0] = x;       st[1] = 0.0;       break;
@@ -581,7 +561,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
                          int i_elm_f,
                          double R_find, double Z_find,
                          double &R_out, double &Z_out,
-                         int &ielm_out, double &s_out, double &t_out,
+                         int &ielm_out, double &s_out, double &t_out,           // both i_elm_f, ielm_out are 1-based
                          int &ifail)
 {
     constexpr int ntrial = 20;
@@ -615,14 +595,11 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
             }
 
             double p[2] = {-fvec[0], -fvec[1]};
-            double dis = Z_t * R_s - R_t * Z_s;
-            if (dis != 0.0) {
-                double tmp = p[0];
-                p[0] = ( Z_t * tmp - R_t * p[1]) / dis;
-                p[1] = ( R_s * p[1] - Z_s * tmp) / dis;
-            } else {
-                break;
-            }
+            double dis = Z_t * R_s - R_t * Z_s;     // determinant of the jacobian
+            if (dis == 0.0) break;        // Jacobian is singular, cannot continue
+            double tmp = p[0];
+            p[0] = ( Z_t * p[0] - R_t * p[1]) / dis;
+            p[1] = ( R_s * p[1] - Z_s * tmp) / dis;
 
             double errx = fabs(p[0]) + fabs(p[1]);
             p[0] = fmin(p[0],  0.25); p[0] = fmax(p[0], -0.25);
@@ -655,7 +632,7 @@ void find_RZ_gpu(const double* __restrict__ nl_x,
                  const int*    __restrict__ mode_coord,
                  double R_find, double Z_find,
                  double &R_out, double &Z_out,
-                 int &ielm_out, double &s_out, double &t_out,
+                 int &ielm_out, double &s_out, double &t_out,       // i_elm_out is 1-based
                  int &ifail)
 {
     ielm_out = 0;
@@ -685,22 +662,26 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
                         double s_old, double t_old, int i_elm_old,
                         double R_new, double Z_new,
                         double &s_new, double &t_new, int &i_elm_new,
-                        int &ifail, double phi)
+                        int &ifail)
 {
-    constexpr double element_tolerance = 1.0e-24;
-    constexpr int    newton_iter_max   = 200;
+    // Accuracy defaults
+    // Note: tolerances are squared!, units of element size
+    constexpr double element_tolerance = 1.0e-24;   // tolerance for finding a position inside an element
+    constexpr int    newton_iter_max   = 200;       // Number of iterations to try
 
+    // Check if element is valied
     if (i_elm_old < 1 || i_elm_old > n_elements) {
         i_elm_new = 0;
         return;
     }
+    double p_loc = 0.0;  // phi coordinate is not used in the interpolation, so set to arbitrary value
 
-    double p_loc = phi;
     double x_step[2] = {R_old, Z_old};
     i_elm_new = i_elm_old;
     double st[2] = {s_old, t_old};
     double x_target[2] = {R_new, Z_new};
 
+    // Find the jacobian at the current s and t position
     double R_s, R_t, Z_s, Z_t, inv_jac;
     try_interp_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
                    i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac);
@@ -709,17 +690,23 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
     double dx1 = x_step[1] - x_target[1];
     double err2 = dx0*dx0 + dx1*dx1;
     ifail = 0;
+    int iter;
 
-    for (int iter = 1; iter <= newton_iter_max; ++iter) {
+    // Newton iteration to find s and t in or out of this element
+    for (iter = 1; iter <= newton_iter_max; ++iter) {
+        // Compute trial newton step
         double st_step0 = ( Z_t * (x_target[0] - x_step[0]) - R_t * (x_target[1] - x_step[1])) * inv_jac;
         double st_step1 = (-Z_s * (x_target[0] - x_step[0]) + R_s * (x_target[1] - x_step[1])) * inv_jac;
 
+        // Limit this tep if it goes outside of the element
         double dist0 = (st_step0 > 0.0) ? (1.0 - st[0]) : st[0];
         double dist1 = (st_step1 > 0.0) ? (1.0 - st[1]) : st[1];
         double fact0  = fabs(st_step0) / fmax(dist0, 1.0e-30);
         double fact1  = fabs(st_step1) / fmax(dist1, 1.0e-30);
         double fact   = fmax(fact0, fact1);
 
+        // if fact >= 1, we are on the boundary
+        // That is it is the overshoot: i.e. how many times we overshoot boudnary with one st_step
         if (fact >= 1.0 - 1.0e-12) {
             st[0] += st_step0 / fact;
             st[1] += st_step1 / fact;
@@ -734,8 +721,9 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
                             i_elm_new, s_new, t_new, ifail);
                 return;
             }
-            if (i_elm_new == 0) {
-                i_elm_new = -i_elm_tmp;
+            if (i_elm_new == 0) {       // No element on that side, particle is lost
+                i_elm_new = -i_elm_tmp; // Save position of particle
+                // Compute new R and Z in x_tmp
                 double x_tmp[2]; double dummy;
                 try_interp_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
                                i_elm_tmp, st, p_loc, x_tmp, R_s, R_t, Z_s, Z_t, dummy);
@@ -764,7 +752,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
         i_elm_new = -2;
         return;
     }
-    {
+    if (iter > newton_iter_max) {
         double R_out, Z_out;
         find_RZ_gpu(nl_x, el_vertex, el_size, el_neighbours,
                     n_elements, n_nodes, mode_coord,
@@ -775,7 +763,6 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
 
 // ---------------------------------------------------------------------------
 // calc_EBpsiU: compute E, B, psi, U at a point using linear time interpolation
-// (enhanced version fusing basisfunctions_T + field interpolation)
 // ---------------------------------------------------------------------------
 __device__
 void calc_EBpsiU(const double* __restrict__ nl_values,
@@ -792,7 +779,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  double E[3], double B[3], double &psi, double &U)
 {
     double HT[NDEG * NV], HT_s[NDEG * NV], HT_t[NDEG * NV];
-    basisfunctions_2D_1_T(st[0], st[1], HT, HT_s, HT_t);
+    basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
 
     double HZ[N_TOR], dHZ[N_TOR];
     sincosperiod_moivre(phi, HZ, dHZ);
@@ -850,7 +837,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     // The computation is essentially the same
     if (t_norm > 0.0) {
         // Why they are computed again???
-        basisfunctions_2D_1_T(st[0], st[1], HT, HT_s, HT_t);
+        basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
         sincosperiod_moivre(phi, HZ, dHZ);
 
         double Pd[2] = {0.0, 0.0};
@@ -937,7 +924,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 // ---------------------------------------------------------------------------
 __device__
 void volume_preserving_push(double x[3], double p_mom[3], double st[2],
-                            int &i_elm_f, double charge,
+                            int &i_elm_f, double charge,                // i_elm_f is 1-based
                             const double* __restrict__ nl_values,
                             const double* __restrict__ nl_deltas,
                             const double* __restrict__ nl_x,
@@ -952,37 +939,44 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             double mass, double time, double timestep,
                             int &ifail)
 {
-    double scaling = 0.5 * timestep * charge * EL_CHG / (ATOMIC_MASS_UNIT * mass * SPEED_OF_LIGHT);
-    double mc = mass * SPEED_OF_LIGHT;
-
-    // Normalise momentum: p -> p / (mass * c)
-    double pm[3] = {p_mom[0] / mc, p_mom[1] / mc, p_mom[2] / mc};
-
-    // --- First half-step (position advance) ---
-    double pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    double gamma_inv = 1.0 / sqrt(1.0 + pdot);
+    // No need to check if particle is valid, it is already done in the caller
+    // Turn particle position from cylindrical to cartesian coordinates
     double cur_xyz[3];
     cylindrical_to_cartesian(x, cur_xyz);
+
+    // --- First half-step (position advance) ---
+
+    double scaling = 0.5 * timestep * charge * EL_CHG / (ATOMIC_MASS_UNIT * mass * SPEED_OF_LIGHT);
+    double mc = mass * SPEED_OF_LIGHT;
+    // Compute dimensionless momentum
+    // i.e. Normalise momentum: p -> p / (mass * c)
+    double pm[3] = {p_mom[0] / mc, p_mom[1] / mc, p_mom[2] / mc};
+
+    // Compute coordinates at half-step
+    double pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
+    double gamma = sqrt(1.0 + pdot);
     double dt_half_c = 0.5 * timestep * SPEED_OF_LIGHT;
     double half_xyz[3] = {
-        cur_xyz[0] + dt_half_c * pm[0] * gamma_inv,
-        cur_xyz[1] + dt_half_c * pm[1] * gamma_inv,
-        cur_xyz[2] + dt_half_c * pm[2] * gamma_inv
+        cur_xyz[0] + dt_half_c * pm[0] / gamma,
+        cur_xyz[1] + dt_half_c * pm[1] / gamma,
+        cur_xyz[2] + dt_half_c * pm[2] / gamma
     };
 
+    // Compute cylindrical coordinates from cartesian ones
     double half_cyl[3];
     cartesian_to_cylindrical(half_xyz, half_cyl);
 
-    // Find element for half-step position
+    // Find element for half-step position  (that is (i_elm, s, t) coordinates)
     double s_new, t_new; int i_elm_new;
     find_RZ_nearby_gpu(nl_x, el_vertex, el_size, el_neighbours,
                        n_elements, n_nodes, mode_coord,
                        x[0], x[1], st[0], st[1], i_elm_f,
                        half_cyl[0], half_cyl[1],
-                       s_new, t_new, i_elm_new, ifail, half_cyl[2]);
+                       s_new, t_new, i_elm_new, ifail);
 
+    // If the particle is lost, exit
     if (i_elm_new <= 0) { i_elm_f = i_elm_new; return; }
-
+    // Otherwise, copy new coordinates and element index to the particle data
     x[0] = half_cyl[0]; x[1] = half_cyl[1]; x[2] = half_cyl[2];
     st[0] = s_new; st[1] = t_new;
     i_elm_f = i_elm_new;
@@ -996,6 +990,8 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 i_elm_f, st, x[2], time + 0.5 * timestep,
                 E, B_field, psi_loc, U_loc);
 
+    // --- Second half-step ---
+
     // Convert E, B to Cartesian for VPA rotation
     double E_cart[3], B_cart[3];
     vector_cylindrical_to_cartesian(x[2], E, E_cart);
@@ -1008,28 +1004,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     pm[2] += scaling * E_cart[2];
 
     // Cayley transform rotation
-    pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    double alpha = SPEED_OF_LIGHT * scaling / sqrt(1.0 + pdot);
-
-    double ab0 = alpha * B_cart[0];
-    double ab1 = alpha * B_cart[1];
-    double ab2 = alpha * B_cart[2];
-    double ab_dot = ab0*ab0 + ab1*ab1 + ab2*ab2;
-    double denom = 1.0 / (1.0 + ab_dot);
-
-    // B_plus * p  (I + alpha * [B x])
-    double Bp0 =  pm[0] - ab2*pm[1] + ab1*pm[2];
-    double Bp1 =  ab2*pm[0] + pm[1] - ab0*pm[2];
-    double Bp2 = -ab1*pm[0] + ab0*pm[1] + pm[2];
-
-    // A * (B_plus * p)  where A = (I - alpha * [B x])^{-1}
-    double p_new0 = ((1.0 + ab0*ab0)*Bp0 + (ab0*ab1 - ab2)*Bp1 + (ab2*ab0 + ab1)*Bp2) * denom;
-    double p_new1 = ((ab1*ab0 + ab2)*Bp0 + (1.0 + ab1*ab1)*Bp1 + (ab2*ab1 - ab0)*Bp2) * denom;
-    double p_new2 = ((ab2*ab0 - ab1)*Bp0 + (ab1*ab2 + ab0)*Bp1 + (1.0 + ab2*ab2)*Bp2) * denom;
-
-    pm[0] = p_new0;
-    pm[1] = p_new1;
-    pm[2] = p_new2;
+    cayley_transform_rotate(pm, B_cart, scaling);
 
     // Second electric kick
     pm[0] += scaling * E_cart[0];
@@ -1038,24 +1013,27 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // --- Second half position update ---
     pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    gamma_inv = 1.0 / sqrt(1.0 + pdot);
-    half_xyz[0] += dt_half_c * pm[0] * gamma_inv;
-    half_xyz[1] += dt_half_c * pm[1] * gamma_inv;
-    half_xyz[2] += dt_half_c * pm[2] * gamma_inv;
+    gamma = sqrt(1.0 + pdot);
+    half_xyz[0] += dt_half_c * pm[0] / gamma;
+    half_xyz[1] += dt_half_c * pm[1] / gamma;
+    half_xyz[2] += dt_half_c * pm[2] / gamma;
 
     // Restore dimensional momentum
     p_mom[0] = pm[0] * mc;
     p_mom[1] = pm[1] * mc;
     p_mom[2] = pm[2] * mc;
 
+    // Turn back from cartesian to cylindrical coordinates
     cartesian_to_cylindrical(half_xyz, half_cyl);
 
+    // Find new (i_elm, s, t) coordinates
     find_RZ_nearby_gpu(nl_x, el_vertex, el_size, el_neighbours,
                        n_elements, n_nodes, mode_coord,
                        x[0], x[1], st[0], st[1], i_elm_f,
                        half_cyl[0], half_cyl[1],
-                       s_new, t_new, i_elm_new, ifail, half_cyl[2]);
+                       s_new, t_new, i_elm_new, ifail);
 
+    // Copy new R-Z-Phi position into particle                       
     x[0] = half_cyl[0]; x[1] = half_cyl[1]; x[2] = half_cyl[2];
     st[0] = s_new; st[1] = t_new;
     i_elm_f = i_elm_new;
@@ -1079,6 +1057,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // ---------------------------------------------------------------------------
 __global__
 void evolve_REs_kernel(
+    int my_id,
     // Particle SoA
     double* __restrict__ p_x,            // (3, num_particles)
     double* __restrict__ p_p,            // (3, num_particles)
@@ -1123,8 +1102,8 @@ void evolve_REs_kernel(
 
 #ifdef GPU_DEBUG
     if (j < 3) {
-        printf("[GPU_DEBUG j=%d] START: i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g]\n",
-               j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2]);
+        printf("[GPU_DEBUG j=%d] START: my_id=%d, i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g]\n",
+               j, my_id, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2]);
     }
 #endif
 
@@ -1377,6 +1356,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     hipLaunchKernelGGL(evolve_REs_kernel,
         dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+        sim.my_id,
         // Particle SoA
         d_x, d_p, d_st, d_i_elm, d_weight, charge,
         // Field node list SoA
