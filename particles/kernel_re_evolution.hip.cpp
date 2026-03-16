@@ -35,6 +35,9 @@
 // Otherwise I need to pass them as arguments to the extern "C" function, and handle everythin dynamically
 // at runtime
 
+// TODO: There are some parameters passed to different functions only for debugging purposes (e.g. debug_j, debug_k).
+// They may be handled through precompiler guard GPU_DEBUG as well.
+
 static constexpr int NV       = 4;                          // n_vertex_max
 static constexpr int NDEG     = (N_ORDER + 1) * (N_ORDER + 1) / 4; // n_degrees
 static constexpr int NDIM     = 2;                          // n_dim
@@ -69,6 +72,10 @@ __device__ __forceinline__
 int idx5(int i0, int i1, int i2, int i3, int i4,
          int d0, int d1, int d2, int d3)
 { return i0 + d0 * (i1 + d1 * (i2 + d2 * (i3 + d3 * i4))); }
+
+__device__ __forceinline__
+bool rz_dbg_enabled(int debug_j, int debug_k)
+{ return (debug_j >= 0 && debug_j < 3 && debug_k == 0); }
 
 // ---------------------------------------------------------------------------
 // HIP error check macro
@@ -343,37 +350,59 @@ void vector_cylindrical_to_cartesian(double phi, const double* __restrict__ a, d
 __device__ __forceinline__
 void cayley_transform_rotate(double pm[3], const double B_cart[3], double scaling)
 {
-    double pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    double alpha = SPEED_OF_LIGHT * scaling / sqrt(1.0 + pdot);
+    double alpha = SPEED_OF_LIGHT * scaling /
+                   sqrt(1.0 + pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2]);
 
-    // alpha * B
-    double ab0 = alpha * B_cart[0];
-    double ab1 = alpha * B_cart[1];
-    double ab2 = alpha * B_cart[2];
-    // Denominator (1 + |alpha * B|^2)
-    double ab_dot = ab0*ab0 + ab1*ab1 + ab2*ab2;
-    double denom = (1.0 + ab_dot);
+    const double vx = B_cart[0];
+    const double vy = B_cart[1];
+    const double vz = B_cart[2];
 
-    // Apply (I + alpha [B×]) to p
-    // this is equivalent to computing B * p in the Fortran version,
-    // where B = I + alpha * skew(B)
-    double Bp0 =  pm[0] - ab2*pm[1] + ab1*pm[2];
-    double Bp1 =  ab2*pm[0] + pm[1] - ab0*pm[2];
-    double Bp2 = -ab1*pm[0] + ab0*pm[1] + pm[2];
+    double A[3][3];
+    double B[3][3];
+    double cayley_mat[3][3];
 
-    // Apply A = (I - alpha [B×])^{-1} to the result above
-    // instead of building the matrix A and doing matmul,
-    // the multiplication A*(B_plus*p) is expanded component-wise
-    // this is algebraically identical to the Fortran:
-    //      cayley_transform_mat_tmp = cayley_transform(alpha,B)
-    //      p = matmul(cayley_transform_mat_tmp,p)
-    double p_new0 = ((1.0 + ab0*ab0)*Bp0 + (ab0*ab1 - ab2)*Bp1 + (ab2*ab0 + ab1)*Bp2) / denom;
-    double p_new1 = ((ab1*ab0 + ab2)*Bp0 + (1.0 + ab1*ab1)*Bp1 + (ab2*ab1 - ab0)*Bp2) / denom;
-    double p_new2 = ((ab2*ab0 - ab1)*Bp0 + (ab1*ab2 + ab0)*Bp1 + (1.0 + ab2*ab2)*Bp2) / denom;
+    /* ---- compute B = I + alpha * skew(vec) ---- */
+    B[0][0] = 1.0;        B[0][1] =  alpha*vz;   B[0][2] = -alpha*vy;
+    B[1][0] = -alpha*vz;  B[1][1] = 1.0;         B[1][2] =  alpha*vx;
+    B[2][0] =  alpha*vy;  B[2][1] = -alpha*vx;   B[2][2] = 1.0;
 
-    pm[0] = p_new0;
-    pm[1] = p_new1;
-    pm[2] = p_new2;
+    /* ---- compute A = (I - alpha * skew(vec))^{-1} numerator ---- */
+    A[0][0] = 1.0 + alpha*alpha*vx*vx;
+    A[1][0] = alpha*(alpha*vx*vy - vz);
+    A[2][0] = alpha*(alpha*vz*vx + vy);
+
+    A[0][1] = alpha*(alpha*vy*vx + vz);
+    A[1][1] = 1.0 + alpha*alpha*vy*vy;
+    A[2][1] = alpha*(alpha*vz*vy - vx);
+
+    A[0][2] = alpha*(alpha*vz*vx - vy);
+    A[1][2] = alpha*(alpha*vy*vz + vx);
+    A[2][2] = 1.0 + alpha*alpha*vz*vz;
+
+    /* ---- matrix multiply cayley_mat = A * B ---- */
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            cayley_mat[i][j] =
+                A[i][0]*B[0][j] +
+                A[i][1]*B[1][j] +
+                A[i][2]*B[2][j];
+        }
+
+    /* ---- normalization factor ---- */
+    double denom = 1.0 + alpha*alpha*(vx*vx + vy*vy + vz*vz);
+
+    for (int i=0;i<3;i++)
+        for (int j=0;j<3;j++)
+            cayley_mat[i][j] /= denom;
+
+    /* ---- rotate momentum vector ---- */
+    double p0 = pm[0];
+    double p1 = pm[1];
+    double p2 = pm[2];
+
+    pm[0] = cayley_mat[0][0]*p0 + cayley_mat[0][1]*p1 + cayley_mat[0][2]*p2;
+    pm[1] = cayley_mat[1][0]*p0 + cayley_mat[1][1]*p1 + cayley_mat[1][2]*p2;
+    pm[2] = cayley_mat[2][0]*p0 + cayley_mat[2][1]*p1 + cayley_mat[2][2]*p2;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,11 +415,20 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
                        const double* __restrict__ el_size,
                        int n_elements, int n_nodes,
                        const int* __restrict__ mode_coord,
-                       int i_elm_f,
+                       int i_elm_f,     // 1 based
                        double s, double t, double phi,
                        double &R, double &R_s, double &R_t, double &R_p,
-                       double &Z, double &Z_s, double &Z_t, double &Z_p)
+                       double &Z, double &Z_s, double &Z_t, double &Z_p,
+                       int debug_j, int debug_k)
 {
+#ifdef GPU_DEBUG
+    const bool dbg = rz_dbg_enabled(debug_j, debug_k);
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] INTERP_ENTER: i_elm=%d st=[%.15g,%.15g] phi=%.15g\n",
+               debug_j, debug_k, i_elm_f, s, t, phi);
+    }
+#endif
+
     double G[NV * NDEG], G_s[NV * NDEG], G_t[NV * NDEG];
     basisfunctions_2D_1(s, t, G, G_s, G_t);
 
@@ -438,6 +476,13 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
             }
         }
     }
+
+#ifdef GPU_DEBUG
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] INTERP_EXIT: i_elm=%d R=%.15g Z=%.15g R_s=%.15g R_t=%.15g Z_s=%.15g Z_t=%.15g\n",
+               debug_j, debug_k, i_elm_f, R, Z, R_s, R_t, Z_s, Z_t);
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -452,17 +497,25 @@ void try_interp_gpu(const double* __restrict__ nl_x,
                     int i_elm_f, const double st[2], double phi,
                     double x[2],
                     double &R_s, double &R_t, double &Z_s, double &Z_t,
-                    double &inv_jac)
+                    double &inv_jac,
+                    int debug_j, int debug_k)
 {
     double R_p, Z_p;
     interp_RZP_1_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
                      i_elm_f, st[0], st[1], phi,
-                     x[0], R_s, R_t, R_p, x[1], Z_s, Z_t, Z_p);
+                     x[0], R_s, R_t, R_p, x[1], Z_s, Z_t, Z_p, debug_j, debug_k);
     double jac = R_s * Z_t - R_t * Z_s;
     if (fabs(jac) < 1.0e-8)
         inv_jac = jac>0 ? 1.0e8 : -1.0e8;
     else
         inv_jac = 1.0 / jac;
+
+#ifdef GPU_DEBUG
+    if (rz_dbg_enabled(debug_j, debug_k)) {
+        printf("[GPU_DEBUG j=%d k=%d] TRY_INTERP: i_elm=%d st=[%.15g,%.15g] x=[%.15g,%.15g] jac=%.15g inv_jac=%.15g\n",
+               debug_j, debug_k, i_elm_f, st[0], st[1], x[0], x[1], jac, inv_jac);
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -476,7 +529,8 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
                                     const int* __restrict__ el_neighbours,
                                     int n_elements,
                                     int elm1, int elm2, int side1,
-                                    int &side2, bool &is_nb, bool &co)      // elm1, elm2, side1, side2 are 1-based
+                                    int &side2, bool &is_nb, bool &co,      // elm1, elm2, side1, side2 are 1-based
+                                    int debug_j, int debug_k)      
 {
     co    = false;
     is_nb = false;
@@ -501,6 +555,13 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
         int n2b = el_vertex[idx2(ie2,  side2      % 4, n_elements)];
         co = (n1a == n2b) || (n1b == n2a);
     }
+
+#ifdef GPU_DEBUG
+    if (rz_dbg_enabled(debug_j, debug_k)) {
+        printf("[GPU_DEBUG j=%d k=%d] NB_SIDE: elm1=%d elm2=%d side1=%d side2=%d nb=%d co=%d\n",
+               debug_j, debug_k, elm1, elm2, side1, side2, int(is_nb), int(co));
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +572,8 @@ __device__
 void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
                             const int* __restrict__ el_neighbours,
                             int n_elements,
-                            int i_from, int &i_to, double st[2])        // i_from, i_to are 1-based
+                            int i_from, int &i_to, double st[2],
+                            int debug_j, int debug_k)        // i_from, i_to are 1-based
 {
     // q for "Quadrant"
     int q_from;
@@ -522,12 +584,18 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
     }
 
     i_to = el_neighbours[idx2(i_from - 1, q_from - 1, n_elements)];
+#ifdef GPU_DEBUG
+    if (rz_dbg_enabled(debug_j, debug_k)) {
+        printf("[GPU_DEBUG j=%d k=%d] COORD_NB_IN: i_from=%d q_from=%d i_to_raw=%d st_in=[%.15g,%.15g]\n",
+               debug_j, debug_k, i_from, q_from, i_to, st[0], st[1]);
+    }
+#endif
     if (i_to <= 0) return;
 
     // Check once more that they are neighbours and determine the orientation
     int q_to; bool nb, co;
     neighbours_side_co_counter_gpu(el_vertex, el_neighbours, n_elements,
-                                   i_from, i_to, q_from, q_to, nb, co);
+                                   i_from, i_to, q_from, q_to, nb, co, debug_j, debug_k);
     if (!nb || q_to == 0) { i_to = 0; return; }
 
     // x is the coordinate along the boundary from vertex i_side to i_side+1
@@ -546,6 +614,13 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
         case 3: st[0] = 1.0 - x; st[1] = 1.0;       break;
         default:st[0] = 0.0;     st[1] = 1.0 - x;   break;
     }
+
+#ifdef GPU_DEBUG
+    if (rz_dbg_enabled(debug_j, debug_k)) {
+        printf("[GPU_DEBUG j=%d k=%d] COORD_NB_OUT: i_from=%d i_to=%d q_to=%d co=%d st_out=[%.15g,%.15g]\n",
+               debug_j, debug_k, i_from, i_to, q_to, int(co), st[0], st[1]);
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -562,12 +637,21 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
                          double R_find, double Z_find,
                          double &R_out, double &Z_out,
                          int &ielm_out, double &s_out, double &t_out,           // both i_elm_f, ielm_out are 1-based
-                         int &ifail)
+                         int &ifail,
+                         int debug_j, int debug_k)
 {
     constexpr int ntrial = 20;
     constexpr double tolx = 1.0e-8;
     constexpr double tolf = 1.0e-15;
     double phi_loc = 0.0;
+
+#ifdef GPU_DEBUG
+    const bool dbg = rz_dbg_enabled(debug_j, debug_k);
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_ENTER: i_elm=%d target=[%.15g,%.15g]\n",
+               debug_j, debug_k, i_elm_f, R_find, Z_find);
+    }
+#endif
 
     ielm_out = i_elm_f;
 
@@ -577,26 +661,54 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
         double x[2] = {starts[ist][0], starts[ist][1]};
         ifail = 999;
 
+#ifdef GPU_DEBUG
+        if (dbg) {
+            printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_START: i_elm=%d istart=%d x0=[%.15g,%.15g]\n",
+                   debug_j, debug_k, i_elm_f, ist + 1, x[0], x[1]);
+        }
+#endif
+
         for (int i = 0; i < ntrial; ++i) {
             double R_s, R_t, R_p, Z_s, Z_t, Z_p, RRg1, ZZg1;
             interp_RZP_1_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes,
                              mode_coord, i_elm_f, x[0], x[1], phi_loc,
-                             RRg1, R_s, R_t, R_p, ZZg1, Z_s, Z_t, Z_p);
+                             RRg1, R_s, R_t, R_p, ZZg1, Z_s, Z_t, Z_p, debug_j, debug_k);
 
             double fvec[2] = {RRg1 - R_find, ZZg1 - Z_find};
             double errf = fabs(fvec[0]) + fabs(fvec[1]);
+
+#ifdef GPU_DEBUG
+            if (dbg) {
+                printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_ITER: i_elm=%d istart=%d it=%d x=[%.15g,%.15g] f=[%.15g,%.15g] errf=%.15g\n",
+                       debug_j, debug_k, i_elm_f, ist + 1, i + 1, x[0], x[1], fvec[0], fvec[1], errf);
+            }
+#endif
 
             if (errf <= tolf) {
                 s_out = x[0]; t_out = x[1];
                 ielm_out = i_elm_f;
                 R_out = RRg1; Z_out = ZZg1;
                 ifail = 0;
+#ifdef GPU_DEBUG
+                if (dbg) {
+                    printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_OK_F: i_elm=%d it=%d st=[%.15g,%.15g] RZ=[%.15g,%.15g]\n",
+                           debug_j, debug_k, i_elm_f, i + 1, s_out, t_out, R_out, Z_out);
+                }
+#endif
                 return;
             }
 
             double p[2] = {-fvec[0], -fvec[1]};
             double dis = Z_t * R_s - R_t * Z_s;     // determinant of the jacobian
-            if (dis == 0.0) break;        // Jacobian is singular, cannot continue
+            if (dis == 0.0) {
+#ifdef GPU_DEBUG
+                if (dbg) {
+                    printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_SINGULAR: i_elm=%d istart=%d it=%d\n",
+                           debug_j, debug_k, i_elm_f, ist + 1, i + 1);
+                }
+#endif
+                break;        // Jacobian is singular, cannot continue
+            }
             double tmp = p[0];
             p[0] = ( Z_t * p[0] - R_t * p[1]) / dis;
             p[1] = ( R_s * p[1] - Z_s * tmp) / dis;
@@ -614,10 +726,23 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
                 ielm_out = i_elm_f;
                 R_out = RRg1; Z_out = ZZg1;
                 ifail = 0;
+#ifdef GPU_DEBUG
+                if (dbg) {
+                    printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_OK_X: i_elm=%d it=%d st=[%.15g,%.15g] RZ=[%.15g,%.15g]\n",
+                           debug_j, debug_k, i_elm_f, i + 1, s_out, t_out, R_out, Z_out);
+                }
+#endif
                 return;
             }
         }
     }
+
+#ifdef GPU_DEBUG
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_FAIL: i_elm=%d ifail=%d\n",
+               debug_j, debug_k, i_elm_f, ifail);
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -633,17 +758,39 @@ void find_RZ_gpu(const double* __restrict__ nl_x,
                  double R_find, double Z_find,
                  double &R_out, double &Z_out,
                  int &ielm_out, double &s_out, double &t_out,       // i_elm_out is 1-based
-                 int &ifail)
+                 int &ifail,
+                 int debug_j, int debug_k)
 {
+#ifdef GPU_DEBUG
+    const bool dbg = rz_dbg_enabled(debug_j, debug_k);
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_GPU_ENTER: target=[%.15g,%.15g]\n",
+               debug_j, debug_k, R_find, Z_find);
+    }
+#endif
+
     ielm_out = 0;
     for (int k = 1; k <= n_elements; ++k) {
         find_RZ_single_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes,
                             mode_coord, k, R_find, Z_find,
-                            R_out, Z_out, ielm_out, s_out, t_out, ifail);
+                            R_out, Z_out, ielm_out, s_out, t_out, ifail, debug_j, debug_k);
+#ifdef GPU_DEBUG
+        if (dbg) {
+            printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_GPU_TRY: k=%d ifail=%d ielm_out=%d st=[%.15g,%.15g]\n",
+                   debug_j, debug_k, k, ifail, ielm_out, s_out, t_out);
+        }
+#endif
         if (ifail == 0) return;
     }
     if (ielm_out == 0) ifail = 99;
     if (ifail == 999) ielm_out = 0;
+
+#ifdef GPU_DEBUG
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_GPU_EXIT: ifail=%d ielm_out=%d RZ=[%.15g,%.15g] st=[%.15g,%.15g]\n",
+               debug_j, debug_k, ifail, ielm_out, R_out, Z_out, s_out, t_out);
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -662,8 +809,17 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
                         double s_old, double t_old, int i_elm_old,
                         double R_new, double Z_new,
                         double &s_new, double &t_new, int &i_elm_new,
-                        int &ifail)
+                        int &ifail,
+                        int debug_j, int debug_k)     // both i_elm_old, i_elm_new are 1-based
 {
+#ifdef GPU_DEBUG
+    const bool dbg = rz_dbg_enabled(debug_j, debug_k);
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] FRZN_ENTER: old=[%.15g,%.15g] new=[%.15g,%.15g] st_old=[%.15g,%.15g] i_elm_old=%d\n",
+               debug_j, debug_k, R_old, Z_old, R_new, Z_new, s_old, t_old, i_elm_old);
+    }
+#endif
+
     // Accuracy defaults
     // Note: tolerances are squared!, units of element size
     constexpr double element_tolerance = 1.0e-24;   // tolerance for finding a position inside an element
@@ -672,6 +828,12 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
     // Check if element is valied
     if (i_elm_old < 1 || i_elm_old > n_elements) {
         i_elm_new = 0;
+#ifdef GPU_DEBUG
+        if (dbg) {
+            printf("[GPU_DEBUG j=%d k=%d] FRZN_INVALID_ELM: i_elm_old=%d n_elements=%d\n",
+                   debug_j, debug_k, i_elm_old, n_elements);
+        }
+#endif
         return;
     }
     double p_loc = 0.0;  // phi coordinate is not used in the interpolation, so set to arbitrary value
@@ -684,13 +846,18 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
     // Find the jacobian at the current s and t position
     double R_s, R_t, Z_s, Z_t, inv_jac;
     try_interp_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
-                   i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac);
+                   i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac, debug_j, debug_k);
 
     double dx0 = x_step[0] - x_target[0];
     double dx1 = x_step[1] - x_target[1];
     double err2 = dx0*dx0 + dx1*dx1;
     ifail = 0;
     int iter;
+
+#ifdef GPU_DEBUG
+    if (dbg) printf("[GPU_DEBUG j=%d k=%d] FRZN_INIT: i_elm=%d x_step=[%.15g,%.15g] st=[%.15g,%.15g] inv_jac=%.15g err2=%.15g\n",
+               debug_j, debug_k, i_elm_new, x_step[0], x_step[1], st[0], st[1], inv_jac, err2);
+#endif
 
     // Newton iteration to find s and t in or out of this element
     for (iter = 1; iter <= newton_iter_max; ++iter) {
@@ -705,39 +872,63 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
         double fact1  = fabs(st_step1) / fmax(dist1, 1.0e-30);
         double fact   = fmax(fact0, fact1);
 
+    #ifdef GPU_DEBUG
+        if (dbg) {
+            printf("[GPU_DEBUG j=%d k=%d] FRZN_ITER: it=%d i_elm=%d st=[%.15g,%.15g] st_step=[%.15g,%.15g] fact=%.15g err2=%.15g\n",
+               debug_j, debug_k, iter, i_elm_new, st[0], st[1], st_step0, st_step1, fact, err2);
+            printf("[GPU_DEBUG j=%d k=%d] FRZN_ITER: it=%d i_elm=%d Z_t=%.15g R_t=%.15g Z_s=%.15g R_s=%.15g inv_jac=%.15g\n",
+               debug_j, debug_k, iter, i_elm_new, Z_t, R_t, Z_s, R_s, inv_jac);
+            printf("[GPU_DEBUG j=%d k=%d] FRZN_ITER: it=%d i_elm=%d x_target=[%.15g,%.15g] x_step=[%.15g,%.15g]\n",
+               debug_j, debug_k, iter, i_elm_new, x_target[0], x_target[1], x_step[0], x_step[1]);
+        }
+    #endif
+
         // if fact >= 1, we are on the boundary
         // That is it is the overshoot: i.e. how many times we overshoot boudnary with one st_step
         if (fact >= 1.0 - 1.0e-12) {
+
             st[0] += st_step0 / fact;
             st[1] += st_step1 / fact;
             int i_elm_tmp = i_elm_new;
             coord_in_neighbour_gpu(el_vertex, el_neighbours, n_elements,
-                                   i_elm_tmp, i_elm_new, st);
+                                   i_elm_tmp, i_elm_new, st, debug_j, debug_k);
+#ifdef GPU_DEBUG
+            if (dbg) printf("[GPU_DEBUG j=%d k=%d] FRZN_HOP: from=%d to=%d st_on_edge=[%.15g,%.15g]\n",
+                       debug_j, debug_k, i_elm_tmp, i_elm_new, st[0], st[1]);
+#endif
             if (i_elm_new < 0) {
+#ifdef GPU_DEBUG
+                printf("[GPU_DEBUG] find_RZ_nearby: coord_in_neighbour returned i_elm_new<0, fallback. iter=%d i_elm_tmp=%d R_new=%.15g Z_new=%.15g st=[%.15g,%.15g]\n",
+                       iter, i_elm_tmp, R_new, Z_new, st[0], st[1]);
+#endif
                 double R_out, Z_out;
                 find_RZ_gpu(nl_x, el_vertex, el_size, el_neighbours,
                             n_elements, n_nodes, mode_coord,
                             R_new, Z_new, R_out, Z_out,
-                            i_elm_new, s_new, t_new, ifail);
+                            i_elm_new, s_new, t_new, ifail, debug_j, debug_k);
                 return;
             }
             if (i_elm_new == 0) {       // No element on that side, particle is lost
                 i_elm_new = -i_elm_tmp; // Save position of particle
+#ifdef GPU_DEBUG
+                printf("[GPU_DEBUG] find_RZ_nearby: PARTICLE LOST (i_elm_new=0, ifail=-1): iter=%d i_elm_old=%d i_elm_tmp=%d R_old=%.15g Z_old=%.15g R_new=%.15g Z_new=%.15g st=[%.15g,%.15g] err2=%.15g\n",
+                       iter, i_elm_old, i_elm_tmp, R_old, Z_old, R_new, Z_new, st[0], st[1], err2);
+#endif
                 // Compute new R and Z in x_tmp
                 double x_tmp[2]; double dummy;
                 try_interp_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
-                               i_elm_tmp, st, p_loc, x_tmp, R_s, R_t, Z_s, Z_t, dummy);
+                               i_elm_tmp, st, p_loc, x_tmp, R_s, R_t, Z_s, Z_t, dummy, debug_j, debug_k);
                 s_new = st[0]; t_new = st[1];
                 ifail = -1;
                 return;
             }
             try_interp_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
-                           i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac);
+                           i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac, debug_j, debug_k);
         } else {
             st[0] += st_step0;
             st[1] += st_step1;
             try_interp_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes, mode_coord,
-                           i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac);
+                           i_elm_new, st, p_loc, x_step, R_s, R_t, Z_s, Z_t, inv_jac, debug_j, debug_k);
         }
 
         dx0 = x_step[0] - x_target[0];
@@ -745,19 +936,33 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
         err2 = dx0*dx0 + dx1*dx1;
         s_new = st[0];
         t_new = st[1];
-        if (err2 < element_tolerance) return;
+        if (err2 < element_tolerance) {
+#ifdef GPU_DEBUG
+            if (dbg) printf("[GPU_DEBUG j=%d k=%d] FRZN_CONVERGED: it=%d i_elm_new=%d st=[%.15g,%.15g] err2=%.15g\n",
+                       debug_j, debug_k, iter, i_elm_new, s_new, t_new, err2);
+#endif
+            return;
+        }
     }
 
     if (isnan(err2)) {
+#ifdef GPU_DEBUG
+        printf("[GPU_DEBUG] find_RZ_nearby: NaN in err2, setting i_elm=-2. iter=%d i_elm_new=%d R_new=%.15g Z_new=%.15g\n",
+               iter, i_elm_new, R_new, Z_new);
+#endif
         i_elm_new = -2;
         return;
     }
     if (iter > newton_iter_max) {
+#ifdef GPU_DEBUG
+        printf("[GPU_DEBUG] find_RZ_nearby: exceeded newton_iter_max, fallback. i_elm_new=%d err2=%.15g R_new=%.15g Z_new=%.15g\n",
+               i_elm_new, err2, R_new, Z_new);
+#endif
         double R_out, Z_out;
         find_RZ_gpu(nl_x, el_vertex, el_size, el_neighbours,
                     n_elements, n_nodes, mode_coord,
                     R_new, Z_new, R_out, Z_out,
-                    i_elm_new, s_new, t_new, ifail);
+                    i_elm_new, s_new, t_new, ifail, debug_j, debug_k);
     }
 }
 
@@ -937,8 +1142,11 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             int flag_static, int flag_zero_dpsidt,
                             double F0, double t_norm,
                             double mass, double time, double timestep,
-                            int &ifail)
+                            int &ifail,
+                            int debug_j, int debug_k, int my_id)
 {
+    const bool dbg = rz_dbg_enabled(debug_j, debug_k);
+
     // No need to check if particle is valid, it is already done in the caller
     // Turn particle position from cylindrical to cartesian coordinates
     double cur_xyz[3];
@@ -948,6 +1156,18 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     double scaling = 0.5 * timestep * charge * EL_CHG / (ATOMIC_MASS_UNIT * mass * SPEED_OF_LIGHT);
     double mc = mass * SPEED_OF_LIGHT;
+#ifdef GPU_DEBUG
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] VPA_INPUT: i_elm=%d x=[%.15g,%.15g,%.15g] p=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, i_elm_f, x[0], x[1], x[2], p_mom[0], p_mom[1], p_mom[2]);
+        printf("[GPU_DEBUG j=%d k=%d] VPA_INPUT: st=[%.15g,%.15g] charge=%.15g mass=%.15g time=%.15g tstep=%.15g\n",
+               debug_j, debug_k, st[0], st[1], charge, mass, time, timestep);
+        printf("[GPU_DEBUG j=%d k=%d] VPA_INPUT: time_now=%.15g time_prev=%.15g F0=%.15g t_norm=%.15g\n",
+               debug_j, debug_k, time_now, time_prev, F0, t_norm);
+        printf("[GPU_DEBUG j=%d k=%d] VPA_STEP1: scaling=%.15g mc=%.15g cur_xyz=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, scaling, mc, cur_xyz[0], cur_xyz[1], cur_xyz[2]);
+    }
+#endif
     // Compute dimensionless momentum
     // i.e. Normalise momentum: p -> p / (mass * c)
     double pm[3] = {p_mom[0] / mc, p_mom[1] / mc, p_mom[2] / mc};
@@ -965,6 +1185,14 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     // Compute cylindrical coordinates from cartesian ones
     double half_cyl[3];
     cartesian_to_cylindrical(half_xyz, half_cyl);
+#ifdef GPU_DEBUG
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] VPA_STEP1: pm_normed=[%.15g,%.15g,%.15g] gamma=%.15g\n",
+               debug_j, debug_k, pm[0], pm[1], pm[2], gamma);
+        printf("[GPU_DEBUG j=%d k=%d] VPA_STEP1: half_xyz=[%.15g,%.15g,%.15g] half_cyl=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, half_xyz[0], half_xyz[1], half_xyz[2], half_cyl[0], half_cyl[1], half_cyl[2]);
+    }
+#endif
 
     // Find element for half-step position  (that is (i_elm, s, t) coordinates)
     double s_new, t_new; int i_elm_new;
@@ -972,7 +1200,13 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                        n_elements, n_nodes, mode_coord,
                        x[0], x[1], st[0], st[1], i_elm_f,
                        half_cyl[0], half_cyl[1],
-                       s_new, t_new, i_elm_new, ifail);
+                       s_new, t_new, i_elm_new, ifail, debug_j, debug_k);
+
+#ifdef GPU_DEBUG
+    if (dbg || ifail != 0)
+        printf("[GPU_DEBUG j=%d k=%d] VPA_FIND1: s_new=%.15g t_new=%.15g i_elm_new=%d ifail=%d\n",
+               debug_j, debug_k, s_new, t_new, i_elm_new, ifail);
+#endif
 
     // If the particle is lost, exit
     if (i_elm_new <= 0) { i_elm_f = i_elm_new; return; }
@@ -989,6 +1223,14 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 F0, t_norm,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
                 E, B_field, psi_loc, U_loc);
+#ifdef GPU_DEBUG
+    if (dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: E_cyl=[%.15g,%.15g,%.15g] B_cyl=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, E[0], E[1], E[2], B_field[0], B_field[1], B_field[2]);
+        printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: psi=%.15g U=%.15g\n",
+               debug_j, debug_k, psi_loc, U_loc);
+    }
+#endif
 
     // --- Second half-step ---
 
@@ -996,20 +1238,36 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     double E_cart[3], B_cart[3];
     vector_cylindrical_to_cartesian(x[2], E, E_cart);
     vector_cylindrical_to_cartesian(x[2], B_field, B_cart);
+#ifdef GPU_DEBUG
+    if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: E_cart=[%.15g,%.15g,%.15g] B_cart=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, E_cart[0], E_cart[1], E_cart[2], B_cart[0], B_cart[1], B_cart[2]);
+#endif
 
     // --- Momentum update: E-kick + Cayley rotation + E-kick ---
     // First electric kick
     pm[0] += scaling * E_cart[0];
     pm[1] += scaling * E_cart[1];
     pm[2] += scaling * E_cart[2];
+#ifdef GPU_DEBUG
+    if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: pm_afterE1=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, pm[0], pm[1], pm[2]);
+#endif
 
     // Cayley transform rotation
     cayley_transform_rotate(pm, B_cart, scaling);
+#ifdef GPU_DEBUG
+    if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: pm_afterCayley=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, pm[0], pm[1], pm[2]);
+#endif
 
     // Second electric kick
     pm[0] += scaling * E_cart[0];
     pm[1] += scaling * E_cart[1];
     pm[2] += scaling * E_cart[2];
+#ifdef GPU_DEBUG
+    if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: pm_afterE2=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, pm[0], pm[1], pm[2]);
+#endif
 
     // --- Second half position update ---
     pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
@@ -1025,13 +1283,25 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // Turn back from cartesian to cylindrical coordinates
     cartesian_to_cylindrical(half_xyz, half_cyl);
+#ifdef GPU_DEBUG
+    if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: final_xyz=[%.15g,%.15g,%.15g] final_cyl=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, half_xyz[0], half_xyz[1], half_xyz[2], half_cyl[0], half_cyl[1], half_cyl[2]);
+#endif
 
     // Find new (i_elm, s, t) coordinates
     find_RZ_nearby_gpu(nl_x, el_vertex, el_size, el_neighbours,
                        n_elements, n_nodes, mode_coord,
                        x[0], x[1], st[0], st[1], i_elm_f,
                        half_cyl[0], half_cyl[1],
-                       s_new, t_new, i_elm_new, ifail);
+                       s_new, t_new, i_elm_new, ifail, debug_j, debug_k);
+#ifdef GPU_DEBUG
+    if (dbg || ifail != 0) {
+        printf("[GPU_DEBUG j=%d k=%d] VPA_FIND2: s_new=%.15g t_new=%.15g i_elm_new=%d ifail=%d\n",
+               debug_j, debug_k, s_new, t_new, i_elm_new, ifail);
+        printf("[GPU_DEBUG j=%d k=%d] VPA_FIND2: p_mom=[%.15g,%.15g,%.15g]\n",
+               debug_j, debug_k, p_mom[0], p_mom[1], p_mom[2]);
+    }
+#endif
 
     // Copy new R-Z-Phi position into particle                       
     x[0] = half_cyl[0]; x[1] = half_cyl[1]; x[2] = half_cyl[2];
@@ -1057,7 +1327,6 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // ---------------------------------------------------------------------------
 __global__
 void evolve_REs_kernel(
-    int my_id,
     // Particle SoA
     double* __restrict__ p_x,            // (3, num_particles)
     double* __restrict__ p_p,            // (3, num_particles)
@@ -1088,22 +1357,29 @@ void evolve_REs_kernel(
     // Feedback RHS (atomically updated)
     double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, n_var) = Fortran layout
     // mode_coord for interp_RZP_1_gpu
-    const int* __restrict__ mode_coord)
+    const int* __restrict__ mode_coord,
+    int my_id)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= alive_particle_count) return;
 
     // Load particle data into registers
-    double x[3]  = {p_x[0 + 3*j], p_x[1 + 3*j], p_x[2 + 3*j]};
-    double pm[3] = {p_p[0 + 3*j], p_p[1 + 3*j], p_p[2 + 3*j]};
-    double st[2] = {p_st[0 + 2*j], p_st[1 + 2*j]};
+    double x[3]  = {p_x[idx2(0, j, 3)], p_x[idx2(1, j, 3)], p_x[idx2(2, j, 3)]};
+    double pm[3] = {p_p[idx2(0, j, 3)], p_p[idx2(1, j, 3)], p_p[idx2(2, j, 3)]};
+    double st[2] = {p_st[idx2(0, j, 2)], p_st[idx2(1, j, 2)]};
     int    i_elm = p_i_elm[j];
     double w = p_weight[j];
 
 #ifdef GPU_DEBUG
     if (j < 3) {
-        printf("[GPU_DEBUG j=%d] START: my_id=%d, i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g]\n",
-               j, my_id, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2]);
+        printf("[GPU_DEBUG j=%d] START: my_id=%d i_elm=%d x=[%.15g,%.15g,%.15g] p=[%.15g,%.15g,%.15g] st=[%.15g,%.15g] w=%.15g q=%.15g\n",
+               j, my_id, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1], w, charge);
+        printf("[GPU_DEBUG j=%d] PARAMS: sim_time=%.15g tstep=%.15g nstep=%d group_mass=%.15g\n",
+               j, sim_time, tstep_part_adj, nstep_particles, group_mass);
+        printf("[GPU_DEBUG j=%d] PARAMS: time_now=%.15g time_prev=%.15g F0=%.15g t_norm=%.15g\n",
+               j, time_now, time_prev, F0, t_norm);
+        printf("[GPU_DEBUG j=%d] PARAMS: flag_static=%d flag_zero_dpsidt=%d n_el=%d n_nodes=%d n_var=%d\n",
+               j, flag_static, flag_zero_dpsidt, n_elements, n_nodes, n_var);
     }
 #endif
 
@@ -1137,7 +1413,7 @@ void evolve_REs_kernel(
                     time_now, time_prev, flag_static, flag_zero_dpsidt,
                     F0, t_norm,
                     i_elm, st, x[2], sim_time,
-                    E_loc, B_loc, psi_loc, U_loc);
+                    E_loc, B_loc, psi_loc, U_loc); 
 
         double Bnorm = sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
         double B_hat[3] = {B_loc[0]/Bnorm, B_loc[1]/Bnorm, B_loc[2]/Bnorm};
@@ -1161,11 +1437,18 @@ void evolve_REs_kernel(
         //   (NDEG, NV, n_elements, N_TOR, n_var)
         //   index = n + NDEG*(m + NV*(ie + n_elements*(it + N_TOR*var)))  (all 0-based)
         int ie = i_elm - 1;
-        const int stride_var = NDEG * NV * n_elements * N_TOR;
 #ifdef GPU_DEBUG
         if (j < 3 && k == 0) {
-            printf("[GPU_DEBUG j=%d k=0] ie=%d v_Ppar=%.4g v_Pperp=%.4g v_jPhi=%.4g\n",
-                   j, ie, v_Ppar, v_Pperp, v_jPhi);
+            printf("[GPU_DEBUG j=%d k=0] PROJ: cyl_mom=[%.15g,%.15g,%.15g] cyl_vel=[%.15g,%.15g,%.15g]\n",
+                   j, cyl_mom[0], cyl_mom[1], cyl_mom[2], cyl_vel[0], cyl_vel[1], cyl_vel[2]);
+            printf("[GPU_DEBUG j=%d k=0] PROJ: E=[%.15g,%.15g,%.15g] B=[%.15g,%.15g,%.15g]\n",
+                   j, E_loc[0], E_loc[1], E_loc[2], B_loc[0], B_loc[1], B_loc[2]);
+            printf("[GPU_DEBUG j=%d k=0] PROJ: psi=%.15g U=%.15g Bnorm=%.15g\n",
+                   j, psi_loc, U_loc, Bnorm);
+            printf("[GPU_DEBUG j=%d k=0] PROJ: v_par=%.15g v_perp=%.15g gamma_m=%.15g\n",
+                   j, v_par, v_perp, gamma_m);
+            printf("[GPU_DEBUG j=%d k=0] PROJ: v_Ppar=%.15g v_Pperp=%.15g v_jPhi=%.15g\n",
+                   j, v_Ppar, v_Pperp, v_jPhi);
         }
 #endif
         for (int n = 0; n < NDEG; ++n) {
@@ -1176,14 +1459,6 @@ void evolve_REs_kernel(
                 for (int it = 0; it < N_TOR; ++it) {
                     double hz = HZ_proj[it];
 
-                    // feedback dims:   NDEG, NV, n_elements, N_TOR, n_var
-                    // int base = n + NDEG * (m + NV * (ie + n_elements * it));
-                    // atomicAdd(&feedback_rhs[base + stride_var * P_par_idx],
-                    //           hz * v_Ppar * proj_factor);
-                    // atomicAdd(&feedback_rhs[base + stride_var * P_perp_idx],
-                    //           hz * v_Pperp * proj_factor);
-                    // atomicAdd(&feedback_rhs[base + stride_var * j_phi_idx],
-                    //           hz * v_jPhi * proj_factor);
                     atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_par_idx, NDEG, NV, n_elements, N_TOR)],
                               hz * v_Ppar * proj_factor);
                     atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_perp_idx, NDEG, NV, n_elements, N_TOR)],
@@ -1206,7 +1481,8 @@ void evolve_REs_kernel(
                                flag_static, flag_zero_dpsidt,
                                F0, t_norm,
                                group_mass, sim_time, tstep_part_adj,
-                               ifail);
+                               ifail,
+                               j, k, my_id);
 #ifdef GPU_DEBUG
         if (ifail != 0) {
             printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.4g,%.4g,%.4g]\n",
@@ -1218,8 +1494,8 @@ void evolve_REs_kernel(
 
 #ifdef GPU_DEBUG
     if (j < 3) {
-        printf("[GPU_DEBUG j=%d] END: i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g]\n",
-               j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2]);
+        printf("[GPU_DEBUG j=%d] END: i_elm=%d x=[%.15g,%.15g,%.15g] p=[%.15g,%.15g,%.15g] st=[%.15g,%.15g]\n",
+               j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1]);
     }
 #endif
 
@@ -1228,6 +1504,13 @@ void evolve_REs_kernel(
     p_p[0 + 3*j] = pm[0]; p_p[1 + 3*j] = pm[1]; p_p[2 + 3*j] = pm[2];
     p_st[0 + 2*j] = st[0]; p_st[1 + 2*j] = st[1];
     p_i_elm[j] = i_elm;
+
+#ifdef GPU_DEBUG
+    if(j < 3) {
+        printf("[GPU_DEBUG j=%d] WRITEBACK: i_elm=%d x=[%.15g,%.15g,%.15g] p=[%.15g,%.15g,%.15g] st=[%.15g,%.15g]\n",
+               j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1]);
+    }
+#endif
 }
 
 
@@ -1259,6 +1542,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const particle_group& grp   = sim.group;
     const int    num_particles  = grp.num_particles;
     const int    alive_count    = grp.alive_particle_count;
+    // const int    alive_count    = 2; // TODO: debug, togli
     const double group_mass     = grp.mass;
     const double charge         = grp.charge;
     // Convert 1-based Fortran coupling indices to 0-based
@@ -1356,7 +1640,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     hipLaunchKernelGGL(evolve_REs_kernel,
         dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
-        sim.my_id,
         // Particle SoA
         d_x, d_p, d_st, d_i_elm, d_weight, charge,
         // Field node list SoA
@@ -1375,7 +1658,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         // Feedback RHS
         d_feedback_rhs,
         // mode_coord
-        d_mode_coord);
+        d_mode_coord,
+        sim.my_id);
 
     HIP_CHECK(hipGetLastError());
 #ifdef GPU_DEBUG

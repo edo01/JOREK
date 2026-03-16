@@ -404,11 +404,11 @@ contains
 
     ! --- Call GPU kernel ---
 #ifdef GPU_DEBUG
+    write(*,'(A,I0,A,I0,A,I0,A,I0,A,I0)') &
+        '[GPU_DEBUG Fortran j=', sim%my_id, '] np=', np, '  alive=', n_alive, '(lost: ', np-n_alive, '), ne=', ne
     if (sim%my_id == 0) then
-      write(*,'(A,I0,A,I0,A,I0,A,I0)') &
-        '[GPU_DEBUG Fortran] np=', np, '  alive=', n_alive, '  ne=', ne, '  n_tor=', n_tor
-      write(*,'(A,ES14.6,A,ES14.6)') &
-        '[GPU_DEBUG Fortran] tstep=', tstep_part_adj, '  t=', sim%time
+      write(*,'(A,ES14.6,A,ES14.6,A,I0)') &
+        '[GPU_DEBUG Fortran] tstep=', tstep_part_adj, '  t=', sim%time, '  n_tor=', n_tor
       write(*,'(A,I0,A,I0,A,I0)') &
         '[GPU_DEBUG Fortran] P_par_idx=', P_par_idx_kin, &
         '  P_perp_idx=', P_perp_idx_kin, '  j_Phi_idx=', j_Phi_idx_kin
@@ -417,6 +417,15 @@ contains
     if (sim%my_id == 0) write(*,*) 'Launching evolve_REs on GPU...'
     call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj_c, nstep_part_adj_c)
     if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
+
+#ifdef GPU_DEBUG
+  do ip = 1, min(3, np)
+    write(*,'(A,I0,A,I0,A,3F20.13)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', part_x(3*(ip-1)+1), part_x(3*(ip-1)+2), part_x(3*(ip-1)+3)
+    write(*,'(A,I0,A,I0,A,3F20.13)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') p = ', part_p(3*(ip-1)+1), part_p(3*(ip-1)+2), part_p(3*(ip-1)+3)
+    write(*,'(A,I0,A,I0,A,2F20.13)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') st = ', part_st(2*(ip-1)+1), part_st(2*(ip-1)+2)
+    write(*,'(A,I0,A,I0)') '[GPU_DEBUG Fortran] Particle(', ip, ') i_elm = ', part_ielm(ip)
+  end do
+#endif
 
 #ifdef GPU_DEBUG
     if (sim%my_id == 0) then
