@@ -9,39 +9,27 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
-
-// ---------------------------------------------------------------------------
-// Compile-time grid parameters (must match mod_settings.f90 at build time)
-// Override with -D flags if needed.
-// ---------------------------------------------------------------------------
-#ifndef N_TOR
-#define N_TOR 3
-#endif
-#ifndef N_COORD_TOR
-#define N_COORD_TOR 1
-#endif
-#ifndef N_PERIOD
-#define N_PERIOD 1
-#endif
-#ifndef N_COORD_PERIOD
-#define N_COORD_PERIOD 1
-#endif
-#ifndef N_ORDER
-#define N_ORDER 3
-#endif
-
-// TODO: Since all these are hard-coded parameters before compilation, it should be possible to set them
-// using precompiler defines and static arrays whenever possible
-// Otherwise I need to pass them as arguments to the extern "C" function, and handle everythin dynamically
-// at runtime
+#include "models/mod_settings.h"
 
 // TODO: There are some parameters passed to different functions only for debugging purposes (e.g. debug_j, debug_k).
 // They may be handled through precompiler guard GPU_DEBUG as well.
 
-static constexpr int NV       = 4;                          // n_vertex_max
-static constexpr int NDEG     = (N_ORDER + 1) * (N_ORDER + 1) / 4; // n_degrees
-static constexpr int NDIM     = 2;                          // n_dim
-static constexpr int NMODE    = (N_TOR - 1) / 2;           // number of modes excl 0
+// TODO: Discuss if this method to take hard-coded compile-time parameters from mod_settings.h is ok
+
+// ---------------------------------------------------------------------------
+// Compile-time parameters, taken and renamed from models/mod_settings.h
+// ---------------------------------------------------------------------------
+
+static constexpr int N_TOR = n_tor;
+static constexpr int N_COORD_TOR = n_coord_tor;
+static constexpr int N_PERIOD = n_period;
+static constexpr int N_COORD_PERIOD = n_coord_period;
+static constexpr int N_ORDER = n_order;
+
+static constexpr int NV       = n_vertex_max;
+static constexpr int NDEG     = n_degrees;
+static constexpr int NDIM     = n_dim;
+static constexpr int NMODE    = (N_TOR - 1) / 2;
 
 // ---------------------------------------------------------------------------
 // Physical constants (matching jorek/models/constants.f90)

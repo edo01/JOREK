@@ -61,14 +61,25 @@ function getmodel() {
 function setparam() {
   key=$1
   val=$2
-  matches1=`grep -c ":: *$key" $paramfile1`
+  
+  # Check in .h file
+  matches1=`grep -c "define *$key" $paramfile1`
+  # Check in .f90 file
   matches2=`grep -c ":: *$key" $paramfile2`
+
   if [ "$matches1" -ne 1 ] && [ "$matches2" -ne 1 ]; then
     echo "ERROR: Could not set parameter $key." >&2
     exit 1
   else
     for paramfile in $paramfiles; do
-      sed -i -e "s/\(^.*:: *$key *= *\)[^ !\t]*\(.*$\)/\1$val\2/" $paramfile
+      # Logic split based on file extension
+      if [[ "$paramfile" == *".h" ]]; then
+          # C-style substitution for .h files
+          sed -i -e "s/^\(#define[ \t]*$key[ \t]*\)[^ \t]*/\1$val/" $paramfile
+      else
+          # Fortran-style substitution for .f90 files
+          sed -i -e "s/\(^.*:: *$key *= *\)[^ !\t]*\(.*$\)/\1$val\2/" $paramfile
+      fi
     done
   fi
 }
@@ -76,7 +87,18 @@ function setparam() {
 function getparam() {
   key=$1
   for i in $paramfiles; do
-    grep -i ":: *$key[ =]" $i | sed -e "s/^.*:: *$key *= *\([^ !\t]*\).*$/\1/i"
+    if [[ "$i" == *".h" ]]; then
+      # C-style read for .h files
+      awk -v k="$key" '
+        $1 == "#define" && $2 == k {
+          print $3
+          exit
+        }
+      ' "$i"
+    else
+      # Fortran-style read for .f90 files
+      grep -i ":: *$key[ =]" $i | sed -e "s/^.*:: *$key *= *\([^ !\t]*\).*$/\1/i"
+    fi
   done
 }
 
@@ -119,7 +141,7 @@ function check_param_files() {
 
 # --- Determine the model
 model=`getmodel`
-paramfile1="models/mod_settings.f90"
+paramfile1="models/mod_settings.h"
 paramfile2="models/$model/mod_model_settings.f90"
 paramfiles="$paramfile1 $paramfile2"
 check_param_files
@@ -146,7 +168,7 @@ for arg in $@; do
   fi
 done
 model=`getmodel`
-paramfile1="models/mod_settings.f90"
+paramfile1="models/mod_settings.h"
 paramfile2="models/$model/mod_model_settings.f90"
 paramfiles="$paramfile1 $paramfile2"
 check_param_files
