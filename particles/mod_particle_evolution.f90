@@ -77,6 +77,7 @@ contains
     type (type_element_list),      pointer :: feedback_element_list
     type (particle_group),         pointer :: part_group
     character(len=3) :: cs
+    real*8 :: start_time, end_time, tot_time(3)
 
     !> Coupling scheme specific
     integer :: imp_q_idx
@@ -103,6 +104,9 @@ contains
     !> gathers feedback rhs per particle per tstep_part_adj and pushes particle
     !> this is where coupling specific physics such as ionisation, charge exchange... etc happens
 
+    !> Start timing the section
+    start_time = MPI_WTIME()
+
     select case (part_group%coupling_scheme)
       case ('ncs')
         call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, nstep_part_adj)
@@ -118,6 +122,14 @@ contains
         write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
         stop 1
     end select
+
+    !> End timing the section
+    end_time = MPI_WTIME()
+    tot_time = mpi_minmeanmax(end_time-start_time)
+    if (sim%my_id .eq. 0) then
+        write(*,"(A,3f10.3,A)") , "Time taken for coupling scheme  finished in (min/mean/max): ", tot_time, " seconds"
+    endif
+
     
     ! ================================= CONSTRUCT PROJECTION RHS =======================================
     !> enter gathered rhs into jorek_feedback
@@ -420,9 +432,12 @@ contains
 
 #ifdef GPU_DEBUG
   do ip = 1, min(3, np)
-    write(*,'(A,I0,A,I0,A,3F20.13)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', part_x(3*(ip-1)+1), part_x(3*(ip-1)+2), part_x(3*(ip-1)+3)
-    write(*,'(A,I0,A,I0,A,3F20.13)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') p = ', part_p(3*(ip-1)+1), part_p(3*(ip-1)+2), part_p(3*(ip-1)+3)
-    write(*,'(A,I0,A,I0,A,2F20.13)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') st = ', part_st(2*(ip-1)+1), part_st(2*(ip-1)+2)
+    write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', &
+        part_x(3*(ip-1)+1), part_x(3*(ip-1)+2), part_x(3*(ip-1)+3)
+    write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') p = ', &
+        part_p(3*(ip-1)+1), part_p(3*(ip-1)+2), part_p(3*(ip-1)+3)
+    write(*,'(A,I0,A,I0,A,2ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') st = ', &
+        part_st(2*(ip-1)+1), part_st(2*(ip-1)+2)
     write(*,'(A,I0,A,I0)') '[GPU_DEBUG Fortran] Particle(', ip, ') i_elm = ', part_ielm(ip)
   end do
 #endif
