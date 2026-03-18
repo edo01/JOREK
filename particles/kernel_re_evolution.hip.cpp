@@ -978,6 +978,10 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     sincosperiod_moivre(phi, HZ, dHZ);
 
     int ie = i_elm_f - 1;
+#ifdef GPU_DEBUG
+    printf("[GPU_DEBUG calc_EBpsiU INPUT] i_elm=%d st=[%.17e,%.17e] phi=%.17e time=%.17e time_now=%.17e time_prev=%.17e F0=%.17e t_norm=%.17e\n",
+           i_elm_f, st[0], st[1], phi, time, time_now, time_prev, F0, t_norm);
+#endif
 
     double P[2] = {0.0, 0.0};
     double P_s[2] = {0.0, 0.0};
@@ -1110,6 +1114,11 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     E[0] -= E[0] * B[0] / Bnorm;
     E[1] -= E[1] * B[1] / Bnorm;
     E[2] -= E[2] * B[2] / Bnorm;
+
+#ifdef GPU_DEBUG
+    printf("[GPU_DEBUG calc_EBpsiU OUTPUT] psi=%.17e U=%.17e E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
+           psi, U, E[0], E[1], E[2], B[0], B[1], B[2]);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1474,7 +1483,7 @@ void evolve_REs_kernel(
         //                        j, k, my_id);
 #ifdef GPU_DEBUG
         if (ifail != 0) {
-            printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.4g,%.4g,%.4g]\n",
+            printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.17e,%.17e,%.17e]\n",
                    j, k, ifail, i_elm, x[0], x[1], x[2]);
         }
 #endif
@@ -1624,14 +1633,14 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #ifdef GPU_DEBUG
     fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: alive=%d num=%d n_el=%d n_nodes=%d n_var=%d\n",
             alive_count, num_particles, n_elements, n_nodes, n_var);
-    fprintf(stderr, "[GPU_DEBUG host]   sim_time=%.6g  tstep=%.6g  nstep=%d\n",
+    fprintf(stderr, "[GPU_DEBUG host]   sim_time=%.17e  tstep=%.17e  nstep=%d\n",
             sim_time, tstep_part_adj, nstep_particles);
     fprintf(stderr, "[GPU_DEBUG host]   P_par=%d P_perp=%d j_phi=%d (0-based)\n",
             P_par_idx, P_perp_idx, j_phi_idx);
     fprintf(stderr, "[GPU_DEBUG host]   feedback: %zu bytes  grid=%d  block=%d\n",
             sz_feedback, grid_size, BLOCK_SIZE);
     if (alive_count > 0) {
-        fprintf(stderr, "[GPU_DEBUG host]   p[0]: i_elm=%d x=[%.4g,%.4g,%.4g] p=[%.4g,%.4g,%.4g] w=%.4g\n",
+        fprintf(stderr, "[GPU_DEBUG host]   p[0]: i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] w=%.17e\n",
                 part->i_elm[0], part->x[0], part->x[1], part->x[2],
                 part->p[0],     part->p[1], part->p[2], part->weight[0]);
     }
