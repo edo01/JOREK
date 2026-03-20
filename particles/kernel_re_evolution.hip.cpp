@@ -56,14 +56,23 @@ __device__ __forceinline__
 int idx4(int i0, int i1, int i2, int i3, int d0, int d1, int d2)
 { return i0 + d0 * (i1 + d1 * (i2 + d2 * i3)); }
 
+int idx4_host(int i0, int i1, int i2, int i3, int d0, int d1, int d2)
+{ return i0 + d0 * (i1 + d1 * (i2 + d2 * i3)); }
+
+
 __device__ __forceinline__
 int idx5(int i0, int i1, int i2, int i3, int i4,
          int d0, int d1, int d2, int d3)
 { return i0 + d0 * (i1 + d1 * (i2 + d2 * (i3 + d3 * i4))); }
 
+
+int idx5_host(int i0, int i1, int i2, int i3, int i4,
+         int d0, int d1, int d2, int d3)
+{ return i0 + d0 * (i1 + d1 * (i2 + d2 * (i3 + d3 * i4))); }
+
 __device__ __forceinline__
 bool rz_dbg_enabled(int debug_j, int debug_k)
-{ return (debug_j >= 0 && debug_j < 3 && debug_k == 0); }
+{ return (debug_j >= 0 && debug_j < 3 && debug_k == 100000); }
 
 // ---------------------------------------------------------------------------
 // HIP error check macro
@@ -969,7 +978,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  double F0, double t_norm,
                  int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
                  double time,
-                 double E[3], double B[3], double &psi, double &U)
+                 double E[3], double B[3], double &psi, double &U,
+                 int debug_j, int debug_k)
 {
     double HT[NDEG * NV], HT_s[NDEG * NV], HT_t[NDEG * NV];
     basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
@@ -979,8 +989,9 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 
     int ie = i_elm_f - 1;
 #ifdef GPU_DEBUG
-    printf("[GPU_DEBUG calc_EBpsiU INPUT] i_elm=%d st=[%.17e,%.17e] phi=%.17e time=%.17e time_now=%.17e time_prev=%.17e F0=%.17e t_norm=%.17e\n",
-           i_elm_f, st[0], st[1], phi, time, time_now, time_prev, F0, t_norm);
+    const bool dbg = rz_dbg_enabled(debug_j, debug_k);
+    if(dbg) printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU START: i_elm=%d st=[%.17e,%.17e] phi=%.17e time=%.17e fields%%time_now=%.17e fields%%time_prev=%.17e F0=%.17e t_norm=%.17e\n",
+           debug_j, debug_k, i_elm_f, st[0], st[1], phi, time, time_now, time_prev, F0, t_norm);
 #endif
 
     double P[2] = {0.0, 0.0};
@@ -991,7 +1002,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 
     double xR[NDEG * NV], xZ[NDEG * NV];
 
-    // Preload values and multiply with sizes(:, kv)
+    // First interpolation of values
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
     for (int kv = 0; kv < NV; ++kv) {
@@ -1029,22 +1040,58 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         }
     }
 
-    // Interpolation of differentials (linear time interpolation)
-    // It's here that we consider deltas (for differentials)
-    // The computation is essentially the same
+    // Second interpolation of differentials (deltas)   --> essentially the same loop as before
+    
+    double Pd[2] = {0.0, 0.0};
+    double Pd_s[2] = {0.0, 0.0};
+    double Pd_t[2] = {0.0, 0.0};
+    double Pd_phi[2] = {0.0, 0.0};
+    
     if (t_norm > 0.0) {
-        // Why they are computed again???
+        // TODO Why they are computed again???
         basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
         sincosperiod_moivre(phi, HZ, dHZ);
 
-        double Pd[2] = {0.0, 0.0};
-        double Pd_s[2] = {0.0, 0.0};
-        double Pd_t[2] = {0.0, 0.0};
-        double Pd_phi[2] = {0.0, 0.0};
+#ifdef GPU_DEBUG
+        if(dbg) {
+            printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS START: i_elm=%d st=[%.17e,%.17e] phi=%.17e\n",
+                   debug_j, debug_k, i_elm_f, st[0], st[1], phi);
+            printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS START): HT=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", debug_j, debug_k, i_elm_f,
+                HT[idx2(0, 0, NDEG)], HT[idx2(1, 0, NDEG)], HT[idx2(2, 0, NDEG)], HT[idx2(3, 0, NDEG)],
+                HT[idx2(0, 1, NDEG)], HT[idx2(1, 1, NDEG)], HT[idx2(2, 1, NDEG)], HT[idx2(3, 1, NDEG)],
+                HT[idx2(0, 2, NDEG)], HT[idx2(1, 2, NDEG)], HT[idx2(2, 2, NDEG)], HT[idx2(3, 2, NDEG)],
+                HT[idx2(0, 3, NDEG)], HT[idx2(1, 3, NDEG)], HT[idx2(2, 3, NDEG)], HT[idx2(3, 3, NDEG)]);
+            printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS START: sizes=[%d, %d,%d, %d, %d, %d,%d, %d, %d, %d,%d, %d, %d, %d,%d, %d]\n", debug_j, debug_k, i_elm_f,
+                el_size[idx3(ie, 0, 0, n_elements, NV)], el_size[idx3(ie, 0, 1, n_elements, NV)], el_size[idx3(ie, 0, 2, n_elements, NV)], el_size[idx3(ie, 0, 3, n_elements, NV)],
+                el_size[idx3(ie, 1, 0, n_elements, NV)], el_size[idx3(ie, 1, 1, n_elements, NV)], el_size[idx3(ie, 1, 2, n_elements, NV)], el_size[idx3(ie, 1, 3, n_elements, NV)],
+                el_size[idx3(ie, 2, 0, n_elements, NV)], el_size[idx3(ie, 2, 1, n_elements, NV)], el_size[idx3(ie, 2, 2, n_elements, NV)], el_size[idx3(ie, 2, 3, n_elements, NV)],
+                el_size[idx3(ie, 3, 0, n_elements, NV)], el_size[idx3(ie, 3, 1, n_elements, NV)], el_size[idx3(ie, 3, 2, n_elements, NV)], el_size[idx3(ie, 3, 3, n_elements, NV)]);
+        }
+#endif
 
         // Preload values and premultiply with sizes(:, kv)
         for (int kv = 0; kv < NV; ++kv) {
             int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
+
+
+#ifdef GPU_DEBUG
+    if(dbg) {
+        printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS: deltas(ivar=0, iv=%d)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", debug_j, debug_k, i_elm_f, iv,              nl_deltas[idx4(0, 0, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(0, 1, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(0, 2, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(0, 3, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(1, 0, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(1, 1, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(1, 2, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(1, 3, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(2, 0, 0, iv, N_TOR, NDEG, n_var)],
+               nl_deltas[idx4(2 , 1 , 0 , iv , N_TOR , NDEG , n_var)],
+               nl_deltas[idx4(2 , 2 , 0 , iv , N_TOR , NDEG , n_var)],
+               nl_deltas[idx4(2 , 3 , 0 , iv , N_TOR , NDEG , n_var)]);
+    }
+#endif
+
+
             for (int kf = 0; kf < NDEG; ++kf) {
                 double sz = el_size[idx3(ie, kv, kf, n_elements, NV)];
                 int ifv = idx2(kf, kv, NDEG);
@@ -1084,6 +1131,17 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         P_time[1] = Pd[1] * dt;
     }
 
+#ifdef GPU_DEBUG
+    if(dbg) {
+        printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS END: i_elm=%d R=%.17e Z=%.17e R_s=%.17e R_t=%.17e Z_s=%.17e Z_t=%.17e\n",
+               debug_j, debug_k, i_elm_f, R, Zc, R_s, R_t, Z_s, Z_t);
+        printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS END: Pd=[%.17e,%.17e] Pd_s=[%.17e,%.17e] Pd_t=[%.17e,%.17e] Pd_phi=[%.17e,%.17e]\n",
+               debug_j, debug_k, Pd[0], Pd[1], Pd_s[0], Pd_s[1], Pd_t[0], Pd_t[1], Pd_phi[0], Pd_phi[1]);
+        printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS END: P=[%.17e,%.17e] P_s=[%.17e,%.17e] P_t=[%.17e,%.17e] P_phi=[%.17e,%.17e] P_time=[%.17e,%.17e]\n",
+               debug_j, debug_k, P[0], P[1], P_s[0], P_s[1], P_t[0], P_t[1], P_phi[0], P_phi[1], P_time[0], P_time[1]);
+    }
+#endif
+
     double R_inv = 1.0 / R;
     double st_jac_inv = 1.0 / (R_s * Z_t - R_t * Z_s);
 
@@ -1116,8 +1174,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     E[2] -= E[2] * B[2] / Bnorm;
 
 #ifdef GPU_DEBUG
-    printf("[GPU_DEBUG calc_EBpsiU OUTPUT] psi=%.17e U=%.17e E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
-           psi, U, E[0], E[1], E[2], B[0], B[1], B[2]);
+    if(dbg) printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU OUTPUT: psi=%.17e U=%.17e E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
+           debug_j, debug_k, psi, U, E[0], E[1], E[2], B[0], B[1], B[2]);
 #endif
 }
 
@@ -1220,7 +1278,8 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 time_now, time_prev, flag_static, flag_zero_dpsidt,
                 F0, t_norm,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
-                E, B_field, psi_loc, U_loc);
+                E, B_field, psi_loc, U_loc,
+                debug_j, debug_k);
 #ifdef GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: E_cyl=[%.17e,%.17e,%.17e] B_cyl=[%.17e,%.17e,%.17e]\n",
@@ -1359,7 +1418,8 @@ void evolve_REs_kernel(
     int my_id)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= alive_particle_count) return;
+    // if (j >= alive_particle_count) return;
+    if(j >= 1600) return; // TODO Remove this limit after debugging
 
     // Load particle data into registers
     double x[3]  = {p_x[idx2(0, j, 3)], p_x[idx2(1, j, 3)], p_x[idx2(2, j, 3)]};
@@ -1374,8 +1434,8 @@ void evolve_REs_kernel(
                j, my_id, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1], w, charge);
         printf("[GPU_DEBUG j=%d] PARAMS: sim_time=%.17e tstep=%.17e nstep=%d group_mass=%.17e\n",
                j, sim_time, tstep_part_adj, nstep_particles, group_mass);
-        printf("[GPU_DEBUG j=%d] PARAMS: time_now=%.17e time_prev=%.17e F0=%.17e t_norm=%.17e\n",
-               j, time_now, time_prev, F0, t_norm);
+        printf("[GPU_DEBUG j=%d] PARAMS: time_now=%.17e time_prev=%.17e flag_static=%d, flag_zero_dpsidt=%d F0=%.17e t_norm=%.17e\n",
+               j, time_now, time_prev, flag_static, flag_zero_dpsidt, F0, t_norm);
         printf("[GPU_DEBUG j=%d] PARAMS: flag_static=%d flag_zero_dpsidt=%d n_el=%d n_nodes=%d n_var=%d\n",
                j, flag_static, flag_zero_dpsidt, n_elements, n_nodes, n_var);
     }
@@ -1411,7 +1471,8 @@ void evolve_REs_kernel(
                     time_now, time_prev, flag_static, flag_zero_dpsidt,
                     F0, t_norm,
                     i_elm, st, x[2], sim_time,
-                    E_loc, B_loc, psi_loc, U_loc); 
+                    E_loc, B_loc, psi_loc, U_loc,
+                    j, k); 
 
         double Bnorm = sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
         double B_hat[3] = {B_loc[0]/Bnorm, B_loc[1]/Bnorm, B_loc[2]/Bnorm};
@@ -1436,24 +1497,32 @@ void evolve_REs_kernel(
         //   index = n + NDEG*(m + NV*(ie + n_elements*(it + N_TOR*var)))  (all 0-based)
         int ie = i_elm - 1;
 #ifdef GPU_DEBUG
-        if (j < 3 && k == 0) {
-            printf("[GPU_DEBUG j=%d k=0] PROJ: cyl_mom=[%.17e,%.17e,%.17e] cyl_vel=[%.17e,%.17e,%.17e]\n",
-                   j, cyl_mom[0], cyl_mom[1], cyl_mom[2], cyl_vel[0], cyl_vel[1], cyl_vel[2]);
-            printf("[GPU_DEBUG j=%d k=0] PROJ: E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
-                   j, E_loc[0], E_loc[1], E_loc[2], B_loc[0], B_loc[1], B_loc[2]);
-            printf("[GPU_DEBUG j=%d k=0] PROJ: psi=%.17e U=%.17e Bnorm=%.17e\n",
-                   j, psi_loc, U_loc, Bnorm);
-            printf("[GPU_DEBUG j=%d k=0] PROJ: v_par=%.17e v_perp=%.17e gamma_m=%.17e\n",
-                   j, v_par, v_perp, gamma_m);
-            printf("[GPU_DEBUG j=%d k=0] PROJ: v_Ppar=%.17e v_Pperp=%.17e v_jPhi=%.17e\n",
-                   j, v_Ppar, v_Pperp, v_jPhi);
+        if (rz_dbg_enabled(j, k)) {
+            printf("[GPU_DEBUG j=%d k=%d] PROJ: cyl_mom=[%.17e,%.17e,%.17e] cyl_vel=[%.17e,%.17e,%.17e]\n",
+                   j, k, cyl_mom[0], cyl_mom[1], cyl_mom[2], cyl_vel[0], cyl_vel[1], cyl_vel[2]);
+            printf("[GPU_DEBUG j=%d k=%d] PROJ: E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
+                   j, k, E_loc[0], E_loc[1], E_loc[2], B_loc[0], B_loc[1], B_loc[2]);
+            printf("[GPU_DEBUG j=%d k=%d] PROJ: psi=%.17e U=%.17e Bnorm=%.17e\n",
+                   j, k, psi_loc, U_loc, Bnorm);
+            printf("[GPU_DEBUG j=%d k=%d] PROJ: v_par=%.17e v_perp=%.17e gamma_m=%.17e\n",
+                   j, k, v_par, v_perp, gamma_m);
+            printf("[GPU_DEBUG j=%d k=%d] PROJ: v_Ppar=%.17e v_Pperp=%.17e v_jPhi=%.17e\n",
+                   j, k, v_Ppar, v_Pperp, v_jPhi);
         }
 #endif
         for (int n = 0; n < NDEG; ++n) {
             for (int m = 0; m < NV; ++m) {
-                double proj_factor = HH[m * NDEG + n]
+                double proj_factor = HH[idx2(n, m, NDEG)]
                                    * el_size[idx3(ie, m, n, n_elements, NV)]
                                    * w;
+            
+#ifdef GPU_DEBUG
+                if (rz_dbg_enabled(j, k)) {
+                    printf("[GPU_DEBUG j=%d k=%d i_elm=%d] PROJ_FACTOR: deg=%d vert=%d HH=%.17e el_size=%.17e w=%.17e proj_factor=%.17e\n",
+                           j, k, ie+1, n+1, m+1, HH[idx2(n, m, NDEG)], el_size[idx3(ie, m, n, n_elements, NV)], w, proj_factor);
+                }
+#endif
+
                 for (int it = 0; it < N_TOR; ++it) {
                     double hz = HZ_proj[it];
 
@@ -1529,8 +1598,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const int    n_nodes        = nl.n_nodes;
     const int    n_var          = nl.n_var;
     const int    n_elements     = el.n_elements;
-    const double time_now       = sim.fields.time_now;
-    const double time_prev      = sim.fields.time_prev;
+    // const double time_now       = sim.fields.time_now;
+    const double time_now = 9.0825609089428101e-04;
+    // const double time_prev      = sim.fields.time_prev;
+    const double time_prev = 0.0;
     const int    flag_static    = sim.fields.flag_static;
     const int    flag_zero_dp   = sim.fields.flag_zero_dpsidt;
     const double F0             = sim.fields.F0;
@@ -1583,13 +1654,14 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     
     int n_devices;
-    hipGetDeviceCount(&n_devices);
+    HIP_CHECK(hipGetDeviceCount(&n_devices));
     if(sim.my_id == 0)
         printf("[launch_evolve_REs] HIP Device count: %d\n", n_devices);
-    hipSetDevice(sim.my_id % n_devices); // Ensure we are on the correct GPU before allocating memory
+    HIP_CHECK(hipSetDevice(sim.my_id % n_devices)); // Ensure we are on the correct GPU before allocating memory
     int curr_dev;
-    hipGetDevice(&curr_dev);
+    HIP_CHECK(hipGetDevice(&curr_dev));
     printf("[launch_evolve_REs] MPI process %d (global rank) using device=%d\n", sim.my_id, curr_dev);
+
 
     HIP_CHECK(hipMalloc(&d_x,       sz_x));
     HIP_CHECK(hipMalloc(&d_p,       sz_p));
@@ -1625,6 +1697,26 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     HIP_CHECK(hipMemcpy(d_feedback_rhs, h_feedback_rhs,       sz_feedback,   hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
+
+
+#ifdef GPU_DEBUG
+    if(sim.my_id == 0) {
+        int iv = 389;
+        printf("[MYDEBUG] deltas(ivar=0, iv=389)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", 
+               nl.deltas[idx4_host(0, 0, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(0, 1, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(0, 2, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(0, 3, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(1, 0, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(1, 1, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(1, 2, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(1, 3, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(2, 0, 0, iv, N_TOR, NDEG, n_var)],
+               nl.deltas[idx4_host(2 , 1 , 0 , iv , N_TOR , NDEG , n_var)],
+               nl.deltas[idx4_host(2 , 2 , 0 , iv , N_TOR , NDEG , n_var)],
+               nl.deltas[idx4_host(2 , 3 , 0 , iv , N_TOR , NDEG , n_var)]);
+    }
+#endif
 
     // --- Launch kernel ---
     constexpr int BLOCK_SIZE = 256;
@@ -1684,6 +1776,34 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(part->st,      d_st,           sz_st,       hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm,        sz_i_elm,    hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs, sz_feedback, hipMemcpyDeviceToHost));
+
+
+// #ifdef GPU_DEBUG
+//     if(sim.my_id == 0) {
+//         int ie = 389;
+//         for(int it=0 ; it<N_TOR; ++it) {
+//             printf("[MYDEBUG] feedback_rhs(ivar=0, i_eld=%d, itor=%d)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", ie+1, it+1,
+//                h_feedback_rhs[idx5_host(0, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                h_feedback_rhs[idx5_host(1, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(2, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(3, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(0, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(1, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(2, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(3, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(0, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(1, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(2, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(3, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(0, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(1, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(2, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
+//                 h_feedback_rhs[idx5_host(3, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)]
+//             );
+//         }
+//     }
+// #endif
+
 
     // --- Free device memory ---
     HIP_CHECK(hipFree(d_x));

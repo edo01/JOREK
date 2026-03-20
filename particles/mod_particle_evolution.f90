@@ -81,6 +81,7 @@ contains
 
     !> Coupling scheme specific
     integer :: imp_q_idx
+    integer :: i_tor
 
     !> ================================ INITIALISATION =======================================
     part_group => sim%groups(group_num)
@@ -156,6 +157,20 @@ contains
 
     !> rep specific projections
     if (part_group%coupling_scheme == 'rep') then
+
+#ifdef GPU_DEBUG
+      if(sim%my_id .eq. 0) then
+        do i_tor=1,3
+          write(*, '("[MYDEBUG] feedback_rhs(ivar=0, i_elm=390, itor=",I0,") = [",16ES27.17E2,"]")') i_tor, &
+            feedback_rhs(1,1,390,i_tor,1), feedback_rhs(2,1,390,i_tor,1), feedback_rhs(3,1,390,i_tor,1), feedback_rhs(4,1,390,i_tor,1), &
+            feedback_rhs(1,2,390,i_tor,1), feedback_rhs(2,2,390,i_tor,1), feedback_rhs(3,2,390,i_tor,1), feedback_rhs(4,2,390,i_tor,1), &
+            feedback_rhs(1,3,390,i_tor,1), feedback_rhs(2,3,390,i_tor,1), feedback_rhs(3,3,390,i_tor,1), feedback_rhs(4,3,390,i_tor,1), &
+            feedback_rhs(1,4,390,i_tor,1), feedback_rhs(2,4,390,i_tor,1), feedback_rhs(3,4,390,i_tor,1), feedback_rhs(4,4,390,i_tor,1)
+
+        enddo
+      endif
+#endif
+
       feedback_rhs = feedback_rhs / real(nstep_part_adj,8) 
       jorek_feedback%rhs(:,:,:,:,P_par_idx_kin)   = jorek_feedback%rhs(:,:,:,:,P_par_idx_kin)   + feedback_rhs(:,:,:,:,P_par_idx_kin)
       jorek_feedback%rhs(:,:,:,:,P_perp_idx_kin)  = jorek_feedback%rhs(:,:,:,:,P_perp_idx_kin)  + feedback_rhs(:,:,:,:,P_perp_idx_kin)
