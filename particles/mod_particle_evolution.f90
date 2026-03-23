@@ -158,18 +158,6 @@ contains
     !> rep specific projections
     if (part_group%coupling_scheme == 'rep') then
 
-#ifdef GPU_DEBUG
-      if(sim%my_id .eq. 0) then
-        do i_tor=1,3
-          write(*, '("[MYDEBUG] feedback_rhs(ivar=0, i_elm=390, itor=",I0,") = [",16ES27.17E2,"]")') i_tor, &
-            feedback_rhs(1,1,390,i_tor,1), feedback_rhs(2,1,390,i_tor,1), feedback_rhs(3,1,390,i_tor,1), feedback_rhs(4,1,390,i_tor,1), &
-            feedback_rhs(1,2,390,i_tor,1), feedback_rhs(2,2,390,i_tor,1), feedback_rhs(3,2,390,i_tor,1), feedback_rhs(4,2,390,i_tor,1), &
-            feedback_rhs(1,3,390,i_tor,1), feedback_rhs(2,3,390,i_tor,1), feedback_rhs(3,3,390,i_tor,1), feedback_rhs(4,3,390,i_tor,1), &
-            feedback_rhs(1,4,390,i_tor,1), feedback_rhs(2,4,390,i_tor,1), feedback_rhs(3,4,390,i_tor,1), feedback_rhs(4,4,390,i_tor,1)
-
-        enddo
-      endif
-#endif
 
       feedback_rhs = feedback_rhs / real(nstep_part_adj,8) 
       jorek_feedback%rhs(:,:,:,:,P_par_idx_kin)   = jorek_feedback%rhs(:,:,:,:,P_par_idx_kin)   + feedback_rhs(:,:,:,:,P_par_idx_kin)
@@ -333,14 +321,6 @@ contains
     ne = sim%fields%element_list%n_elements
     np = size(sim%groups(group_num)%particles, 1)
 
-    n_alive = 0
-    select type (p => sim%groups(group_num)%particles)
-    type is (particle_kinetic_relativistic)
-      do ip = 1, np
-        if (p(ip)%i_elm > 0) n_alive = n_alive + 1
-      end do
-    end select
-
     select type (p => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
     #ifdef GPU_DEBUG
@@ -370,6 +350,8 @@ contains
   #ifdef GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] element_list SoA built'
   #endif
+
+  n_alive = size(sim%groups(group_num)%particles,1)
 
     ! --- Build mode_coord ---
     mode_coord_c(:) = int(mode_coord(:), c_int)

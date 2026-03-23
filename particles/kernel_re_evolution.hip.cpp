@@ -1073,25 +1073,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         for (int kv = 0; kv < NV; ++kv) {
             int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
 
-
-#ifdef GPU_DEBUG
-    if(dbg) {
-        printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS: deltas(ivar=0, iv=%d)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", debug_j, debug_k, i_elm_f, iv,              nl_deltas[idx4(0, 0, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(0, 1, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(0, 2, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(0, 3, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(1, 0, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(1, 1, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(1, 2, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(1, 3, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(2, 0, 0, iv, N_TOR, NDEG, n_var)],
-               nl_deltas[idx4(2 , 1 , 0 , iv , N_TOR , NDEG , n_var)],
-               nl_deltas[idx4(2 , 2 , 0 , iv , N_TOR , NDEG , n_var)],
-               nl_deltas[idx4(2 , 3 , 0 , iv , N_TOR , NDEG , n_var)]);
-    }
-#endif
-
-
             for (int kf = 0; kf < NDEG; ++kf) {
                 double sz = el_size[idx3(ie, kv, kf, n_elements, NV)];
                 int ifv = idx2(kf, kv, NDEG);
@@ -1418,8 +1399,7 @@ void evolve_REs_kernel(
     int my_id)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
-    // if (j >= alive_particle_count) return;
-    if(j >= 1600) return; // TODO Remove this limit after debugging
+    if (j >= alive_particle_count) return;
 
     // Load particle data into registers
     double x[3]  = {p_x[idx2(0, j, 3)], p_x[idx2(1, j, 3)], p_x[idx2(2, j, 3)]};
@@ -1525,6 +1505,13 @@ void evolve_REs_kernel(
 
                 for (int it = 0; it < N_TOR; ++it) {
                     double hz = HZ_proj[it];
+
+#ifdef GPU_DEBUG
+                if (rz_dbg_enabled(j, k)) {
+                    printf("[MYDEBUG j=%d k=%d i_elm=%d] FEEDBACK UPDATE: deg=%d vert=%d itor=%d, var_idx(incr)=%d -> add_value=%.17e\n",
+                           j, k, ie+1, n+1, m+1, it+1, P_par_idx+1, hz * v_Ppar * proj_factor);
+                }
+#endif
 
                     atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_par_idx, NDEG, NV, n_elements, N_TOR)],
                               hz * v_Ppar * proj_factor);
@@ -1699,24 +1686,24 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
 
 
-#ifdef GPU_DEBUG
-    if(sim.my_id == 0) {
-        int iv = 389;
-        printf("[MYDEBUG] deltas(ivar=0, iv=389)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", 
-               nl.deltas[idx4_host(0, 0, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(0, 1, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(0, 2, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(0, 3, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(1, 0, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(1, 1, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(1, 2, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(1, 3, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(2, 0, 0, iv, N_TOR, NDEG, n_var)],
-               nl.deltas[idx4_host(2 , 1 , 0 , iv , N_TOR , NDEG , n_var)],
-               nl.deltas[idx4_host(2 , 2 , 0 , iv , N_TOR , NDEG , n_var)],
-               nl.deltas[idx4_host(2 , 3 , 0 , iv , N_TOR , NDEG , n_var)]);
-    }
-#endif
+// #ifdef GPU_DEBUG
+//     if(sim.my_id == 0) {
+//         int iv = 389;
+//         printf("[MYDEBUG] deltas(ivar=0, iv=389)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", 
+//                nl.deltas[idx4_host(0, 0, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(0, 1, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(0, 2, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(0, 3, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(1, 0, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(1, 1, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(1, 2, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(1, 3, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(2, 0, 0, iv, N_TOR, NDEG, n_var)],
+//                nl.deltas[idx4_host(2 , 1 , 0 , iv , N_TOR , NDEG , n_var)],
+//                nl.deltas[idx4_host(2 , 2 , 0 , iv , N_TOR , NDEG , n_var)],
+//                nl.deltas[idx4_host(2 , 3 , 0 , iv , N_TOR , NDEG , n_var)]);
+//     }
+// #endif
 
     // --- Launch kernel ---
     constexpr int BLOCK_SIZE = 256;
@@ -1776,34 +1763,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(part->st,      d_st,           sz_st,       hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm,        sz_i_elm,    hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs, sz_feedback, hipMemcpyDeviceToHost));
-
-
-// #ifdef GPU_DEBUG
-//     if(sim.my_id == 0) {
-//         int ie = 389;
-//         for(int it=0 ; it<N_TOR; ++it) {
-//             printf("[MYDEBUG] feedback_rhs(ivar=0, i_eld=%d, itor=%d)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", ie+1, it+1,
-//                h_feedback_rhs[idx5_host(0, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                h_feedback_rhs[idx5_host(1, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(2, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(3, 0, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(0, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(1, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(2, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(3, 1, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(0, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(1, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(2, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(3, 2, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(0, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(1, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(2, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)],
-//                 h_feedback_rhs[idx5_host(3, 3, ie, it, 0, NDEG, NV, n_elements, N_TOR)]
-//             );
-//         }
-//     }
-// #endif
-
 
     // --- Free device memory ---
     HIP_CHECK(hipFree(d_x));
