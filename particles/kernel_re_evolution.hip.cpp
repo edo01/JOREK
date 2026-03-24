@@ -1527,16 +1527,16 @@ void evolve_REs_kernel(
         // 2. Push particle (VPA)
         // ===========================================================
         int ifail = 0;
-        // volume_preserving_push(x, pm, st, i_elm, charge,
-        //                        nl_values, nl_deltas, nl_x,
-        //                        el_vertex, el_size, el_neighbours,
-        //                        n_elements, n_nodes, n_var, mode_coord,
-        //                        time_now, time_prev,
-        //                        flag_static, flag_zero_dpsidt,
-        //                        F0, t_norm,
-        //                        group_mass, sim_time, tstep_part_adj,
-        //                        ifail,
-        //                        j, k, my_id);
+        volume_preserving_push(x, pm, st, i_elm, charge,
+                               nl_values, nl_deltas, nl_x,
+                               el_vertex, el_size, el_neighbours,
+                               n_elements, n_nodes, n_var, mode_coord,
+                               time_now, time_prev,
+                               flag_static, flag_zero_dpsidt,
+                               F0, t_norm,
+                               group_mass, sim_time, tstep_part_adj,
+                               ifail,
+                               j, k, my_id);
 #ifdef GPU_DEBUG
         if (ifail != 0) {
             printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.17e,%.17e,%.17e]\n",
@@ -1684,26 +1684,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     HIP_CHECK(hipMemcpy(d_feedback_rhs, h_feedback_rhs,       sz_feedback,   hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
-
-
-// #ifdef GPU_DEBUG
-//     if(sim.my_id == 0) {
-//         int iv = 389;
-//         printf("[MYDEBUG] deltas(ivar=0, iv=389)=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", 
-//                nl.deltas[idx4_host(0, 0, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(0, 1, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(0, 2, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(0, 3, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(1, 0, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(1, 1, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(1, 2, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(1, 3, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(2, 0, 0, iv, N_TOR, NDEG, n_var)],
-//                nl.deltas[idx4_host(2 , 1 , 0 , iv , N_TOR , NDEG , n_var)],
-//                nl.deltas[idx4_host(2 , 2 , 0 , iv , N_TOR , NDEG , n_var)],
-//                nl.deltas[idx4_host(2 , 3 , 0 , iv , N_TOR , NDEG , n_var)]);
-//     }
-// #endif
 
     // --- Launch kernel ---
     constexpr int BLOCK_SIZE = 256;
