@@ -167,19 +167,14 @@ module mod_particle_types
   type, bind(C) :: particle_group_c
     real(c_double) :: mass                  !< species mass in AMU
     real(c_double) :: charge                !< charge number (e.g. -1.0 for electrons)
-    real(c_double) :: percentage_on_gpu     !< fraction of particles handled on GPU
     integer(c_int) :: num_particles         !< total number of particles allocated
     integer(c_int) :: alive_particle_count  !< number of active (non-lost) particles
-    integer(c_int) :: P_par_idx             !< 1-based index into feedback_rhs for P_parallel
-    integer(c_int) :: P_perp_idx            !< 1-based index for P_perpendicular
-    integer(c_int) :: j_phi_idx             !< 1-based index for j_phi current
     type(particle_SoA_kinetic_relativistic_c) :: particles !< SoA particle data
   end type particle_group_c
 
   !> Node list in SoA layout for GPU (bind(C))
   type, bind(C) :: node_list_SoA_c
     integer(c_int) :: n_nodes  !< total number of nodes
-    integer(c_int) :: n_var    !< number of fluid variables per node
     type(c_ptr)    :: x        = c_null_ptr !< (n_coord_tor, n_degrees, n_dim, n_nodes)
     type(c_ptr)    :: values   = c_null_ptr !< (n_tor, n_degrees, n_var, n_nodes)
     type(c_ptr)    :: deltas   = c_null_ptr !< (n_tor, n_degrees, n_var, n_nodes)
@@ -213,7 +208,6 @@ module mod_particle_types
     real(c_double) :: sim_time
     integer(c_int) :: my_id
     integer(c_int) :: n_mpi
-    integer(c_int) :: gpu_id
   end type particle_sim_c
 
 #endif /* USE_GPU */
@@ -1230,22 +1224,20 @@ end subroutine deallocate_particle_arrays
     type(type_node_list), intent(in), target :: node_list
     type(node_list_SoA_c), intent(out) :: nl_soa
     real(c_double), allocatable, intent(out), target :: x_flat(:), val_flat(:), del_flat(:)
-    integer :: i, nn, nv_node
+    integer :: i, nn
     integer :: idx, kc, kf, kd, kt
 
     nn = node_list%n_nodes
-    nv_node = size(node_list%node(1)%values, 3)  ! n_var
 
     nl_soa%n_nodes = int(nn, c_int)
-    nl_soa%n_var   = int(nv_node, c_int)
 
     ! Allocate flat arrays in the same order as the C code expects:
     !   x:      (n_coord_tor, n_degrees, n_dim, n_nodes)
     !   values: (n_tor, n_degrees, n_var, n_nodes)
     !   deltas: (n_tor, n_degrees, n_var, n_nodes)
     allocate(x_flat(n_coord_tor * n_degrees * n_dim * nn))
-    allocate(val_flat(n_tor * n_degrees * nv_node * nn))
-    allocate(del_flat(n_tor * n_degrees * nv_node * nn))
+    allocate(val_flat(n_tor * n_degrees * 3 * nn))
+    allocate(del_flat(n_tor * n_degrees * 3 * nn))
 
     ! Copy node coordinates: node(i)%x(kc, kf, kd)
     ! C layout: x_flat[ kc + n_coord_tor * (kf + n_degrees * (kd + n_dim * (i-1))) ]
@@ -1265,12 +1257,12 @@ end subroutine deallocate_particle_arrays
 
     ! Copy values: node(i)%values(kt, kf, kv)
     ! C layout: val_flat[ kt + n_tor * (kf + n_degrees * (kv + n_var * (i-1))) ]
-    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn, nv_node) private(i, kt, kf, kd, idx) collapse(2)
+    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
     do i = 1, nn
-      do kd = 1, nv_node
+      do kd = 1, 3
         do kf = 1, n_degrees
           do kt = 1, n_tor
-            idx = kt + n_tor * ((kf-1) + n_degrees * ((kd-1) + nv_node * (i-1)))
+            idx = kt + n_tor * ((kf-1) + n_degrees * ((kd-1) + 3 * (i-1)))
             val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
             del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
           end do

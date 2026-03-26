@@ -31,6 +31,11 @@ static constexpr int NDEG     = n_degrees;
 static constexpr int NDIM     = n_dim;
 static constexpr int NMODE    = (N_TOR - 1) / 2;
 
+static constexpr int NVAR = 3;
+static constexpr int P_PAR_IDX = 0;
+static constexpr int P_PERP_IDX = 1;
+static constexpr int J_PHI_IDX = 2;
+
 // ---------------------------------------------------------------------------
 // Physical constants (matching jorek/models/constants.f90)
 // ---------------------------------------------------------------------------
@@ -107,12 +112,8 @@ struct particle_SoA_kinetic_relativistic {
 struct particle_group {
     double mass;                 // species mass in AMU
     double charge;               // charge number (e.g. -1.0 for electrons)
-    double percentage_on_gpu;    // fraction of particles handled on GPU
     int    num_particles;        // total number of particles allocated
     int    alive_particle_count; // number of active (non-lost) particles
-    int    P_par_idx;            // 1-based index into feedback_rhs for P_parallel
-    int    P_perp_idx;           // 1-based index for P_perpendicular
-    int    j_phi_idx;            // 1-based index for j_phi current
     particle_SoA_kinetic_relativistic particles; // pointer to SoA data
 };
 
@@ -120,10 +121,9 @@ struct particle_group {
 // Fortran: type node_list_SoA
 struct node_list_SoA {
     int     n_nodes;   // total number of nodes
-    int     n_var;     // number of fluid variables per node
     double* x;         // (N_COORD_TOR, NDEG, NDIM, n_nodes) grid coordinates
-    double* values;    // (N_TOR, NDEG, n_var, n_nodes) field values at current time
-    double* deltas;    // (N_TOR, NDEG, n_var, n_nodes) field increments (for time interp)
+    double* values;    // (N_TOR, NDEG, NVAR, n_nodes) field values at current time
+    double* deltas;    // (N_TOR, NDEG, NVAR, n_nodes) field increments (for time interp)
 };
 
 // Element list in Structure-of-Arrays layout.
@@ -155,7 +155,7 @@ struct particle_sim {
     jorek_fields_interp_linear fields;  // interpolated field data
     particle_group             group;   // particle group data
     double sim_time;                    // current simulation time
-    int    my_id, n_mpi, gpu_id;        // MPI/GPU identifiers
+    int    my_id, n_mpi;        // MPI identifiers
 };
 
 // ===========================================================================================
@@ -972,7 +972,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  const double* __restrict__ nl_x,
                  const int*    __restrict__ el_vertex,
                  const double* __restrict__ el_size,
-                 int n_elements, int n_nodes, int n_var,
+                 int n_elements, int n_nodes,
                  double time_now, double time_prev,
                  int flag_static, int flag_zero_dpsidt,
                  double F0, double t_norm,
@@ -1019,7 +1019,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             for (int ivar = 0; ivar < 2; ++ivar) {      
                 double v = 0.0, vp = 0.0;
                 for (int it = 0; it < N_TOR; ++it) {
-                    double val = nl_values[idx4(it, kf, ivar, iv, N_TOR, NDEG, n_var)] * sz;
+                    double val = nl_values[idx4(it, kf, ivar, iv, N_TOR, NDEG, NVAR)] * sz;
                     v  += val * HZ[it];         // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
                     vp += val * dHZ[it];        // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                 }
@@ -1083,7 +1083,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 for (int ivar = 0; ivar < 2; ++ivar) {
                     double v = 0.0, vp = 0.0;
                     for (int it = 0; it < N_TOR; ++it) {
-                        double d = nl_deltas[idx4(it, kf, ivar, iv, N_TOR, NDEG, n_var)] * sz;
+                        double d = nl_deltas[idx4(it, kf, ivar, iv, N_TOR, NDEG, NVAR)] * sz;
                         v  += d * HZ[it];       // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
                         vp += d * dHZ[it];      // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                     }
@@ -1173,7 +1173,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             const int*    __restrict__ el_vertex,
                             const double* __restrict__ el_size,
                             const int*    __restrict__ el_neighbours,
-                            int n_elements, int n_nodes, int n_var,
+                            int n_elements, int n_nodes,
                             const int*    __restrict__ mode_coord,
                             double time_now, double time_prev,
                             int flag_static, int flag_zero_dpsidt,
@@ -1255,7 +1255,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     // --- Compute E, B at half-step ---
     double E[3], B_field[3], psi_loc, U_loc;
     calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
-                n_elements, n_nodes, n_var,
+                n_elements, n_nodes,
                 time_now, time_prev, flag_static, flag_zero_dpsidt,
                 F0, t_norm,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
@@ -1373,10 +1373,10 @@ void evolve_REs_kernel(
     const double* __restrict__ p_weight, // (num_particles)
     double charge,                       // group charge number (uniform per group)
     // Field node list SoA
-    const double* __restrict__ nl_values, // (N_TOR, NDEG, n_var, n_nodes)
+    const double* __restrict__ nl_values, // (N_TOR, NDEG, NVAR, n_nodes)
     const double* __restrict__ nl_deltas,
     const double* __restrict__ nl_x,      // (N_COORD_TOR, NDEG, NDIM, n_nodes)
-    int n_nodes, int n_var,
+    int n_nodes,
     // Field element list SoA
     const int*    __restrict__ el_vertex,     // (n_elements, NV)
     const int*    __restrict__ el_neighbours, // (n_elements, NV)
@@ -1390,10 +1390,8 @@ void evolve_REs_kernel(
     // Simulation parameters
     double sim_time, double group_mass, double tstep_part_adj,
     int nstep_particles, int alive_particle_count,
-    // Coupling indices (0-based for C)
-    int P_par_idx, int P_perp_idx, int j_phi_idx,
     // Feedback RHS (atomically updated)
-    double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, n_var) = Fortran layout
+    double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, NVAR) = Fortran layout
     // mode_coord for interp_RZP_1_gpu
     const int* __restrict__ mode_coord,
     int my_id)
@@ -1416,8 +1414,8 @@ void evolve_REs_kernel(
                j, sim_time, tstep_part_adj, nstep_particles, group_mass);
         printf("[GPU_DEBUG j=%d] PARAMS: time_now=%.17e time_prev=%.17e flag_static=%d, flag_zero_dpsidt=%d F0=%.17e t_norm=%.17e\n",
                j, time_now, time_prev, flag_static, flag_zero_dpsidt, F0, t_norm);
-        printf("[GPU_DEBUG j=%d] PARAMS: flag_static=%d flag_zero_dpsidt=%d n_el=%d n_nodes=%d n_var=%d\n",
-               j, flag_static, flag_zero_dpsidt, n_elements, n_nodes, n_var);
+        printf("[GPU_DEBUG j=%d] PARAMS: flag_static=%d flag_zero_dpsidt=%d n_el=%d n_nodes=%d NVAR=%d\n",
+               j, flag_static, flag_zero_dpsidt, n_elements, n_nodes, NVAR);
     }
 #endif
 
@@ -1447,7 +1445,7 @@ void evolve_REs_kernel(
         // Compute E, B at current position
         double E_loc[3], B_loc[3], psi_loc, U_loc;
         calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
-                    n_elements, n_nodes, n_var,
+                    n_elements, n_nodes,
                     time_now, time_prev, flag_static, flag_zero_dpsidt,
                     F0, t_norm,
                     i_elm, st, x[2], sim_time,
@@ -1473,7 +1471,7 @@ void evolve_REs_kernel(
 
         // Accumulate to feedback_rhs with atomicAdd.
         // Layout (column-major, same order as Fortran feedback_rhs):
-        //   (NDEG, NV, n_elements, N_TOR, n_var)
+        //   (NDEG, NV, n_elements, N_TOR, NVAR)
         //   index = n + NDEG*(m + NV*(ie + n_elements*(it + N_TOR*var)))  (all 0-based)
         int ie = i_elm - 1;
 #ifdef GPU_DEBUG
@@ -1509,15 +1507,15 @@ void evolve_REs_kernel(
 #ifdef GPU_DEBUG
                 if (rz_dbg_enabled(j, k)) {
                     printf("[MYDEBUG j=%d k=%d i_elm=%d] FEEDBACK UPDATE: deg=%d vert=%d itor=%d, var_idx(incr)=%d -> add_value=%.17e\n",
-                           j, k, ie+1, n+1, m+1, it+1, P_par_idx+1, hz * v_Ppar * proj_factor);
+                           j, k, ie+1, n+1, m+1, it+1, P_PAR_IDX+1, hz * v_Ppar * proj_factor);
                 }
 #endif
 
-                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_par_idx, NDEG, NV, n_elements, N_TOR)],
+                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_PAR_IDX, NDEG, NV, n_elements, N_TOR)],
                               hz * v_Ppar * proj_factor);
-                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_perp_idx, NDEG, NV, n_elements, N_TOR)],
+                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_PERP_IDX, NDEG, NV, n_elements, N_TOR)],
                               hz * v_Pperp * proj_factor);
-                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, j_phi_idx, NDEG, NV, n_elements, N_TOR)],
+                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, J_PHI_IDX, NDEG, NV, n_elements, N_TOR)],
                               hz * v_jPhi * proj_factor);
                 }
             }
@@ -1530,7 +1528,7 @@ void evolve_REs_kernel(
         volume_preserving_push(x, pm, st, i_elm, charge,
                                nl_values, nl_deltas, nl_x,
                                el_vertex, el_size, el_neighbours,
-                               n_elements, n_nodes, n_var, mode_coord,
+                               n_elements, n_nodes, mode_coord,
                                time_now, time_prev,
                                flag_static, flag_zero_dpsidt,
                                F0, t_norm,
@@ -1583,7 +1581,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const node_list_SoA&    nl  = sim.fields.node_list;
     const element_list_SoA& el  = sim.fields.element_list;
     const int    n_nodes        = nl.n_nodes;
-    const int    n_var          = nl.n_var;
     const int    n_elements     = el.n_elements;
     // const double time_now       = sim.fields.time_now;
     const double time_now = 9.0825609089428101e-04;
@@ -1601,10 +1598,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // const int    alive_count    = 2; // TODO: debug, togli
     const double group_mass     = grp.mass;
     const double charge         = grp.charge;
-    // Convert 1-based Fortran coupling indices to 0-based
-    const int    P_par_idx      = grp.P_par_idx  - 1;
-    const int    P_perp_idx     = grp.P_perp_idx - 1;
-    const int    j_phi_idx      = grp.j_phi_idx  - 1;
 
     const particle_SoA_kinetic_relativistic* part = &grp.particles;
 
@@ -1620,14 +1613,14 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_weight  = num_particles * sizeof(double);
 
     const size_t sz_nl_x      = (size_t)N_COORD_TOR * NDEG * NDIM * n_nodes * sizeof(double);
-    const size_t sz_nl_values = (size_t)N_TOR  * NDEG * n_var * n_nodes * sizeof(double);
-    const size_t sz_nl_deltas = (size_t)N_TOR  * NDEG * n_var * n_nodes * sizeof(double);
+    const size_t sz_nl_values = (size_t)N_TOR  * NDEG * NVAR * n_nodes * sizeof(double);
+    const size_t sz_nl_deltas = (size_t)N_TOR  * NDEG * NVAR * n_nodes * sizeof(double);
 
     const size_t sz_el_vertex = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_neigh  = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_size   = (size_t)n_elements * NV   * NDEG * sizeof(double);
 
-    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * n_var * sizeof(double);
+    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
 
     // --- Allocate device memory ---
@@ -1690,12 +1683,12 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int grid_size = (alive_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
 #ifdef GPU_DEBUG
-    fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: alive=%d num=%d n_el=%d n_nodes=%d n_var=%d\n",
-            alive_count, num_particles, n_elements, n_nodes, n_var);
+    fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: alive=%d num=%d n_el=%d n_nodes=%d NVAR=%d\n",
+            alive_count, num_particles, n_elements, n_nodes, NVAR);
     fprintf(stderr, "[GPU_DEBUG host]   sim_time=%.17e  tstep=%.17e  nstep=%d\n",
             sim_time, tstep_part_adj, nstep_particles);
     fprintf(stderr, "[GPU_DEBUG host]   P_par=%d P_perp=%d j_phi=%d (0-based)\n",
-            P_par_idx, P_perp_idx, j_phi_idx);
+            P_PAR_IDX, P_PERP_IDX, J_PHI_IDX);
     fprintf(stderr, "[GPU_DEBUG host]   feedback: %zu bytes  grid=%d  block=%d\n",
             sz_feedback, grid_size, BLOCK_SIZE);
     if (alive_count > 0) {
@@ -1710,7 +1703,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         // Particle SoA
         d_x, d_p, d_st, d_i_elm, d_weight, charge,
         // Field node list SoA
-        d_nl_values, d_nl_deltas, d_nl_x, n_nodes, n_var,
+        d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
         // Field element list SoA
         d_el_vertex, d_el_neighbours, d_el_size, n_elements,
         // Field time parameters
@@ -1720,8 +1713,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         // Simulation parameters
         sim_time, group_mass, tstep_part_adj,
         nstep_particles, alive_count,
-        // Coupling indices (0-based)
-        P_par_idx, P_perp_idx, j_phi_idx,
         // Feedback RHS
         d_feedback_rhs,
         // mode_coord

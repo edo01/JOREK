@@ -389,19 +389,14 @@ contains
     type is (particle_kinetic_relativistic)
       sim_c%group%charge = real(p(1)%q, c_double)
     end select
-    sim_c%group%percentage_on_gpu    = 1.0_c_double
     sim_c%group%num_particles        = int(np, c_int)
     sim_c%group%alive_particle_count = int(n_alive, c_int)
-    sim_c%group%P_par_idx            = int(P_par_idx_kin, c_int)
-    sim_c%group%P_perp_idx           = int(P_perp_idx_kin, c_int)
-    sim_c%group%j_phi_idx            = int(j_Phi_idx_kin, c_int)
     sim_c%group%particles            = part_soa
 
     ! --- Build particle_sim_c ---
     sim_c%sim_time = sim%time
     sim_c%my_id    = int(sim%my_id, c_int)
     sim_c%n_mpi    = int(sim%n_mpi, c_int)
-    sim_c%gpu_id   = 0_c_int
 
     ! --- Allocate feedback buffer matching Fortran column-major layout ---
     ! feedback_rhs starts at zero for 'rep', so initialising fb_c to zero is correct.
