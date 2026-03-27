@@ -113,7 +113,6 @@ struct particle_group {
     double mass;                 // species mass in AMU
     double charge;               // charge number (e.g. -1.0 for electrons)
     int    num_particles;        // total number of particles allocated
-    int    alive_particle_count; // number of active (non-lost) particles
     particle_SoA_kinetic_relativistic particles; // pointer to SoA data
 };
 
@@ -155,7 +154,7 @@ struct particle_sim {
     jorek_fields_interp_linear fields;  // interpolated field data
     particle_group             group;   // particle group data
     double sim_time;                    // current simulation time
-    int    my_id, n_mpi;        // MPI identifiers
+    int    my_id, n_mpi;                // MPI identifiers
 };
 
 // ===========================================================================================
@@ -1388,8 +1387,8 @@ void evolve_REs_kernel(
     // Physics parameters
     double F0, double t_norm,
     // Simulation parameters
-    double sim_time, double group_mass, double tstep_part_adj,
-    int nstep_particles, int alive_particle_count,
+    double sim_time, double group_mass, double tstep_part_adj, 
+    int nstep_particles, int num_particles,
     // Feedback RHS (atomically updated)
     double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, NVAR) = Fortran layout
     // mode_coord for interp_RZP_1_gpu
@@ -1397,7 +1396,7 @@ void evolve_REs_kernel(
     int my_id)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= alive_particle_count) return;
+    if (j >= num_particles) return;
 
     // Load particle data into registers
     double x[3]  = {p_x[idx2(0, j, 3)], p_x[idx2(1, j, 3)], p_x[idx2(2, j, 3)]};
@@ -1594,8 +1593,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // Group
     const particle_group& grp   = sim.group;
     const int    num_particles  = grp.num_particles;
-    const int    alive_count    = grp.alive_particle_count;
-    // const int    alive_count    = 2; // TODO: debug, togli
     const double group_mass     = grp.mass;
     const double charge         = grp.charge;
 
@@ -1680,18 +1677,18 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     // --- Launch kernel ---
     constexpr int BLOCK_SIZE = 256;
-    int grid_size = (alive_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
 #ifdef GPU_DEBUG
-    fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: alive=%d num=%d n_el=%d n_nodes=%d NVAR=%d\n",
-            alive_count, num_particles, n_elements, n_nodes, NVAR);
+    fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: num=%d n_el=%d n_nodes=%d NVAR=%d\n",
+            num_particles, n_elements, n_nodes, NVAR);
     fprintf(stderr, "[GPU_DEBUG host]   sim_time=%.17e  tstep=%.17e  nstep=%d\n",
             sim_time, tstep_part_adj, nstep_particles);
     fprintf(stderr, "[GPU_DEBUG host]   P_par=%d P_perp=%d j_phi=%d (0-based)\n",
             P_PAR_IDX, P_PERP_IDX, J_PHI_IDX);
     fprintf(stderr, "[GPU_DEBUG host]   feedback: %zu bytes  grid=%d  block=%d\n",
             sz_feedback, grid_size, BLOCK_SIZE);
-    if (alive_count > 0) {
+    if (num_particles > 0) {
         fprintf(stderr, "[GPU_DEBUG host]   p[0]: i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] w=%.17e\n",
                 part->i_elm[0], part->x[0], part->x[1], part->x[2],
                 part->p[0],     part->p[1], part->p[2], part->weight[0]);
@@ -1712,7 +1709,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         F0, t_norm,
         // Simulation parameters
         sim_time, group_mass, tstep_part_adj,
-        nstep_particles, alive_count,
+        nstep_particles, num_particles,
         // Feedback RHS
         d_feedback_rhs,
         // mode_coord

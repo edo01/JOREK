@@ -351,8 +351,6 @@ contains
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] element_list SoA built'
   #endif
 
-  n_alive = size(sim%groups(group_num)%particles,1)
-
     ! --- Build mode_coord ---
     mode_coord_c(:) = int(mode_coord(:), c_int)
 
@@ -390,7 +388,6 @@ contains
       sim_c%group%charge = real(p(1)%q, c_double)
     end select
     sim_c%group%num_particles        = int(np, c_int)
-    sim_c%group%alive_particle_count = int(n_alive, c_int)
     sim_c%group%particles            = part_soa
 
     ! --- Build particle_sim_c ---
@@ -408,8 +405,14 @@ contains
 
     ! --- Call GPU kernel ---
 #ifdef GPU_DEBUG
+    do ip=1, np
+      if (particles(ip)%i_elm .gt. 0) then
+          n_alive = n_alive + 1
+      end if
+    end do
     write(*,'(A,I0,A,I0,A,I0,A,I0,A,I0)') &
-        '[GPU_DEBUG Fortran j=', sim%my_id, '] np=', np, '  alive=', n_alive, '(lost: ', np-n_alive, '), ne=', ne
+        '[GPU_DEBUG Fortran j=', sim%my_id, '] np=', np, '(lost: ', np-n_alive, '), ne=', ne
+    
     if (sim%my_id == 0) then
       write(*,'(A,ES14.6,A,ES14.6,A,I0)') &
         '[GPU_DEBUG Fortran] tstep=', tstep_part_adj, '  t=', sim%time, '  n_tor=', n_tor
@@ -423,15 +426,15 @@ contains
     if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
 
 #ifdef GPU_DEBUG
-  do ip = 1, min(3, np)
-    write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', &
-        part_x(3*(ip-1)+1), part_x(3*(ip-1)+2), part_x(3*(ip-1)+3)
-    write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') p = ', &
-        part_p(3*(ip-1)+1), part_p(3*(ip-1)+2), part_p(3*(ip-1)+3)
-    write(*,'(A,I0,A,I0,A,2ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') st = ', &
-        part_st(2*(ip-1)+1), part_st(2*(ip-1)+2)
-    write(*,'(A,I0,A,I0)') '[GPU_DEBUG Fortran] Particle(', ip, ') i_elm = ', part_ielm(ip)
-  end do
+    do ip = 1, min(3, np)
+      write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', &
+          part_x(3*(ip-1)+1), part_x(3*(ip-1)+2), part_x(3*(ip-1)+3)
+      write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') p = ', &
+          part_p(3*(ip-1)+1), part_p(3*(ip-1)+2), part_p(3*(ip-1)+3)
+      write(*,'(A,I0,A,I0,A,2ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') st = ', &
+          part_st(2*(ip-1)+1), part_st(2*(ip-1)+2)
+      write(*,'(A,I0,A,I0)') '[GPU_DEBUG Fortran] Particle(', ip, ') i_elm = ', part_ielm(ip)
+    end do
 #endif
 
 #ifdef GPU_DEBUG

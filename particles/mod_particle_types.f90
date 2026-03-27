@@ -168,7 +168,6 @@ module mod_particle_types
     real(c_double) :: mass                  !< species mass in AMU
     real(c_double) :: charge                !< charge number (e.g. -1.0 for electrons)
     integer(c_int) :: num_particles         !< total number of particles allocated
-    integer(c_int) :: alive_particle_count  !< number of active (non-lost) particles
     type(particle_SoA_kinetic_relativistic_c) :: particles !< SoA particle data
   end type particle_group_c
 
