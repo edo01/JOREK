@@ -154,9 +154,9 @@ module mod_particle_types
 
   !> SoA particle data for relativistic kinetic particles (bind(C))
   type, bind(C) :: particle_SoA_kinetic_relativistic_c
-    type(c_ptr) :: x       = c_null_ptr !< (3, num_particles) position (R, Z, phi)
-    type(c_ptr) :: p       = c_null_ptr !< (3, num_particles) momentum (Cartesian)
-    type(c_ptr) :: st      = c_null_ptr !< (2, num_particles) element-local coords
+    type(c_ptr) :: x       = c_null_ptr !< (num_particles, 3) position (R, Z, phi)
+    type(c_ptr) :: p       = c_null_ptr !< (num_particles, 3) momentum (Cartesian)
+    type(c_ptr) :: st      = c_null_ptr !< (num_particles, 2) element-local coords
     type(c_ptr) :: weight  = c_null_ptr !< (num_particles)    macro-particle weight
     type(c_ptr) :: i_elm   = c_null_ptr !< (num_particles)    element index (C_INT)
     type(c_ptr) :: i_life  = c_null_ptr !< (num_particles)    life-step counter (C_INT)
@@ -174,9 +174,9 @@ module mod_particle_types
   !> Node list in SoA layout for GPU (bind(C))
   type, bind(C) :: node_list_SoA_c
     integer(c_int) :: n_nodes  !< total number of nodes
-    type(c_ptr)    :: x        = c_null_ptr !< (n_coord_tor, n_degrees, n_dim, n_nodes)
-    type(c_ptr)    :: values   = c_null_ptr !< (n_tor, n_degrees, n_var, n_nodes)
-    type(c_ptr)    :: deltas   = c_null_ptr !< (n_tor, n_degrees, n_var, n_nodes)
+    type(c_ptr)    :: x        = c_null_ptr !< (n_nodes, n_coord_tor, n_degrees, n_dim)
+    type(c_ptr)    :: values   = c_null_ptr !< (n_nodes, n_tor, n_degrees, n_var)
+    type(c_ptr)    :: deltas   = c_null_ptr !< (n_nodes, n_tor, n_degrees, n_var)
   end type node_list_SoA_c
 
   !> Element list in SoA layout for GPU (bind(C))
@@ -1140,14 +1140,14 @@ end subroutine deallocate_particle_arrays
 
     !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr) private(j)
     do j = 1, np
-      x_arr(1 + 3*(j-1))  = particles(j)%x(1)
-      x_arr(2 + 3*(j-1))  = particles(j)%x(2)
-      x_arr(3 + 3*(j-1))  = particles(j)%x(3)
-      p_arr(1 + 3*(j-1))  = particles(j)%p(1)
-      p_arr(2 + 3*(j-1))  = particles(j)%p(2)
-      p_arr(3 + 3*(j-1))  = particles(j)%p(3)
-      st_arr(1 + 2*(j-1)) = particles(j)%st(1)
-      st_arr(2 + 2*(j-1)) = particles(j)%st(2)
+      x_arr(j)        = particles(j)%x(1)
+      x_arr(j + np)   = particles(j)%x(2)
+      x_arr(j + 2*np) = particles(j)%x(3)
+      p_arr(j)        = particles(j)%p(1)
+      p_arr(j + np)   = particles(j)%p(2)
+      p_arr(j + 2*np) = particles(j)%p(3)
+      st_arr(j)       = particles(j)%st(1)
+      st_arr(j + np)  = particles(j)%st(2)
       w_arr(j)             = particles(j)%weight
       ielm_arr(j)          = int(particles(j)%i_elm, c_int)
       ilife_arr(j)         = int(particles(j)%i_life, c_int)
@@ -1183,14 +1183,14 @@ end subroutine deallocate_particle_arrays
 
     !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, ielm_arr) private(j)
     do j = 1, np
-      particles(j)%x(1)  = x_arr(1 + 3*(j-1))
-      particles(j)%x(2)  = x_arr(2 + 3*(j-1))
-      particles(j)%x(3)  = x_arr(3 + 3*(j-1))
-      particles(j)%p(1)  = p_arr(1 + 3*(j-1))
-      particles(j)%p(2)  = p_arr(2 + 3*(j-1))
-      particles(j)%p(3)  = p_arr(3 + 3*(j-1))
-      particles(j)%st(1) = st_arr(1 + 2*(j-1))
-      particles(j)%st(2) = st_arr(2 + 2*(j-1))
+      particles(j)%x(1)  = x_arr(j)
+      particles(j)%x(2)  = x_arr(j + np)
+      particles(j)%x(3)  = x_arr(j + 2*np)
+      particles(j)%p(1)  = p_arr(j)
+      particles(j)%p(2)  = p_arr(j + np)
+      particles(j)%p(3)  = p_arr(j + 2*np)
+      particles(j)%st(1) = st_arr(j)
+      particles(j)%st(2) = st_arr(j + np)
       particles(j)%i_elm = int(ielm_arr(j), 4)
     end do
     !$omp end parallel do
@@ -1231,22 +1231,22 @@ end subroutine deallocate_particle_arrays
     nl_soa%n_nodes = int(nn, c_int)
 
     ! Allocate flat arrays in the same order as the C code expects:
-    !   x:      (n_coord_tor, n_degrees, n_dim, n_nodes)
-    !   values: (n_tor, n_degrees, n_var, n_nodes)
-    !   deltas: (n_tor, n_degrees, n_var, n_nodes)
+    !   x:      (n_nodes, n_coord_tor, n_degrees, n_dim)
+    !   values: (n_nodes, n_tor, n_degrees, n_var)
+    !   deltas: (n_nodes, n_tor, n_degrees, n_var)
     allocate(x_flat(n_coord_tor * n_degrees * n_dim * nn))
     allocate(val_flat(n_tor * n_degrees * 3 * nn))
     allocate(del_flat(n_tor * n_degrees * 3 * nn))
 
     ! Copy node coordinates: node(i)%x(kc, kf, kd)
-    ! C layout: x_flat[ kc + n_coord_tor * (kf + n_degrees * (kd + n_dim * (i-1))) ]
+    ! C layout: x_flat[ iv + n_nodes * (kc + n_coord_tor * (kf + n_degrees * kd)) ]
     ! Fortran column-major: same indexing, 1-based
     !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, n_dim
         do kf = 1, n_degrees
           do kc = 1, n_coord_tor
-            idx = kc + n_coord_tor * ((kf-1) + n_degrees * ((kd-1) + n_dim * (i-1)))
+            idx = i + nn * ((kc-1) + n_coord_tor * ((kf-1) + n_degrees * (kd-1)))
             x_flat(idx) = node_list%node(i)%x(kc, kf, kd)
           end do
         end do
@@ -1255,13 +1255,13 @@ end subroutine deallocate_particle_arrays
     !$omp end parallel do
 
     ! Copy values: node(i)%values(kt, kf, kv)
-    ! C layout: val_flat[ kt + n_tor * (kf + n_degrees * (kv + n_var * (i-1))) ]
+    ! C layout: val_flat[ iv + n_nodes * (kt + n_tor * (kf + n_degrees * kv)) ]
     !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, 3
         do kf = 1, n_degrees
           do kt = 1, n_tor
-            idx = kt + n_tor * ((kf-1) + n_degrees * ((kd-1) + 3 * (i-1)))
+            idx = i + nn * ((kt-1) + n_tor * ((kf-1) + n_degrees * (kd-1)))
             val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
             del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
           end do

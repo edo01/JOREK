@@ -98,9 +98,9 @@ bool rz_dbg_enabled(int debug_j, int debug_k)
 // Particle SoA for relativistic kinetic particles.
 // Fortran: type particle_SoA_kinetic_relativistic
 struct particle_SoA_kinetic_relativistic {
-    double* x;        // (3, num_particles) position (cylindrical: R, Z, phi)
-    double* p;        // (3, num_particles) momentum (Cartesian)
-    double* st;       // (2, num_particles) element-local coordinates (s, t)
+    double* x;        // (num_particles, 3) position (cylindrical: R, Z, phi)
+    double* p;        // (num_particles, 3) momentum (Cartesian)
+    double* st;       // (num_particles, 2) element-local coordinates (s, t)
     double* weight;   // (num_particles)    macro-particle weight
     int*    i_elm;    // (num_particles)    element index (1-based; <=0 means lost)
     int*    i_life;   // (num_particles)    life-step counter
@@ -120,9 +120,9 @@ struct particle_group {
 // Fortran: type node_list_SoA
 struct node_list_SoA {
     int     n_nodes;   // total number of nodes
-    double* x;         // (N_COORD_TOR, NDEG, NDIM, n_nodes) grid coordinates
-    double* values;    // (N_TOR, NDEG, NVAR, n_nodes) field values at current time
-    double* deltas;    // (N_TOR, NDEG, NVAR, n_nodes) field increments (for time interp)
+    double* x;         // (n_nodes, N_COORD_TOR, NDEG, NDIM) grid coordinates
+    double* values;    // (n_nodes, N_TOR, NDEG, NVAR) field values at current time
+    double* deltas;    // (n_nodes, N_TOR, NDEG, NVAR) field increments (for time interp)
 };
 
 // Element list in Structure-of-Arrays layout.
@@ -454,9 +454,9 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
             double gt  = G_t[idx2(kf, kv, NDEG)];
 
             for (int it = 0; it < N_COORD_TOR; ++it) {
-                // nl_x layout: (N_COORD_TOR, NDEG, NDIM, n_nodes)
-                double xx1 = nl_x[idx4(it, kf, 0, iv, N_COORD_TOR, NDEG, NDIM)];
-                double xx2 = nl_x[idx4(it, kf, 1, iv, N_COORD_TOR, NDEG, NDIM)];
+                // nl_x layout: (n_nodes, N_COORD_TOR, NDEG, NDIM)
+                double xx1 = nl_x[idx4(iv, it, kf, 0, n_nodes, N_COORD_TOR, NDEG)];
+                double xx2 = nl_x[idx4(iv, it, kf, 1, n_nodes, N_COORD_TOR, NDEG)];
                 double hz  = HZ_coord[it];
                 double dhz = HZ_coord_p[it];
 
@@ -1018,7 +1018,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             for (int ivar = 0; ivar < 2; ++ivar) {      
                 double v = 0.0, vp = 0.0;
                 for (int it = 0; it < N_TOR; ++it) {
-                    double val = nl_values[idx4(it, kf, ivar, iv, N_TOR, NDEG, NVAR)] * sz;
+                    double val = nl_values[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
                     v  += val * HZ[it];         // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
                     vp += val * dHZ[it];        // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                 }
@@ -1028,8 +1028,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 P_phi[ivar] += vp * h;
             }
 
-            xR[idx2(kf, kv, NDEG)] = nl_x[idx4(0, kf, 0, iv, N_COORD_TOR, NDEG, NDIM)] * sz;
-            xZ[idx2(kf, kv, NDEG)] = nl_x[idx4(0, kf, 1, iv, N_COORD_TOR, NDEG, NDIM)] * sz;
+            xR[idx2(kf, kv, NDEG)] = nl_x[idx4(iv, 0, kf, 0, n_nodes, N_COORD_TOR, NDEG)] * sz;
+            xZ[idx2(kf, kv, NDEG)] = nl_x[idx4(iv, 0, kf, 1, n_nodes, N_COORD_TOR, NDEG)] * sz;
             R   += xR[ifv] * HT[ifv];
             R_s += xR[ifv] * HT_s[ifv];
             R_t += xR[ifv] * HT_t[ifv];
@@ -1082,7 +1082,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 for (int ivar = 0; ivar < 2; ++ivar) {
                     double v = 0.0, vp = 0.0;
                     for (int it = 0; it < N_TOR; ++it) {
-                        double d = nl_deltas[idx4(it, kf, ivar, iv, N_TOR, NDEG, NVAR)] * sz;
+                        double d = nl_deltas[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
                         v  += d * HZ[it];       // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
                         vp += d * dHZ[it];      // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                     }
@@ -1356,7 +1356,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // feedback_rhs accumulation uses atomicAdd.
 //
 // Particle arrays layout (Fortran column-major):
-//   p_x[dim + 3*j], p_p[dim + 3*j], p_st[dim + 2*j]  (0-based j, dim)
+//   p_x[j + num_particles*dim], p_p[j + num_particles*dim], p_st[j + num_particles*dim]  (0-based j, dim)
 //   p_i_elm[j], p_weight[j], p_q[j]
 //
 // feedback_rhs layout (Fortran column-major, 0-based):
@@ -1365,16 +1365,16 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 __global__
 void evolve_REs_kernel(
     // Particle SoA
-    double* __restrict__ p_x,            // (3, num_particles)
-    double* __restrict__ p_p,            // (3, num_particles)
-    double* __restrict__ p_st,           // (2, num_particles)
+    double* __restrict__ p_x,            // (num_particles, 3)
+    double* __restrict__ p_p,            // (num_particles, 3)
+    double* __restrict__ p_st,           // (num_particles, 2)
     int*    __restrict__ p_i_elm,        // (num_particles)
     const double* __restrict__ p_weight, // (num_particles)
     double charge,                       // group charge number (uniform per group)
     // Field node list SoA
-    const double* __restrict__ nl_values, // (N_TOR, NDEG, NVAR, n_nodes)
+    const double* __restrict__ nl_values, // (n_nodes, N_TOR, NDEG, NVAR)
     const double* __restrict__ nl_deltas,
-    const double* __restrict__ nl_x,      // (N_COORD_TOR, NDEG, NDIM, n_nodes)
+    const double* __restrict__ nl_x,      // (n_nodes, N_COORD_TOR, NDEG, NDIM)
     int n_nodes,
     // Field element list SoA
     const int*    __restrict__ el_vertex,     // (n_elements, NV)
@@ -1399,9 +1399,9 @@ void evolve_REs_kernel(
     if (j >= num_particles) return;
 
     // Load particle data into registers
-    double x[3]  = {p_x[idx2(0, j, 3)], p_x[idx2(1, j, 3)], p_x[idx2(2, j, 3)]};
-    double pm[3] = {p_p[idx2(0, j, 3)], p_p[idx2(1, j, 3)], p_p[idx2(2, j, 3)]};
-    double st[2] = {p_st[idx2(0, j, 2)], p_st[idx2(1, j, 2)]};
+    double x[3]  = {p_x[idx2(j, 0, num_particles)], p_x[idx2(j, 1, num_particles)], p_x[idx2(j, 2, num_particles)]};
+    double pm[3] = {p_p[idx2(j, 0, num_particles)], p_p[idx2(j, 1, num_particles)], p_p[idx2(j, 2, num_particles)]};
+    double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
     int    i_elm = p_i_elm[j];
     double w = p_weight[j];
 
@@ -1551,9 +1551,9 @@ void evolve_REs_kernel(
 #endif
 
     // Store particle data back to global memory
-    p_x[idx2(0, j, 3)] = x[0]; p_x[idx2(1, j, 3)] = x[1]; p_x[idx2(2, j, 3)] = x[2];
-    p_p[idx2(0, j, 3)] = pm[0]; p_p[idx2(1, j, 3)] = pm[1]; p_p[idx2(2, j, 3)] = pm[2];
-    p_st[idx2(0, j, 2)] = st[0]; p_st[idx2(1, j, 2)] = st[1];
+    p_x[idx2(j, 0, num_particles)] = x[0]; p_x[idx2(j, 1, num_particles)] = x[1]; p_x[idx2(j, 2, num_particles)] = x[2];
+    p_p[idx2(j, 0, num_particles)] = pm[0]; p_p[idx2(j, 1, num_particles)] = pm[1]; p_p[idx2(j, 2, num_particles)] = pm[2];
+    p_st[idx2(j, 0, num_particles)] = st[0]; p_st[idx2(j, 1, num_particles)] = st[1];
     p_i_elm[j] = i_elm;
 
 #ifdef GPU_DEBUG
@@ -1690,8 +1690,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             sz_feedback, grid_size, BLOCK_SIZE);
     if (num_particles > 0) {
         fprintf(stderr, "[GPU_DEBUG host]   p[0]: i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] w=%.17e\n",
-                part->i_elm[0], part->x[0], part->x[1], part->x[2],
-                part->p[0],     part->p[1], part->p[2], part->weight[0]);
+                part->i_elm[0], part->x[0], part->x[num_particles], part->x[2*num_particles],
+                part->p[0],     part->p[num_particles], part->p[2*num_particles], part->weight[0]);
     }
 #endif
 

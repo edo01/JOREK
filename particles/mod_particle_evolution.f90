@@ -81,7 +81,10 @@ contains
 
     !> Coupling scheme specific
     integer :: imp_q_idx
-    integer :: i_tor
+#ifdef USE_GPU
+    real*8 :: frac_gpu_particles    ! fraction of total num_particles to compute on GPU
+    integer :: num_gpu_particles
+#endif
 
     !> ================================ INITIALISATION =======================================
     part_group => sim%groups(group_num)
@@ -115,9 +118,12 @@ contains
         call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, nstep_part_adj, imp_q_idx)
       case ('rep')
 #ifdef USE_GPU
-        call evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj)
+        frac_gpu_particles = 1.d0   !TODO: move to input file
+        num_gpu_particles = int(real(size(sim%groups(group_num)%particles,1),8) * frac_gpu_particles)
+        call evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj, num_gpu_particles)
+        call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, num_gpu_particles+1)
 #else
-        call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj)
+        call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, 0)
 #endif
       case default
         write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
@@ -158,7 +164,6 @@ contains
     !> rep specific projections
     if (part_group%coupling_scheme == 'rep') then
 
-
       feedback_rhs = feedback_rhs / real(nstep_part_adj,8) 
       jorek_feedback%rhs(:,:,:,:,P_par_idx_kin)   = jorek_feedback%rhs(:,:,:,:,P_par_idx_kin)   + feedback_rhs(:,:,:,:,P_par_idx_kin)
       jorek_feedback%rhs(:,:,:,:,P_perp_idx_kin)  = jorek_feedback%rhs(:,:,:,:,P_perp_idx_kin)  + feedback_rhs(:,:,:,:,P_perp_idx_kin)
@@ -171,7 +176,7 @@ contains
     
   end subroutine evolve_particle_group
 
-  subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj)
+  subroutine evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, start_idx)
     use mod_project_particles
     use mod_random_seed
     use mod_interp, only: mode_moivre
@@ -187,7 +192,7 @@ contains
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8,  intent(in)                                       :: tstep_part_adj
     integer, intent(in)                                       :: nstep_part_adj
-
+    integer, intent(in)                                       :: start_idx
     character(len=3) :: cs
 
     !> RE specific variables
@@ -202,6 +207,15 @@ contains
 
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm                  ! rho_SI = rho_norm * rho
+
+    ! --- Logging Information ---
+    if (sim%my_id .eq. 0) then
+      write(*,*) 'INFO: REs evolution executed on     : CPU'
+      write(*,*) 'INFO: number of simulated particles : ', size(sim%groups(group_num)%particles,1) - start_idx + 1, ' (out of ', size(sim%groups(group_num)%particles,1),')'
+      write(*,*) 'INFO: number of timesteps           : ', nstep_part_adj
+      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8.d0/(1024*1024) , ' MB'
+      write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
+    endif
 
     ! Loop over all particle groups
     n_lost = 0
@@ -218,10 +232,14 @@ contains
       !$omp B_norm2, proj_factor, v_Ppar, v_Pperp, v_jPhi, i_tor, ifail, &
       !$omp cylindrical_velocity, cylindrical_momentum, v_par, v_perp, gamma_m ) &
       !$omp shared (nstep_part_adj, tstep_part_adj, sim, group_num, rho_norm, &
-      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) &
+      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin, start_idx) &
       !$omp reduction(+:feedback_rhs)
   
-      do j=1,size(particles,1)
+      do j=start_idx,size(particles,1)
+        ! if (sim%my_id .eq. 0) then
+        !   write(*,*) "[MYDEBUG] Particle ", j, " / ", size(particles,1)
+        ! end if
+
         do k=1,nstep_part_adj
           if (particles(j)%i_elm .le. 0) exit
   
@@ -243,16 +261,12 @@ contains
   
           do n=1,n_degrees
             do m=1,n_vertex_max
-  
               proj_factor = HH(m,n) * sim%fields%element_list%element(particles(j)%i_elm)%size(m,n) * particles(j)%weight
   
-
               ! PCS for REs
               v_Ppar  = proj_factor * gamma_m * v_par**2 * MU_ZERO
               v_Pperp = proj_factor * gamma_m * v_perp**2 / 2.d0 * MU_ZERO
-  
               v_jPhi  = - proj_factor * real(particles(j)%q, 8) * EL_CHG * cylindrical_velocity(3) * particles(j)%x(1) * MU_ZERO
-              
 
               do i_tor = 1,n_tor
                 feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  = feedback_rhs(n,m,particles(j)%i_elm,i_tor,P_par_idx_kin)  + HZ(i_tor)*v_Ppar
@@ -283,7 +297,7 @@ contains
   !> GPU implementation of evolve_REs via the HIP kernel.
   !> Builds the SoA data structures, calls the C launch function,
   !> converts the results back to the Fortran AoS layout.
-  subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj)
+  subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj, num_gpu_particles)
     use mod_settings, only: n_tor, n_degrees, n_vertex_max, n_coord_tor
     use phys_module, only: F0, mode_coord
     use mod_fields_linear, only: jorek_fields_interp_linear
@@ -293,6 +307,7 @@ contains
     real(8), allocatable, intent(inout) :: feedback_rhs(:,:,:,:,:)
     real(8), intent(in) :: tstep_part_adj
     integer, intent(in) :: nstep_part_adj
+    integer, intent(in) :: num_gpu_particles
 
     ! Local variables
     type(particle_sim_c) :: sim_c
@@ -304,9 +319,13 @@ contains
     integer(c_int) :: nstep_part_adj_c
 
     ! Feedback buffer in same column-major order as Fortran feedback_rhs:
-    !   fb_c(n_degrees, n_vertex_max, ne, n_tor, n_var)     (no index reordering)
-    integer :: ne, np, n_alive, ip      !n of elements, n of particles, n of alive particles, particle index
+    !   fb_c(n_degrees, n_vertex_max, n_elements, n_tor, 3)     (3 vars for P_par, P_perp, j_Phi)
+    integer :: n_elements
     real(c_double), allocatable, target :: fb_c(:,:,:,:,:)
+  
+  #ifdef GPU_DEBUG
+    integer :: n_alive, ip
+  #endif
 
     ! Backing arrays for SoA conversions.
     ! Must be kept alive until after the C call and then freed here directly
@@ -317,16 +336,13 @@ contains
     integer(c_int), allocatable, target :: el_vert_flat(:), el_neigh_flat(:)
     real(c_double), allocatable, target :: el_size_flat(:)
 
-    ! --- Count active particles ---
-    ne = sim%fields%element_list%n_elements
-    np = size(sim%groups(group_num)%particles, 1)
-
+    n_elements = sim%fields%element_list%n_elements
     select type (p => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
     #ifdef GPU_DEBUG
-      if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Allocating particle SoA for np=', np
+      if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Allocating particle SoA for num_gpu_particles=', num_gpu_particles
     #endif
-      call particles_AoS_to_SoA(p, np, part_soa, &
+      call particles_AoS_to_SoA(p, num_gpu_particles, part_soa, &
           part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
     #ifdef GPU_DEBUG
       if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] particle SoA built'
@@ -344,7 +360,7 @@ contains
 
     ! --- Build element list SoA ---
   #ifdef GPU_DEBUG
-    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Building element_list SoA (ne=', ne,')'
+    if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Building element_list SoA (n_elements=', n_elements,')'
   #endif
     call element_list_to_SoA(sim%fields%element_list, el_soa, el_vert_flat, el_neigh_flat, el_size_flat)
   #ifdef GPU_DEBUG
@@ -387,7 +403,7 @@ contains
     type is (particle_kinetic_relativistic)
       sim_c%group%charge = real(p(1)%q, c_double)
     end select
-    sim_c%group%num_particles        = int(np, c_int)
+    sim_c%group%num_particles        = int(num_gpu_particles, c_int)
     sim_c%group%particles            = part_soa
 
     ! --- Build particle_sim_c ---
@@ -397,21 +413,30 @@ contains
 
     ! --- Allocate feedback buffer matching Fortran column-major layout ---
     ! feedback_rhs starts at zero for 'rep', so initialising fb_c to zero is correct.
-    allocate(fb_c(n_degrees, n_vertex_max, ne, n_tor, size(feedback_rhs, 5)))
+    allocate(fb_c(n_degrees, n_vertex_max, n_elements, n_tor, size(feedback_rhs, 5)))
     fb_c = 0.0_c_double
 
     tstep_part_adj_c = real(tstep_part_adj, c_double)
     nstep_part_adj_c = int(nstep_part_adj, c_int)
 
+    ! --- Logging Information ---
+    if (sim%my_id .eq. 0) then
+      write(*,*) 'INFO: REs evolution executed on     : GPU'
+      write(*,*) 'INFO: number of simulated particles : ', num_gpu_particles, ' (out of ', size(sim%groups(group_num)%particles,1),')'
+      write(*,*) 'INFO: number of timesteps           : ', nstep_part_adj
+      write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8.d0/(1024*1024) , ' MB'
+      write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
+    endif
+
     ! --- Call GPU kernel ---
 #ifdef GPU_DEBUG
-    do ip=1, np
+    do ip=1, num_gpu_particles
       if (particles(ip)%i_elm .gt. 0) then
           n_alive = n_alive + 1
       end if
     end do
     write(*,'(A,I0,A,I0,A,I0,A,I0,A,I0)') &
-        '[GPU_DEBUG Fortran j=', sim%my_id, '] np=', np, '(lost: ', np-n_alive, '), ne=', ne
+        '[GPU_DEBUG Fortran j=', sim%my_id, '] num_gpu_particles=', num_gpu_particles, '(lost: ', num_gpu_particles-n_alive, '), n_elements=', n_elements
     
     if (sim%my_id == 0) then
       write(*,'(A,ES14.6,A,ES14.6,A,I0)') &
@@ -426,13 +451,13 @@ contains
     if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
 
 #ifdef GPU_DEBUG
-    do ip = 1, min(3, np)
+    do ip = 1, min(3, num_gpu_particles)
       write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', &
-          part_x(3*(ip-1)+1), part_x(3*(ip-1)+2), part_x(3*(ip-1)+3)
+          part_x(ip), part_x(ip + num_gpu_particles), part_x(ip + 2*num_gpu_particles)
       write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') p = ', &
-          part_p(3*(ip-1)+1), part_p(3*(ip-1)+2), part_p(3*(ip-1)+3)
+          part_p(ip), part_p(ip + num_gpu_particles), part_p(ip + 2*num_gpu_particles)
       write(*,'(A,I0,A,I0,A,2ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') st = ', &
-          part_st(2*(ip-1)+1), part_st(2*(ip-1)+2)
+          part_st(ip), part_st(ip + num_gpu_particles)
       write(*,'(A,I0,A,I0)') '[GPU_DEBUG Fortran] Particle(', ip, ') i_elm = ', part_ielm(ip)
     end do
 #endif
@@ -446,16 +471,16 @@ contains
 #endif
 
     ! --- Accumulate GPU result into feedback_rhs ---
-    ! fb_c has shape (n_degrees, n_vertex_max, ne, n_tor, n_var) which matches
-    ! the first four dimensions of feedback_rhs(:,:,1:ne,:,:).  No index reordering needed.
-    feedback_rhs(:, :, 1:ne, :, P_par_idx_kin)  = feedback_rhs(:, :, 1:ne, :, P_par_idx_kin)  + fb_c(:, :, :, :, P_par_idx_kin)
-    feedback_rhs(:, :, 1:ne, :, P_perp_idx_kin) = feedback_rhs(:, :, 1:ne, :, P_perp_idx_kin) + fb_c(:, :, :, :, P_perp_idx_kin)
-    feedback_rhs(:, :, 1:ne, :, j_Phi_idx_kin)  = feedback_rhs(:, :, 1:ne, :, j_Phi_idx_kin)  + fb_c(:, :, :, :, j_Phi_idx_kin)
+    ! fb_c has shape (n_degrees, n_vertex_max, n_elements, n_tor, n_var) which matches
+    ! the first four dimensions of feedback_rhs(:,:,1:n_elements,:,:).  No index reordering needed.
+    feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, :, :, :, P_par_idx_kin)
+    feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, :, :, :, P_perp_idx_kin)
+    feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, :, :, :, j_Phi_idx_kin)
 
     ! --- Copy updated particle data back to AoS ---
     select type (p => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
-      call particles_SoA_to_AoS(part_soa, np, p)
+      call particles_SoA_to_AoS(part_soa, num_gpu_particles, p)
     end select
 
     ! --- Cleanup ---
