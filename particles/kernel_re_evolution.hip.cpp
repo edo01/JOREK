@@ -1359,8 +1359,9 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 //   p_x[j + num_particles*dim], p_p[j + num_particles*dim], p_st[j + num_particles*dim]  (0-based j, dim)
 //   p_i_elm[j], p_weight[j], p_q[j]
 //
-// feedback_rhs layout (Fortran column-major, 0-based):
-//   feedback_rhs[i_elm + n_el*(var + 8*(i_tor + N_TOR*(m + NV*n)))]
+// feedback_rhs layout (column-major, 0-based):
+//   (n_elements, NDEG, NV, N_TOR, NVAR)  -- n_elements first for GPU coalescing
+//   feedback_rhs[ie + n_elements*(n + NDEG*(m + NV*(it + N_TOR*var)))]
 // ---------------------------------------------------------------------------
 __global__
 void evolve_REs_kernel(
@@ -1390,7 +1391,7 @@ void evolve_REs_kernel(
     double sim_time, double group_mass, double tstep_part_adj, 
     int nstep_particles, int num_particles,
     // Feedback RHS (atomically updated)
-    double* __restrict__ feedback_rhs, // column-major (NDEG, NV, n_elements, N_TOR, NVAR) = Fortran layout
+    double* __restrict__ feedback_rhs, // column-major (n_elements, NDEG, NV, N_TOR, NVAR) -- n_elements first for GPU coalescing
     // mode_coord for interp_RZP_1_gpu
     const int* __restrict__ mode_coord,
     int my_id)
@@ -1469,9 +1470,9 @@ void evolve_REs_kernel(
         double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
 
         // Accumulate to feedback_rhs with atomicAdd.
-        // Layout (column-major, same order as Fortran feedback_rhs):
-        //   (NDEG, NV, n_elements, N_TOR, NVAR)
-        //   index = n + NDEG*(m + NV*(ie + n_elements*(it + N_TOR*var)))  (all 0-based)
+        // Layout (column-major): (n_elements, NDEG, NV, N_TOR, NVAR)
+        //   index = ie + n_elements*(n + NDEG*(m + NV*(it + N_TOR*var)))  (all 0-based)
+        // n_elements is first so warp threads (differing in ie) access adjacent addresses.
         int ie = i_elm - 1;
 #ifdef GPU_DEBUG
         if (rz_dbg_enabled(j, k)) {
@@ -1510,11 +1511,11 @@ void evolve_REs_kernel(
                 }
 #endif
 
-                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_PAR_IDX, NDEG, NV, n_elements, N_TOR)],
+                    atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PAR_IDX, n_elements, NDEG, NV, N_TOR)],
                               hz * v_Ppar * proj_factor);
-                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, P_PERP_IDX, NDEG, NV, n_elements, N_TOR)],
+                    atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PERP_IDX, n_elements, NDEG, NV, N_TOR)],
                               hz * v_Pperp * proj_factor);
-                    atomicAdd(&feedback_rhs[idx5(n, m, ie, it, J_PHI_IDX, NDEG, NV, n_elements, N_TOR)],
+                    atomicAdd(&feedback_rhs[idx5(ie, n, m, it, J_PHI_IDX, n_elements, NDEG, NV, N_TOR)],
                               hz * v_jPhi * proj_factor);
                 }
             }

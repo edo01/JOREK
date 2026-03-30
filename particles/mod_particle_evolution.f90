@@ -318,9 +318,10 @@ contains
     real(c_double) :: tstep_part_adj_c
     integer(c_int) :: nstep_part_adj_c
 
-    ! Feedback buffer in same column-major order as Fortran feedback_rhs:
-    !   fb_c(n_degrees, n_vertex_max, n_elements, n_tor, 3)     (3 vars for P_par, P_perp, j_Phi)
+    ! Feedback buffer with n_elements first for GPU warp coalescing:
+    !   fb_c(n_elements, n_degrees, n_vertex_max, n_tor, 3)     (3 vars for P_par, P_perp, j_Phi)
     integer :: n_elements
+    integer :: kfb, kvb                  ! loop indices for fb_c copy-back
     real(c_double), allocatable, target :: fb_c(:,:,:,:,:)
   
   #ifdef GPU_DEBUG
@@ -413,7 +414,7 @@ contains
 
     ! --- Allocate feedback buffer matching Fortran column-major layout ---
     ! feedback_rhs starts at zero for 'rep', so initialising fb_c to zero is correct.
-    allocate(fb_c(n_degrees, n_vertex_max, n_elements, n_tor, size(feedback_rhs, 5)))
+    allocate(fb_c(n_elements, n_degrees, n_vertex_max, n_tor, size(feedback_rhs, 5)))
     fb_c = 0.0_c_double
 
     tstep_part_adj_c = real(tstep_part_adj, c_double)
@@ -471,11 +472,16 @@ contains
 #endif
 
     ! --- Accumulate GPU result into feedback_rhs ---
-    ! fb_c has shape (n_degrees, n_vertex_max, n_elements, n_tor, n_var) which matches
-    ! the first four dimensions of feedback_rhs(:,:,1:n_elements,:,:).  No index reordering needed.
-    feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, :, :, :, P_par_idx_kin)
-    feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, :, :, :, P_perp_idx_kin)
-    feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, :, :, :, j_Phi_idx_kin)
+    ! fb_c has shape (n_elements, n_degrees, n_vertex_max, n_tor, n_var): n_elements first for GPU coalescing.
+    ! feedback_rhs has shape (n_degrees, n_vertex_max, n_elements_total, n_tor, n_var).
+    ! Loop over the small (n_degrees, n_vertex_max) dims; use array slices over (n_elements, n_tor).
+    do kvb = 1, n_vertex_max
+      do kfb = 1, n_degrees
+        feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, kfb, kvb, :, P_par_idx_kin)
+        feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, kfb, kvb, :, P_perp_idx_kin)
+        feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, kfb, kvb, :, j_Phi_idx_kin)
+      end do
+    end do
 
     ! --- Copy updated particle data back to AoS ---
     select type (p => sim%groups(group_num)%particles)
