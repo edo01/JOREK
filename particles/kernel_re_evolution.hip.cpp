@@ -999,8 +999,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double P_phi[2] = {0.0, 0.0};
     double P_time[2] = {0.0, 0.0};
 
-    double xR[NDEG * NV], xZ[NDEG * NV];
-
     // First interpolation of values
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
@@ -1013,9 +1011,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             double hs = HT_s[ifv];
             double ht = HT_t[ifv];
 
-            // Running without deltas
-            // Afterwards, same computation, but considering deltas (for differentials)
-            for (int ivar = 0; ivar < 2; ++ivar) {      
+            for (int ivar = 0; ivar < 2; ++ivar) {
                 double v = 0.0, vp = 0.0;
                 for (int it = 0; it < N_TOR; ++it) {
                     double val = nl_values[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
@@ -1028,28 +1024,26 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 P_phi[ivar] += vp * h;
             }
 
-            xR[idx2(kf, kv, NDEG)] = nl_x[idx4(iv, 0, kf, 0, n_nodes, N_COORD_TOR, NDEG)] * sz;
-            xZ[idx2(kf, kv, NDEG)] = nl_x[idx4(iv, 0, kf, 1, n_nodes, N_COORD_TOR, NDEG)] * sz;
-            R   += xR[ifv] * HT[ifv];
-            R_s += xR[ifv] * HT_s[ifv];
-            R_t += xR[ifv] * HT_t[ifv];
-            Zc  += xZ[ifv] * HT[ifv];
-            Z_s += xZ[ifv] * HT_s[ifv];
-            Z_t += xZ[ifv] * HT_t[ifv];
+            // Reuse already-loaded h/hs/ht — avoids 6 redundant HT array reads
+            double xR = nl_x[idx4(iv, 0, kf, 0, n_nodes, N_COORD_TOR, NDEG)] * sz;
+            double xZ = nl_x[idx4(iv, 0, kf, 1, n_nodes, N_COORD_TOR, NDEG)] * sz;
+            R   += xR * h;
+            R_s += xR * hs;
+            R_t += xR * ht;
+            Zc  += xZ * h;
+            Z_s += xZ * hs;
+            Z_t += xZ * ht;
         }
     }
 
-    // Second interpolation of differentials (deltas)   --> essentially the same loop as before
-    
+    // Second interpolation of differentials (deltas)
+    // Pd[] declared here to limit live register range to this block only
     double Pd[2] = {0.0, 0.0};
     double Pd_s[2] = {0.0, 0.0};
     double Pd_t[2] = {0.0, 0.0};
     double Pd_phi[2] = {0.0, 0.0};
-    
+
     if (t_norm > 0.0) {
-        // TODO Why they are computed again???
-        basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
-        sincosperiod_moivre(phi, HZ, dHZ);
 
 #ifdef GPU_DEBUG
         if(dbg) {
@@ -1068,7 +1062,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         }
 #endif
 
-        // Preload values and premultiply with sizes(:, kv)
         for (int kv = 0; kv < NV; ++kv) {
             int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
 
@@ -1083,8 +1076,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                     double v = 0.0, vp = 0.0;
                     for (int it = 0; it < N_TOR; ++it) {
                         double d = nl_deltas[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
-                        v  += d * HZ[it];       // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
-                        vp += d * dHZ[it];      // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
+                        v  += d * HZ[it];       // v = dot_product(deltas(1:n_tor,kf,1,kv),HZ(1:n_tor))
+                        vp += d * dHZ[it];      // vp = dot_product(deltas(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                     }
                     Pd[ivar]     += v  * h;
                     Pd_s[ivar]   += v  * hs;
@@ -1122,8 +1115,9 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     }
 #endif
 
-    double R_inv = 1.0 / R;
+    double R_inv      = 1.0 / R;
     double st_jac_inv = 1.0 / (R_s * Z_t - R_t * Z_s);
+    double t_norm_inv = 1.0 / t_norm;
 
     double psi_R = ( P_s[0] * Z_t - P_t[0] * Z_s) * st_jac_inv;
     double psi_Z = (-P_s[0] * R_t + P_t[0] * R_s) * st_jac_inv;
@@ -1132,7 +1126,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double U_phi = P_phi[1];
 
     psi = P[0];
-    U   = P[1] / t_norm;
+    U   = P[1] * t_norm_inv;
 
     if (flag_zero_dpsidt) P_time[0] = 0.0;
 
@@ -1142,16 +1136,16 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     B[2] =  F0    * R_inv;
 
     // Electric field (cylindrical)
-    E[0] = -F0 * U_R            / t_norm;
-    E[1] = -F0 * U_Z            / t_norm;
-    E[2] = -F0 * U_phi * R_inv  / t_norm;
-    E[2] -= P_time[0] * R_inv;
+    double neg_F0_tnorm_inv = -F0 * t_norm_inv;
+    E[0] = neg_F0_tnorm_inv * U_R;
+    E[1] = neg_F0_tnorm_inv * U_Z;
+    E[2] = (neg_F0_tnorm_inv * U_phi - P_time[0]) * R_inv;
 
     // Projection: E = E - E * B / |B| (element-wise, matching Fortran)
-    double Bnorm = sqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
-    E[0] -= E[0] * B[0] / Bnorm;
-    E[1] -= E[1] * B[1] / Bnorm;
-    E[2] -= E[2] * B[2] / Bnorm;
+    double Bnorm_inv = 1.0 / sqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
+    E[0] -= E[0] * B[0] * Bnorm_inv;
+    E[1] -= E[1] * B[1] * Bnorm_inv;
+    E[2] -= E[2] * B[2] * Bnorm_inv;
 
 #ifdef GPU_DEBUG
     if(dbg) printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU OUTPUT: psi=%.17e U=%.17e E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
