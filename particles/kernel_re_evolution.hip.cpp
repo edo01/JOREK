@@ -1576,10 +1576,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const element_list_SoA& el  = sim.fields.element_list;
     const int    n_nodes        = nl.n_nodes;
     const int    n_elements     = el.n_elements;
-    // const double time_now       = sim.fields.time_now;
-    const double time_now = 9.0825609089428101e-04;
-    // const double time_prev      = sim.fields.time_prev;
-    const double time_prev = 0.0;
+    const double time_now       = sim.fields.time_now;
+    const double time_prev      = sim.fields.time_prev;
     const int    flag_static    = sim.fields.flag_static;
     const int    flag_zero_dp   = sim.fields.flag_zero_dpsidt;
     const double F0             = sim.fields.F0;
