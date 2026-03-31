@@ -121,7 +121,9 @@ contains
         frac_gpu_particles = 1.d0   !TODO: move to input file
         num_gpu_particles = int(real(size(sim%groups(group_num)%particles,1),8) * frac_gpu_particles)
         call evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj, num_gpu_particles)
-        call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, num_gpu_particles+1)
+        if (num_gpu_particles .lt. size(sim%groups(group_num)%particles,1)) then
+          call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, num_gpu_particles+1)
+        endif
 #else
         call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, 0)
 #endif
@@ -432,7 +434,7 @@ contains
     ! --- Call GPU kernel ---
 #ifdef GPU_DEBUG
     do ip=1, num_gpu_particles
-      if (particles(ip)%i_elm .gt. 0) then
+      if (sim%groups(group_num)%particles(ip)%i_elm .gt. 0) then
           n_alive = n_alive + 1
       end if
     end do
