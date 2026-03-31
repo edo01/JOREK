@@ -13,7 +13,9 @@ module mod_particle_evolution
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
+    use mod_particle_sorting
     use, intrinsic :: iso_c_binding
+
 #ifdef USE_GPU
     use mod_particle_types, only: particle_SoA_kinetic_relativistic_c, &
                                   particle_group_c, node_list_SoA_c,   &
@@ -100,6 +102,11 @@ contains
     feedback_nodelist => jorek_feedback%node_list
     feedback_element_list => jorek_feedback%element_list
     feedback_rhs       = 0.d0
+
+    #ifdef USE_ORDERING
+        !> reorder particles by i_elm to improve data locality
+        call sort_particles(sim, group_num, particle_global_sort)
+    #endif
     
     !> count number of particles in system, and update sim%groups(...)%average_weight
     call with(sim, counter)
@@ -429,6 +436,9 @@ contains
       write(*,*) 'INFO: number of timesteps           : ', nstep_part_adj
       write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8.d0/(1024*1024) , ' MB'
       write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
+#ifdef USE_ORDERING
+      write(*,*) 'INFO: using particle ordering'
+#endif
     endif
 
     ! --- Call GPU kernel ---

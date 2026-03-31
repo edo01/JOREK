@@ -22,6 +22,7 @@ module mod_particle_types
   public :: copy_particle
   public :: copy_particle_base
   public :: copy_particle_kinetic_leapfrog
+  public :: reorder_particles
   public :: codify_particle_type
   public :: find_active_particle_id
   public :: particle_arrays_from_list,particle_list_from_arrays
@@ -398,6 +399,62 @@ contains
       end select
     end select
   end subroutine copy_particle
+
+  !> Reorder the particles according to a new array of indices
+  subroutine reorder_particles(particle_list, new_order)
+    class(particle_base), allocatable, dimension(:), intent(inout) :: particle_list
+    integer, dimension(:), intent(in) :: new_order
+    integer :: i
+    class(particle_base), allocatable, dimension(:) :: particle_list_copy
+    
+    ! Create a copy of the original particle list
+    call copy_particle_list(particle_list_copy, particle_list)
+
+    ! Reorder the particles based on new_order
+    do i = 1, size(particle_list)
+      particle_list(i) = particle_list_copy(new_order(i))
+    end do
+
+    deallocate(particle_list_copy)
+  end subroutine reorder_particles
+
+
+  !> allocate an empty array of a specified particle type 
+  subroutine copy_particle_list(particle_list_copy, particle_list_in)
+    implicit none
+
+    class(particle_base), allocatable, dimension(:), intent(in)  :: particle_list_in
+    class(particle_base), allocatable, dimension(:), intent(out) :: particle_list_copy
+    integer :: n_particles, j
+
+    n_particles = size(particle_list_in)
+
+    select type (particle_list_in)
+    type is (particle_kinetic)
+      allocate(particle_kinetic::particle_list_copy(n_particles))
+    type is (particle_kinetic_leapfrog)
+      allocate(particle_kinetic_leapfrog::particle_list_copy(n_particles))
+    type is (particle_gc)
+      allocate(particle_gc::particle_list_copy(n_particles))
+    type is (particle_gc_vpar)
+      allocate(particle_gc_vpar::particle_list_copy(n_particles))
+    type is (particle_gc_Qin)
+      allocate(particle_gc_Qin::particle_list_copy(n_particles))
+    type is (particle_fieldline)
+      allocate(particle_fieldline::particle_list_copy(n_particles))
+    type is (particle_kinetic_relativistic)
+      allocate(particle_kinetic_relativistic::particle_list_copy(n_particles))
+    type is (particle_gc_relativistic)
+      allocate(particle_gc_relativistic::particle_list_copy(n_particles))
+    class default
+      write(*,*) "ERROR: Unsupported particle type in copy_particle_list"
+      stop
+    end select
+
+    do j=1,n_particles
+      particle_list_copy(j) = particle_list_in(j)
+    end do
+  end subroutine copy_particle_list
 
   !> codify_single_particle_type returns a codified 
   !> particle type for a particle
