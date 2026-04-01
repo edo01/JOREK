@@ -1,186 +1,188 @@
 #!/bin/bash
 
 #
-# Purpose: Set the model in the makefile and/or certain parameters in the respective
-#   settings files.
-#
-# Date: 2011-2021
-# Author: Matthias Hoelzl, IPP Garching
+# Purpose: Modify or print physics model in Makefile.inc and parameters in
+# mod_settings.h + mod_settings.f90 (strictly synchronized) and model-specific settings.
 #
 
 function usage() {
   echo ""
-  echo "Purpose: Modify or print physics model in Makefile.inc and further"
-  echo " parameters in the corresponding mod_settings and mod_model_settings files."
-  echo ""
-  echo "Usage: `basename $0` [<key1>=<value1> [...]]   Modify model and/or parameters"
-  echo "       `basename $0` -p <key>                  Print the value for <key> and exit"
+  echo "Usage: $(basename $0) [key=value ...]"
+  echo "       $(basename $0) -p <key>"
   echo ""
   echo "Examples:"
-  echo "  `basename $0` model=302 n_tor=3 n_period=8 n_plane=4"
-  echo "  `basename $0` -p model"
+  echo "  $(basename $0) model=302 n_tor=7 n_plane=8"
+  echo "  $(basename $0) -p n_tor"
   echo ""
 }
 
-SCRIPTDIR=`dirname $0`; SCRIPTDIR=`readlink -f $SCRIPTDIR`
-
 if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
-  usage && exit
-elif [ -z "Makefile.inc" ]; then
-  echo "Could not find a ./Makefile.inc. Are you in the JOREK trunk?" >&2
+  usage
+  exit 0
+elif [ ! -f "Makefile.inc" ]; then
+  echo "ERROR: Could not find Makefile.inc. Are you in the JOREK trunk?" >&2
   exit 1
 fi
 
-function key() {
-  echo $1 | sed -e 's/=.*$//' 
-}
+# -------------------------
+# helpers
+# -------------------------
 
-function val() {
-  echo $1 | sed -e 's/^.*=//' 
+key() { echo "$1" | sed 's/=.*$//'; }
+val() { echo "$1" | sed 's/^.*=//'; }
+
+# -------------------------
+# model handling
+# -------------------------
+
+function getmodel() {
+  grep "MODEL *= *model[0-9]*" Makefile.inc | \
+    sed -E "s/^ *MODEL *= *(model[0-9]+).*$/\1/"
 }
 
 function setmodel() {
   model=$1
-  # --- Some checks
+
   if [ -e "models/model$model" ]; then
     model="model$model"
   elif [ ! ${#model} -eq 8 ] || [[ ! ${model:5:3} =~ ^[0-9]+$ ]]; then
-    echo "ERROR: Illegal model specified: '$model'." >&2
+    echo "ERROR: Illegal model '$model'" >&2
     exit 1
   fi
-  # --- Set model in makefile configuration files
-  sed -i -e "s/\(^ *MODEL *= *\)[^ ]*\(.*$\)/\1$model\2/" Makefile.inc
-  # --- Clean up .d/.o/.mod files because of the model change
+
+  sed -i -E "s/(^ *MODEL *= *)[^ ]+/\1$model/" Makefile.inc
   make cleanall
 }
 
-function getmodel() {
-  egrep "MODEL *= *model[0-9]*" Makefile.inc | sed -e "s/^ *MODEL *= *\(model[0-9]*\).*$/\1/"
-}
+# -------------------------
+# parameter files
+# -------------------------
 
-function setparam() {
+model=$(getmodel)
+
+paramfile_h="models/mod_settings.h"
+paramfile_f90="models/mod_settings.f90"
+paramfile_model_f90="models/$model/mod_model_settings.f90"
+
+paramfiles="$paramfile_h $paramfile_f90 $paramfile_model_f90"
+
+for f in $paramfiles; do
+  if [ ! -f "$f" ]; then
+    echo "ERROR: Missing file $f" >&2
+    exit 1
+  fi
+done
+
+# -------------------------
+# parameter setter (SYNC MODE)
+# -------------------------
+
+setparam() {
   key=$1
   val=$2
-  
-  # Check in .h file
-  matches1=`grep -c "define *$key" $paramfile1`
-  # Check in .f90 file
-  matches2=`grep -c ":: *$key" $paramfile2`
 
-  if [ "$matches1" -ne 1 ] && [ "$matches2" -ne 1 ]; then
-    echo "ERROR: Could not set parameter $key." >&2
+  # must exist in BOTH base files (strict mirror rule)
+  if ! grep -qE "^[[:space:]]*#define[[:space:]]+$key[[:space:]]+" "$paramfile_h"; then
+    echo "ERROR: $key not found in mod_settings.h" >&2
     exit 1
-  else
-    for paramfile in $paramfiles; do
-      # Logic split based on file extension
-      if [[ "$paramfile" == *".h" ]]; then
-          # C-style substitution for .h files
-          sed -i -e "s/^\(#define[ \t]*$key[ \t]*\)[^ \t]*/\1$val/" $paramfile
-      else
-          # Fortran-style substitution for .f90 files
-          sed -i -e "s/\(^.*:: *$key *= *\)[^ !\t]*\(.*$\)/\1$val\2/" $paramfile
-      fi
-    done
   fi
+
+  if ! grep -qE "^[[:space:]]*integer[[:space:]]*,[[:space:]]*parameter[[:space:]]*::[[:space:]]*$key[[:space:]]*=" "$paramfile_f90"; then
+    echo "ERROR: $key not found in mod_settings.f90" >&2
+    exit 1
+  fi
+
+  # update .h
+  sed -i -E \
+    "s/^([[:space:]]*#define[[:space:]]+$key[[:space:]]+)[^[:space:]]+/\1$val/" \
+    "$paramfile_h"
+
+  # update .f90
+  sed -i -E \
+    "s/(^[[:space:]]*integer[[:space:]]*,[[:space:]]*parameter[[:space:]]*::[[:space:]]*$key[[:space:]]*=[[:space:]]*)[^![:space:]]+/\1$val/" \
+    "$paramfile_f90"
+
+  echo "Updated $key = $val (synced .h + .f90)"
 }
 
-function getparam() {
+# -------------------------
+# parameter getter
+# -------------------------
+
+getparam() {
   key=$1
-  for i in $paramfiles; do
-    if [[ "$i" == *".h" ]]; then
-      # C-style read for .h files
-      awk -v k="$key" '
-        $1 == "#define" && $2 == k {
-          print $3
-          exit
-        }
-      ' "$i"
+
+  for f in $paramfiles; do
+    if [[ "$f" == *.h ]]; then
+      awk -v k="$key" '$1=="#define" && $2==k {print $3; exit}' "$f"
     else
-      # Fortran-style read for .f90 files
-      grep -i ":: *$key[ =]" $i | sed -e "s/^.*:: *$key *= *\([^ !\t]*\).*$/\1/i"
+      grep -E "^[[:space:]]*integer[[:space:]]*,[[:space:]]*parameter[[:space:]]*::[[:space:]]*$key[[:space:]]*=" "$f" | \
+        sed -E "s/^.*=[[:space:]]*([^![:space:]]+).*/\1/"
     fi
-  done
+  done | head -n 1
 }
 
-function whichparams() {
-  for i in $@; do
-    grep '#SETTINGS#' $@ | sed -e 's/^.*#//'
-  done
+# -------------------------
+# print info
+# -------------------------
+
+whichparams() {
+  grep '#SETTINGS#' "$1" | sed 's/^.*#//'
 }
 
-function print_info() {
+print_info() {
   echo ""
   echo "=============================="
-  
-  params1=`whichparams $paramfile1`
-  params2=`whichparams $paramfile2`
-  
-  echo "  `getmodel`"
+  echo "  $(getmodel)"
   echo "------------------------------"
-  for param in $params1; do
-    printf "  %-16s = %s\n" "$param" "`getparam $param`"
+
+  for p in $(whichparams "$paramfile_h"); do
+    printf "  %-16s = %s\n" "$p" "$(getparam "$p")"
   done
-  if [ "$params2" != "" ]; then
-    echo "------------------------------"
-    for param in $params2; do
-      printf "  %-16s = %s\n" "$param" "`getparam $param`"
-    done
-  fi
+
   echo "=============================="
   echo ""
 }
 
-function check_param_files() {
-  for i in $paramfiles; do
-    if [ ! -f $i ]; then
-      echo "ERROR: File '$i' does not exist." >&2
-      exit 1
-    fi
-  done
-}
+# -------------------------
+# main logic
+# -------------------------
 
-# --- Determine the model
-model=`getmodel`
-paramfile1="models/mod_settings.h"
-paramfile2="models/$model/mod_model_settings.f90"
-paramfiles="$paramfile1 $paramfile2"
-check_param_files
-
-# --- If argument -p is given, just print the requested parameter value and exit
+# -p mode
 if [ "$1" == "-p" ]; then
   if [ "$2" == "model" ]; then
-    echo `getmodel | sed -e 's/model//'`
+    echo "$(getmodel | sed 's/model//')"
   else
-    value=`getparam $2`
-    if [ -z "$value" ]; then
-      echo "Could not find parameter '$2'."
-      exit
+    v=$(getparam "$2")
+    if [ -z "$v" ]; then
+      echo "Parameter not found: $2"
+      exit 1
     fi
-    echo "$value"
+    echo "$v"
   fi
-  exit
+  exit 0
 fi
 
-# --- First set the model (if it is specified as a command line argument)
-for arg in $@; do
-  if [ `key $arg` == "model" ]; then
-    setmodel `val $arg`
-  fi
-done
-model=`getmodel`
-paramfile1="models/mod_settings.h"
-paramfile2="models/$model/mod_model_settings.f90"
-paramfiles="$paramfile1 $paramfile2"
-check_param_files
-
-# --- Set the parameters
-for arg in $@; do
-  if [ `key $arg` != "model" ]; then
-    setparam `key $arg` `val $arg`
+# model first if provided
+for arg in "$@"; do
+  if [ "$(key "$arg")" == "model" ]; then
+    setmodel "$(val "$arg")"
   fi
 done
 
-# --- Print the configuration
-model=`getmodel`
-print_info $file
-echo "('`basename $0` -h' for help)"
+model=$(getmodel)
+paramfile_model_f90="models/$model/mod_model_settings.f90"
+paramfiles="$paramfile_h $paramfile_f90 $paramfile_model_f90"
+
+# apply parameters
+for arg in "$@"; do
+  k=$(key "$arg")
+  v=$(val "$arg")
+
+  if [ "$k" != "model" ]; then
+    setparam "$k" "$v"
+  fi
+done
+
+print_info
+echo "('$(basename $0) -h' for help)"
