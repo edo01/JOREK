@@ -88,6 +88,8 @@ contains
     integer :: num_gpu_particles
 #endif
 
+    integer :: num_particles_alive
+
     !> ================================ INITIALISATION =======================================
     part_group => sim%groups(group_num)
     if (sim%my_id .eq. 0) write(*,*) '---------- Evolving particle group: ', part_group%id, " ----------"
@@ -105,7 +107,7 @@ contains
 
     #ifdef USE_ORDERING
         !> reorder particles by i_elm to improve data locality
-        call sort_particles(sim, group_num, particle_global_sort)
+        call sort_particles(sim, group_num, particle_global_sort, num_particles_alive)
     #endif
     
     !> count number of particles in system, and update sim%groups(...)%average_weight
