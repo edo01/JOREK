@@ -146,17 +146,13 @@ subroutine sort_particles(sim, group_num, method, alive_particle_count)
   case (particle_simd_lane_sort)
     if (sim%my_id .eq. 0) then
       write(*,*) "INFO: Using SIMD-lane based particle sorting."
-      write(*,*) "[DEBUG sort] n_particles=", size(sim%groups(group_num)%particles,1)
     end if
     call i_elm_sort_simd_lane(sorted_indices, sim%groups(group_num)%particles, local_alive_count)
-    if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] simd_lane sort done, alive=", local_alive_count
   case (particle_global_sort)
     if (sim%my_id .eq. 0) then
       write(*,*) "INFO: Using global particle sorting."
-      write(*,*) "[DEBUG sort] n_particles=", size(sim%groups(group_num)%particles,1)
     end if
     call i_elm_sort_global(sorted_indices, sim%groups(group_num)%particles, local_alive_count)
-    if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] global sort done, alive=", local_alive_count
   case default
     if (sim%my_id .eq. 0) then
       write(*,*) "ERROR: Unsupported particle sorting method: ", method
@@ -166,10 +162,8 @@ subroutine sort_particles(sim, group_num, method, alive_particle_count)
 
   if (present(alive_particle_count)) alive_particle_count = local_alive_count
 
-  if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] reorder_particles start"
   ! Reorder particles based on sorted indices
   call reorder_particles(sim%groups(group_num)%particles, sorted_indices)
-  if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] reorder_particles done"
 
   end_time = MPI_WTIME()
   tot_time = mpi_minmeanmax(end_time-start_time)

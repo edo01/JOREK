@@ -251,9 +251,6 @@ contains
       !$omp reduction(+:feedback_rhs)
   
       do j=start_idx,size(particles,1)
-        ! if (sim%my_id .eq. 0) then
-        !   write(*,*) "[MYDEBUG] Particle ", j, " / ", size(particles,1)
-        ! end if
 
         do k=1,nstep_part_adj
           if (particles(j)%i_elm .le. 0) exit
