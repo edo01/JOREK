@@ -52,9 +52,10 @@ module mod_gmres
     !write(*,*) ' GMRES DRIVER : ',my_id,my_id_n
     call r3_info_begin (r3_info_index_0, 'gmres_driver')  ! timing
     call clck_time(t0)
+    if (my_id.eq.0) write(*,*) '[DEBUG gmres] 1: init_dgmres'
     call init_dgmres(icntl,cntl)
- 
-    if (my_id .ne. 0) then 
+
+    if (my_id .ne. 0) then
       icntl(2) = 0            ! disable warning
     endif
     icntl(3) = 0            ! output unit
@@ -77,6 +78,7 @@ module mod_gmres
 
     lwork = m*m + m*(n_dof+5) + 6*n_dof + m + 1
 
+    if (my_id.eq.0) write(*,*) '[DEBUG gmres] 2: allocate work, n_dof=', n_dof, ' m=', m, ' lwork=', lwork
     allocate(work(lwork))
     allocate(work_ndof(n_dof))
     allocate(work_ndof2(n_dof))
@@ -84,15 +86,17 @@ module mod_gmres
     work(1:n_dof)         = sol_vec%val(1:n_dof)                     ! the initial guess
     work(n_dof+1:2*n_dof) = rhs_vec%val(1:n_dof)                   ! the right hand side
 
+    if (my_id.eq.0) write(*,*) '[DEBUG gmres] 3: work(2*n_dof+1:3*n_dof) — index range', 2*n_dof+1, 'to', 3*n_dof, '(lwork=', lwork, ')'
     work_ndof(Int1:n_dof)  = work(Int1:n_dof)
     work_ndof2(Int1:n_dof) = work(2*n_dof+Int1:3*n_dof)
 
+    if (my_id.eq.0) write(*,*) '[DEBUG gmres] 4: gmres_matrix_vector'
     call gmres_matrix_vector(n_dof,work_ndof,n_dof,work_ndof2,a_mat)
 
     work(Int1:n_dof)           = work_ndof(Int1:n_dof)
     work(2*n_dof+Int1:3*n_dof) = work_ndof2(Int1:n_dof)
 
-
+    if (my_id.eq.0) write(*,*) '[DEBUG gmres] 5: residual loop'
     sum = 0.d0
     err = -1.d20
     Bnorm = 0.d0
@@ -107,11 +111,14 @@ module mod_gmres
     if (my_id.eq.0) write(*,'(A,4e16.8)') ' residu test before : ',sqrt(sum),err,sqrt(Bnorm),sqrt(Xnorm)
 
     if (my_id .eq. 0) then
+       if (my_id.eq.0) write(*,*) '[DEBUG gmres] 6: tr_vdump product_before'
        write(fname,'(A,I6.6,A1,I6.6)')"product_before",index_now
        call tr_vdump(fname, work(2*n_dof+1:3*n_dof), n_dof)
+       if (my_id.eq.0) write(*,*) '[DEBUG gmres] 7: tr_vdump X_before'
        write(fname,'(A,I6.6,A1,I6.6)')"X_before",index_now
        call tr_vdump(fname, rhs_vec%val, n_dof)
     end if
+    if (my_id.eq.0) write(*,*) '[DEBUG gmres] 8: entering reverse-comm loop'
 
     !*****************************************
     !** Reverse communication implementation
@@ -119,7 +126,9 @@ module mod_gmres
 
     10     call MPI_barrier(MPI_COMM_WORLD,ierr)
 
+           if (my_id.eq.0) write(*,*) '[DEBUG gmres] 9: drive_dgmres call'
            call drive_dgmres(n_dof,n_dof,m,lwork,work,irc,icntl,cntl,info,rinfo)
+           if (my_id.eq.0) write(*,*) '[DEBUG gmres] 10: drive_dgmres returned, revcom=', irc(1)
 
            call MPI_BCAST(irc,5,MPI_INTEGER_ALL,0,a_mat%comm,ierr)
            revcom = irc(1)
@@ -130,7 +139,7 @@ module mod_gmres
 
            if (revcom.eq.matvec) then                  ! perform the matrix vector product
                                                        ! work(colz) <-- A * work(colx)
-
+             if (my_id.eq.0) write(*,*) '[DEBUG gmres] 10a: matvec colx=', colx, 'colz=', colz
              work_ndof(Int1:n_dof) = work(colx:colx+n_dof-Int1)
              work_ndof2(Int1:n_dof) = work(colz:colz+n_dof-Int1)
              call gmres_matrix_vector(n_dof,work_ndof,n_dof,work_ndof2,a_mat)
@@ -141,18 +150,19 @@ module mod_gmres
 
            else if (revcom.eq.precondLeft) then        ! perform the left preconditioning
                                                        ! work(colz) <-- M^{-1} * work(colx)
+             if (my_id.eq.0) write(*,*) '[DEBUG gmres] 10b: precondLeft colx=', colx, 'colz=', colz
              call gmres_precondition(work(colx), work(colz), n_dof, solver)
              goto 10
 
            else if (revcom.eq.precondRight) then       ! perform the right preconditioning
-
+             if (my_id.eq.0) write(*,*) '[DEBUG gmres] 10c: precondRight colx=', colx, 'colz=', colz
              call dcopy(n_dof,work(colx),Int1,work(colz),Int1)
 
              goto 10
 
            else if (revcom.eq.dotProd) then            ! perform the scalar product
                                                        ! work(colz) <-- work(colx) work(coly)
-
+             if (my_id.eq.0) write(*,*) '[DEBUG gmres] 10d: dotProd nbscal=', nbscal, 'colx=', colx, 'coly=', coly, 'colz=', colz
              call dgemv('C',n_dof,nbscal,ONE, work(colx),n_dof,work(coly),Int1,ZERO,work(colz),Int1)
 
              goto 10
@@ -161,6 +171,7 @@ module mod_gmres
 
     !******************************** end of GMRES reverse communication
 
+    if (my_id .eq. 0) write(*,*) '[DEBUG gmres] 11: reverse-comm done, check work'
     if (my_id .eq. 0) write(*,*) 'check work : ',n_dof,maxval(abs(work(1:n_dof)))
 
     sol_vec%val(1:n_dof) = work(1:n_dof)
@@ -235,10 +246,12 @@ module mod_gmres
     end if
 
     call MPI_COMM_SIZE(a_mat%comm, n_mpi, ierr)
-    call MPI_COMM_RANK(a_mat%comm, my_id, ierr) 
+    call MPI_COMM_RANK(a_mat%comm, my_id, ierr)
 
+    if (my_id.eq.0) write(*,*) '[DEBUG matvec] A: MPI_BCAST x, size_x=', size_x
     counts = size_x
     call MPI_BCAST(x,counts,MPI_DOUBLE_PRECISION,0,a_mat%comm,ierr)
+    if (my_id.eq.0) write(*,*) '[DEBUG matvec] B: MPI_BCAST done'
 
     if ( PRINT_TIMING_INFO ) call cpu_time(t3)
 
@@ -246,11 +259,14 @@ module mod_gmres
     n_blocksize  = a_mat%block_size
     n_blocks     = a_mat%nnz/n_blocksize**2
     ndof_local   = (a_mat%index_max(my_id + 1) - a_mat%index_min(my_id + 1) + 1)*n_blocksize
-    
+
     index_offset = (a_mat%index_min(my_id + 1) - 1)*n_blocksize
-    
+
+    if (my_id.eq.0) write(*,*) '[DEBUG matvec] C: n_blocksize=', n_blocksize, ' n_blocks=', n_blocks, &
+                                ' ndof_local=', ndof_local, ' index_offset=', index_offset
     allocate(y_tmp(ndof_local))
     y_tmp        = 0.d0
+    if (my_id.eq.0) write(*,*) '[DEBUG matvec] D: entering dgemv loop'
     
 ! --- The actual matrix vector multiplication uses dense matrix-vector products for the small
 !     dense blocks within our sparse matrix. The size of these blocks depends on n_tor. Depending on
@@ -260,9 +276,8 @@ module mod_gmres
     if ( n_tor <= 7 ) then
 
 !$omp parallel default(none) &
-!$omp   shared(a_mat, x, n_blocks, n_blocksize, index_offset) &
-!$omp   private(i, iA_start, ix_start, iy_start, ir, jc, y_tmp_block ) &
-!$omp   reduction(+:y_tmp)
+!$omp   shared(y_tmp, a_mat, x, n_blocks, n_blocksize, index_offset) &
+!$omp   private(i, iA_start, ix_start, iy_start, ir, jc, y_tmp_block)
 !$omp do schedule(guided)
       do i = 1, n_blocks
 
@@ -272,7 +287,9 @@ module mod_gmres
 
         call dgemv('T', n_blocksize, n_blocksize, 1.d0, a_mat%val(iA_start+1), n_blocksize, x(ix_start), Int1, 0.d0, y_tmp_block, Int1)
 
+!$omp critical
         y_tmp(iy_start:iy_start+n_blocksize-1) = y_tmp(iy_start:iy_start+n_blocksize-1) + y_tmp_block(1:n_blocksize)
+!$omp end critical
 
       end do
 !$omp end do
@@ -329,8 +346,10 @@ module mod_gmres
        recv_disp(i) = recv_disp(i-1) + recv_counts(i-1)
     enddo
 
+    if (my_id.eq.0) write(*,*) '[DEBUG matvec] E: dgemv loop done, mpi_allgatherv'
     call mpi_allgatherv(y_tmp, ndof_local, MPI_DOUBLE_PRECISION, y, recv_counts, recv_disp, MPI_DOUBLE_PRECISION, a_mat%comm,ierr)
-    
+    if (my_id.eq.0) write(*,*) '[DEBUG matvec] F: mpi_allgatherv done'
+
     deallocate(y_tmp)
     deallocate(recv_counts)
     deallocate(recv_disp)

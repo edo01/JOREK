@@ -137,21 +137,26 @@ subroutine sort_particles(sim, group_num, method, alive_particle_count)
 
   ! Local variables
   integer, allocatable :: sorted_indices(:)
+  integer :: local_alive_count
   double precision :: start_time, end_time, tot_time(3)
-  
+
   start_time = MPI_WTIME()
 
   select case (method)
   case (particle_simd_lane_sort)
     if (sim%my_id .eq. 0) then
       write(*,*) "INFO: Using SIMD-lane based particle sorting."
+      write(*,*) "[DEBUG sort] n_particles=", size(sim%groups(group_num)%particles,1)
     end if
-    call i_elm_sort_simd_lane(sorted_indices, sim%groups(group_num)%particles, alive_particle_count)
+    call i_elm_sort_simd_lane(sorted_indices, sim%groups(group_num)%particles, local_alive_count)
+    if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] simd_lane sort done, alive=", local_alive_count
   case (particle_global_sort)
     if (sim%my_id .eq. 0) then
       write(*,*) "INFO: Using global particle sorting."
+      write(*,*) "[DEBUG sort] n_particles=", size(sim%groups(group_num)%particles,1)
     end if
-    call i_elm_sort_global(sorted_indices, sim%groups(group_num)%particles, alive_particle_count)
+    call i_elm_sort_global(sorted_indices, sim%groups(group_num)%particles, local_alive_count)
+    if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] global sort done, alive=", local_alive_count
   case default
     if (sim%my_id .eq. 0) then
       write(*,*) "ERROR: Unsupported particle sorting method: ", method
@@ -159,8 +164,12 @@ subroutine sort_particles(sim, group_num, method, alive_particle_count)
     stop
   end select
 
+  if (present(alive_particle_count)) alive_particle_count = local_alive_count
+
+  if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] reorder_particles start"
   ! Reorder particles based on sorted indices
   call reorder_particles(sim%groups(group_num)%particles, sorted_indices)
+  if (sim%my_id .eq. 0) write(*,*) "[DEBUG sort] reorder_particles done"
 
   end_time = MPI_WTIME()
   tot_time = mpi_minmeanmax(end_time-start_time)
@@ -210,7 +219,7 @@ subroutine i_elm_sort_simd_lane(sorted_indices, particles, last_positive_idx)
   n_pos = 0
   do i = 1, n_particles
     temp_indices(i) = i
-    if (particles(i)%i_elm >= 0) then
+    if (particles(i)%i_elm > 0) then
       sort_keys(i) = particles(i)%i_elm
       n_pos = n_pos + 1
     else
@@ -360,70 +369,74 @@ subroutine i_elm_sort_global(sorted_indices, particles, last_positive_idx)
   deallocate(negative_indices)
 end subroutine i_elm_sort_global
 
-!> A simple quicksort implementation to sort indices based on field values
-recursive subroutine sort_indices(field_values, indices)
+!> Counting sort: stably sort `indices` by `field_values(indices(i))`.
+!> Keys must be positive integers or HUGE(0) (sentinel for dead particles).
+!> Sentinel-keyed entries are placed at the end; all others in ascending order.
+!>
+!> Replaces the former recursive quicksort which caused a stack overflow on
+!> large particle counts: i_elm keys are bounded integers (1..n_elements) with
+!> ~n_particles/n_elements duplicates per key, leading to O(n_elements)
+!> recursion depth and O(n_elements * frame_size) stack usage.
+subroutine sort_indices(field_values, indices)
   implicit none
-  integer, intent(in) :: field_values(:)
+  integer, intent(in)    :: field_values(:)
   integer, intent(inout) :: indices(:)
 
-  integer :: pivot_index, pivot_value
-  integer :: i, j
-  integer, allocatable :: low_indices(:), equal_indices(:), high_indices(:)
-  integer :: low_count, equal_count, high_count
+  integer :: i, key, n, key_max, pos
+  integer, allocatable :: starts(:), indices_copy(:)
 
-  if (size(indices) > 1) then
-    ! Choose pivot (simple choice: middle element)
-    pivot_index = indices(size(indices) / 2)
-    pivot_value = field_values(pivot_index)
+  n = size(indices)
+  if (n <= 1) return
 
-    ! Partitioning
-    low_count = count(field_values(indices) < pivot_value)
-    equal_count = count(field_values(indices) == pivot_value)
-    high_count = count(field_values(indices) > pivot_value)
+  ! --- Pass 1: find maximum non-sentinel key ---
+  key_max = 0
+  do i = 1, n
+    key = field_values(indices(i))
+    if (key /= HUGE(0) .and. key > key_max) key_max = key
+  end do
 
-    allocate(low_indices(low_count))
-    allocate(equal_indices(equal_count))
-    allocate(high_indices(high_count))
+  ! starts(k) will hold the next write position for key k.
+  ! Bucket 0 is reserved for HUGE(0) sentinel (dead particles), placed last.
+  ! Buckets 1..key_max are for live particles sorted by i_elm.
+  allocate(starts(0:key_max), source=0)
 
-    low_count = 0
-    equal_count = 0
-    high_count = 0
-    do i = 1, size(indices)
-      if (field_values(indices(i)) < pivot_value) then
-        low_count = low_count + 1
-        low_indices(low_count) = indices(i)
-      else if (field_values(indices(i)) == pivot_value) then
-        equal_count = equal_count + 1
-        equal_indices(equal_count) = indices(i)
-      else if (field_values(indices(i)) > pivot_value) then
-        high_count = high_count + 1
-        high_indices(high_count) = indices(i)
-      end if
-    end do
+  ! --- Pass 2: count occurrences per key ---
+  do i = 1, n
+    key = field_values(indices(i))
+    if (key == HUGE(0)) then
+      starts(0) = starts(0) + 1
+    else
+      starts(key) = starts(key) + 1
+    end if
+  end do
 
-    ! Recursively sort the partitions
-    call sort_indices(field_values, low_indices)
-    call sort_indices(field_values, high_indices)
+  ! --- Convert counts to exclusive start positions (1-based output array) ---
+  ! Live keys occupy positions 1 .. sum(starts(1:key_max))
+  ! Sentinel bucket follows immediately after.
+  pos = 1
+  do i = 1, key_max
+    key = starts(i)        ! save count
+    starts(i) = pos        ! overwrite with start position
+    pos = pos + key
+  end do
+  starts(0) = pos          ! sentinel bucket starts after all live entries
 
-    ! Combine the results
-    j = 0
-    do i = 1, low_count
-      j = j + 1
-      indices(j) = low_indices(i)
-    end do
-    do i = 1, equal_count
-      j = j + 1
-      indices(j) = equal_indices(i)
-    end do
-    do i = 1, high_count
-      j = j + 1
-      indices(j) = high_indices(i)
-    end do
+  ! --- Pass 3: stable scatter ---
+  allocate(indices_copy(n))
+  do i = 1, n
+    key = field_values(indices(i))
+    if (key == HUGE(0)) then
+      indices_copy(starts(0)) = indices(i)
+      starts(0) = starts(0) + 1
+    else
+      indices_copy(starts(key)) = indices(i)
+      starts(key) = starts(key) + 1
+    end if
+  end do
 
-    deallocate(low_indices)
-    deallocate(equal_indices)
-    deallocate(high_indices)
-  end if
+  indices = indices_copy
+
+  deallocate(starts, indices_copy)
 end subroutine sort_indices
 
 

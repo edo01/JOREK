@@ -105,9 +105,13 @@ contains
     feedback_element_list => jorek_feedback%element_list
     feedback_rhs       = 0.d0
 
-    #ifdef USE_ORDERING
-        !> reorder particles by i_elm to improve data locality
+    #include "optimization_defines.h"
+    #if ORDERING_TYPE == 1
+        !> reorder particles by i_elm to improve data locality (global sort)
         call sort_particles(sim, group_num, particle_global_sort, num_particles_alive)
+    #elif ORDERING_TYPE == 2
+        !> reorder particles by i_elm to improve data locality (SIMD-lane sort)
+        call sort_particles(sim, group_num, particle_simd_lane_sort, num_particles_alive)
     #endif
     
     !> count number of particles in system, and update sim%groups(...)%average_weight
@@ -438,8 +442,13 @@ contains
       write(*,*) 'INFO: number of timesteps           : ', nstep_part_adj
       write(*,*) 'INFO: feedback_rhs dimension        : ', size(feedback_rhs,1)*size(feedback_rhs,2)*size(feedback_rhs,3)*size(feedback_rhs,4)*size(feedback_rhs,5)*8.d0/(1024*1024) , ' MB'
       write(*,*) 'INFO: feedback_rhs shape            : (', size(feedback_rhs,1), ',', size(feedback_rhs,2), ',', size(feedback_rhs,3), ',', size(feedback_rhs,4), ',', size(feedback_rhs,5),')' 
-#ifdef USE_ORDERING
-      write(*,*) 'INFO: using particle ordering'
+#include "optimization_defines.h"
+#if ORDERING_TYPE == 1
+      write(*,*) 'INFO: particle ordering: global sort'
+#elif ORDERING_TYPE == 2
+      write(*,*) 'INFO: particle ordering: SIMD-lane sort'
+#else
+      write(*,*) 'INFO: particle ordering: none'
 #endif
     endif
 
