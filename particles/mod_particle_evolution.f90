@@ -16,7 +16,8 @@ module mod_particle_evolution
     use mod_particle_sorting
     use, intrinsic :: iso_c_binding
 
-#ifdef USE_GPU
+#include "optimization_defines.h"
+#if USE_GPU
     use mod_particle_types, only: particle_SoA_kinetic_relativistic_c, &
                                   particle_group_c, node_list_SoA_c,   &
                                   element_list_SoA_c,                   &
@@ -37,7 +38,7 @@ module mod_particle_evolution
     private
     public :: evolve_particle_group, evolve_REs
 
-#ifdef USE_GPU
+#if USE_GPU
     !> Interface to the HIP C function that launches the GPU kernel
     interface
       subroutine launch_evolve_REs(sim_c, h_feedback_rhs, tstep_part_adj, nstep_part_adj) bind(C, name='launch_evolve_REs')
@@ -83,7 +84,7 @@ contains
 
     !> Coupling scheme specific
     integer :: imp_q_idx
-#ifdef USE_GPU
+#if USE_GPU
     real*8 :: frac_gpu_particles    ! fraction of total num_particles to compute on GPU
     integer :: num_gpu_particles
 #endif
@@ -130,7 +131,7 @@ contains
       case ('ics')
         call evolve_ncs_ics(sim, group_num, feedback_rhs, feedback_nodelist, feedback_element_list, rng, tstep_part_adj, nstep_part_adj, imp_q_idx)
       case ('rep')
-#ifdef USE_GPU
+#if USE_GPU
         frac_gpu_particles = 1.d0   !TODO: move to input file
         num_gpu_particles = int(real(size(sim%groups(group_num)%particles,1),8) * frac_gpu_particles)
         call evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj, num_gpu_particles)
@@ -305,7 +306,7 @@ contains
     
   end subroutine evolve_REs
 
-#ifdef USE_GPU
+#if USE_GPU
   !> GPU implementation of evolve_REs via the HIP kernel.
   !> Builds the SoA data structures, calls the C launch function,
   !> converts the results back to the Fortran AoS layout.
@@ -336,7 +337,7 @@ contains
     integer :: kfb, kvb                  ! loop indices for fb_c copy-back
     real(c_double), allocatable, target :: fb_c(:,:,:,:,:)
   
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     integer :: n_alive, ip
   #endif
 
@@ -352,31 +353,31 @@ contains
     n_elements = sim%fields%element_list%n_elements
     select type (p => sim%groups(group_num)%particles)
     type is (particle_kinetic_relativistic)
-    #ifdef GPU_DEBUG
+    #if GPU_DEBUG
       if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Allocating particle SoA for num_gpu_particles=', num_gpu_particles
     #endif
       call particles_AoS_to_SoA(p, num_gpu_particles, part_soa, &
           part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
-    #ifdef GPU_DEBUG
+    #if GPU_DEBUG
       if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] particle SoA built'
     #endif
     end select
 
     ! --- Build node list SoA ---
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Building node_list SoA'
   #endif
     call node_list_to_SoA(sim%fields%node_list, nl_soa, nl_x_flat, nl_val_flat, nl_del_flat)
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] node_list SoA built'
   #endif
 
     ! --- Build element list SoA ---
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Building element_list SoA (n_elements=', n_elements,')'
   #endif
     call element_list_to_SoA(sim%fields%element_list, el_soa, el_vert_flat, el_neigh_flat, el_size_flat)
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] element_list SoA built'
   #endif
 
@@ -450,7 +451,7 @@ contains
     endif
 
     ! --- Call GPU kernel ---
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     do ip=1, num_gpu_particles
       if (sim%groups(group_num)%particles(ip)%i_elm .gt. 0) then
           n_alive = n_alive + 1
@@ -471,7 +472,7 @@ contains
     call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj_c, nstep_part_adj_c)
     if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     do ip = 1, min(3, num_gpu_particles)
       write(*,'(A,I0,A,I0,A,3ES25.17)') '[GPU_DEBUG Fortran writeback j=', sim%my_id, '] Particle(', ip, ') x = ', &
           part_x(ip), part_x(ip + num_gpu_particles), part_x(ip + 2*num_gpu_particles)
@@ -483,7 +484,7 @@ contains
     end do
 #endif
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (sim%my_id == 0) then
       write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(:,:,:,:,P_par_idx_kin)))
       write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(:,:,:,:,P_perp_idx_kin)))
@@ -510,23 +511,23 @@ contains
     end select
 
     ! --- Cleanup ---
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating fb_c'
   #endif
     deallocate(fb_c)
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating particle SoA backing arrays'
   #endif
     deallocate(part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating node_list SoA backing arrays'
   #endif
     deallocate(nl_x_flat, nl_val_flat, nl_del_flat)
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating element_list SoA backing arrays'
   #endif
     deallocate(el_vert_flat, el_neigh_flat, el_size_flat)
-  #ifdef GPU_DEBUG
+  #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Cleanup done'
   #endif
 

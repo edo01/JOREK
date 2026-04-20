@@ -29,7 +29,8 @@ module mod_particle_types
   public :: initialize_particle_list_to_zero,initialize_particle_to_zero
   public :: deallocate_particle_arrays
 
-#ifdef USE_GPU
+#include "optimization_defines.h"
+#if USE_GPU
   public :: particle_SoA_kinetic_relativistic_c
   public :: particle_group_c
   public :: node_list_SoA_c
@@ -147,7 +148,7 @@ module mod_particle_types
     integer(kind=1) :: q !< charge [e]
  end type particle_gc_relativistic
 
-#ifdef USE_GPU
+#if USE_GPU
 ! =====================================================================================
 !  bind(C) Structure-of-Arrays types for GPU interoperability
 !  These match the C structs in kernel_re_evolution.hip.cpp exactly.
@@ -1170,7 +1171,7 @@ Bn_k_arr,dBn_k_arr,Bnorm_k_arr,E_k_arr,dAstar_k_arr)
   if(allocated(v_2d_arr))          deallocate(v_2d_arr)
 end subroutine deallocate_particle_arrays
 
-#ifdef USE_GPU
+#if USE_GPU
 ! =====================================================================================
 !  AoS <-> SoA conversion utilities for GPU interoperability
 ! =====================================================================================

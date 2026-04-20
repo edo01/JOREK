@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include "models/mod_settings.h"
+#include "optimization_defines.h"
 
 // TODO: There are some parameters passed to different functions only for debugging purposes (e.g. debug_j, debug_k).
 // They may be handled through precompiler guard GPU_DEBUG as well.
@@ -417,7 +418,7 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
                        double &Z, double &Z_s, double &Z_t, double &Z_p,
                        int debug_j, int debug_k)
 {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     const bool dbg = rz_dbg_enabled(debug_j, debug_k);
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] INTERP_ENTER: i_elm=%d st=[%.17e,%.17e] phi=%.17e\n",
@@ -473,7 +474,7 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
         }
     }
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] INTERP_EXIT: i_elm=%d R=%.17e Z=%.17e R_s=%.17e R_t=%.17e Z_s=%.17e Z_t=%.17e\n",
                debug_j, debug_k, i_elm_f, R, Z, R_s, R_t, Z_s, Z_t);
@@ -506,7 +507,7 @@ void try_interp_gpu(const double* __restrict__ nl_x,
     else
         inv_jac = 1.0 / jac;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (rz_dbg_enabled(debug_j, debug_k)) {
         printf("[GPU_DEBUG j=%d k=%d] TRY_INTERP: i_elm=%d st=[%.17e,%.17e] x=[%.17e,%.17e] jac=%.17e inv_jac=%.17e\n",
                debug_j, debug_k, i_elm_f, st[0], st[1], x[0], x[1], jac, inv_jac);
@@ -552,7 +553,7 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
         co = (n1a == n2b) || (n1b == n2a);
     }
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (rz_dbg_enabled(debug_j, debug_k)) {
         printf("[GPU_DEBUG j=%d k=%d] NB_SIDE: elm1=%d elm2=%d side1=%d side2=%d nb=%d co=%d\n",
                debug_j, debug_k, elm1, elm2, side1, side2, int(is_nb), int(co));
@@ -580,7 +581,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
     }
 
     i_to = el_neighbours[idx2(i_from - 1, q_from - 1, n_elements)];
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (rz_dbg_enabled(debug_j, debug_k)) {
         printf("[GPU_DEBUG j=%d k=%d] COORD_NB_IN: i_from=%d q_from=%d i_to_raw=%d st_in=[%.17e,%.17e]\n",
                debug_j, debug_k, i_from, q_from, i_to, st[0], st[1]);
@@ -611,7 +612,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
         default:st[0] = 0.0;     st[1] = 1.0 - x;   break;
     }
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (rz_dbg_enabled(debug_j, debug_k)) {
         printf("[GPU_DEBUG j=%d k=%d] COORD_NB_OUT: i_from=%d i_to=%d q_to=%d co=%d st_out=[%.17e,%.17e]\n",
                debug_j, debug_k, i_from, i_to, q_to, int(co), st[0], st[1]);
@@ -641,7 +642,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
     constexpr double tolf = 1.0e-15;
     double phi_loc = 0.0;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     const bool dbg = rz_dbg_enabled(debug_j, debug_k);
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_ENTER: i_elm=%d target=[%.17e,%.17e]\n",
@@ -657,7 +658,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
         double x[2] = {starts[ist][0], starts[ist][1]};
         ifail = 999;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         if (dbg) {
             printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_START: i_elm=%d istart=%d x0=[%.17e,%.17e]\n",
                    debug_j, debug_k, i_elm_f, ist + 1, x[0], x[1]);
@@ -673,7 +674,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
             double fvec[2] = {RRg1 - R_find, ZZg1 - Z_find};
             double errf = fabs(fvec[0]) + fabs(fvec[1]);
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
             if (dbg) {
                 printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_ITER: i_elm=%d istart=%d it=%d x=[%.17e,%.17e] f=[%.17e,%.17e] errf=%.17e\n",
                        debug_j, debug_k, i_elm_f, ist + 1, i + 1, x[0], x[1], fvec[0], fvec[1], errf);
@@ -685,7 +686,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
                 ielm_out = i_elm_f;
                 R_out = RRg1; Z_out = ZZg1;
                 ifail = 0;
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 if (dbg) {
                     printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_OK_F: i_elm=%d it=%d st=[%.17e,%.17e] RZ=[%.17e,%.17e]\n",
                            debug_j, debug_k, i_elm_f, i + 1, s_out, t_out, R_out, Z_out);
@@ -697,7 +698,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
             double p[2] = {-fvec[0], -fvec[1]};
             double dis = Z_t * R_s - R_t * Z_s;     // determinant of the jacobian
             if (dis == 0.0) {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 if (dbg) {
                     printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_SINGULAR: i_elm=%d istart=%d it=%d\n",
                            debug_j, debug_k, i_elm_f, ist + 1, i + 1);
@@ -722,7 +723,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
                 ielm_out = i_elm_f;
                 R_out = RRg1; Z_out = ZZg1;
                 ifail = 0;
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 if (dbg) {
                     printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_OK_X: i_elm=%d it=%d st=[%.17e,%.17e] RZ=[%.17e,%.17e]\n",
                            debug_j, debug_k, i_elm_f, i + 1, s_out, t_out, R_out, Z_out);
@@ -733,7 +734,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
         }
     }
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_SINGLE_FAIL: i_elm=%d ifail=%d\n",
                debug_j, debug_k, i_elm_f, ifail);
@@ -757,7 +758,7 @@ void find_RZ_gpu(const double* __restrict__ nl_x,
                  int &ifail,
                  int debug_j, int debug_k)
 {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     const bool dbg = rz_dbg_enabled(debug_j, debug_k);
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_GPU_ENTER: target=[%.17e,%.17e]\n",
@@ -770,7 +771,7 @@ void find_RZ_gpu(const double* __restrict__ nl_x,
         find_RZ_single_gpu(nl_x, el_vertex, el_size, n_elements, n_nodes,
                             mode_coord, k, R_find, Z_find,
                             R_out, Z_out, ielm_out, s_out, t_out, ifail, debug_j, debug_k);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         if (dbg) {
             printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_GPU_TRY: k=%d ifail=%d ielm_out=%d st=[%.17e,%.17e]\n",
                    debug_j, debug_k, k, ifail, ielm_out, s_out, t_out);
@@ -781,7 +782,7 @@ void find_RZ_gpu(const double* __restrict__ nl_x,
     if (ielm_out == 0) ifail = 99;
     if (ifail == 999) ielm_out = 0;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] FIND_RZ_GPU_EXIT: ifail=%d ielm_out=%d RZ=[%.17e,%.17e] st=[%.17e,%.17e]\n",
                debug_j, debug_k, ifail, ielm_out, R_out, Z_out, s_out, t_out);
@@ -808,7 +809,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
                         int &ifail,
                         int debug_j, int debug_k)     // both i_elm_old, i_elm_new are 1-based
 {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     const bool dbg = rz_dbg_enabled(debug_j, debug_k);
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] FRZN_ENTER: old=[%.17e,%.17e] new=[%.17e,%.17e] st_old=[%.17e,%.17e] i_elm_old=%d\n",
@@ -824,7 +825,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
     // Check if element is valied
     if (i_elm_old < 1 || i_elm_old > n_elements) {
         i_elm_new = 0;
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         if (dbg) {
             printf("[GPU_DEBUG j=%d k=%d] FRZN_INVALID_ELM: i_elm_old=%d n_elements=%d\n",
                    debug_j, debug_k, i_elm_old, n_elements);
@@ -850,7 +851,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
     ifail = 0;
     int iter;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) printf("[GPU_DEBUG j=%d k=%d] FRZN_INIT: i_elm=%d x_step=[%.17e,%.17e] st=[%.17e,%.17e] inv_jac=%.17e err2=%.17e\n",
                debug_j, debug_k, i_elm_new, x_step[0], x_step[1], st[0], st[1], inv_jac, err2);
 #endif
@@ -868,7 +869,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
         double fact1  = fabs(st_step1) / fmax(dist1, 1.0e-30);
         double fact   = fmax(fact0, fact1);
 
-    #ifdef GPU_DEBUG
+    #if GPU_DEBUG
         if (dbg) {
             printf("[GPU_DEBUG j=%d k=%d] FRZN_ITER: it=%d i_elm=%d st=[%.17e,%.17e] st_step=[%.17e,%.17e] fact=%.17e err2=%.17e\n",
                debug_j, debug_k, iter, i_elm_new, st[0], st[1], st_step0, st_step1, fact, err2);
@@ -888,12 +889,12 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
             int i_elm_tmp = i_elm_new;
             coord_in_neighbour_gpu(el_vertex, el_neighbours, n_elements,
                                    i_elm_tmp, i_elm_new, st, debug_j, debug_k);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
             if (dbg) printf("[GPU_DEBUG j=%d k=%d] FRZN_HOP: from=%d to=%d st_on_edge=[%.17e,%.17e]\n",
                        debug_j, debug_k, i_elm_tmp, i_elm_new, st[0], st[1]);
 #endif
             if (i_elm_new < 0) {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 printf("[GPU_DEBUG] find_RZ_nearby: coord_in_neighbour returned i_elm_new<0, fallback. iter=%d i_elm_tmp=%d R_new=%.17e Z_new=%.17e st=[%.17e,%.17e]\n",
                        iter, i_elm_tmp, R_new, Z_new, st[0], st[1]);
 #endif
@@ -906,7 +907,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
             }
             if (i_elm_new == 0) {       // No element on that side, particle is lost
                 i_elm_new = -i_elm_tmp; // Save position of particle
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 printf("[GPU_DEBUG] find_RZ_nearby: PARTICLE LOST (i_elm_new=0, ifail=-1): iter=%d i_elm_old=%d i_elm_tmp=%d R_old=%.17e Z_old=%.17e R_new=%.17e Z_new=%.17e st=[%.17e,%.17e] err2=%.17e\n",
                        iter, i_elm_old, i_elm_tmp, R_old, Z_old, R_new, Z_new, st[0], st[1], err2);
 #endif
@@ -933,7 +934,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
         s_new = st[0];
         t_new = st[1];
         if (err2 < element_tolerance) {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
             if (dbg) printf("[GPU_DEBUG j=%d k=%d] FRZN_CONVERGED: it=%d i_elm_new=%d st=[%.17e,%.17e] err2=%.17e\n",
                        debug_j, debug_k, iter, i_elm_new, s_new, t_new, err2);
 #endif
@@ -942,7 +943,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
     }
 
     if (isnan(err2)) {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         printf("[GPU_DEBUG] find_RZ_nearby: NaN in err2, setting i_elm=-2. iter=%d i_elm_new=%d R_new=%.17e Z_new=%.17e\n",
                iter, i_elm_new, R_new, Z_new);
 #endif
@@ -950,7 +951,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
         return;
     }
     if (iter > newton_iter_max) {
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         printf("[GPU_DEBUG] find_RZ_nearby: exceeded newton_iter_max, fallback. i_elm_new=%d err2=%.17e R_new=%.17e Z_new=%.17e\n",
                i_elm_new, err2, R_new, Z_new);
 #endif
@@ -987,7 +988,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     sincosperiod_moivre(phi, HZ, dHZ);
 
     int ie = i_elm_f - 1;
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     const bool dbg = rz_dbg_enabled(debug_j, debug_k);
     if(dbg) printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU START: i_elm=%d st=[%.17e,%.17e] phi=%.17e time=%.17e fields%%time_now=%.17e fields%%time_prev=%.17e F0=%.17e t_norm=%.17e\n",
            debug_j, debug_k, i_elm_f, st[0], st[1], phi, time, time_now, time_prev, F0, t_norm);
@@ -1045,7 +1046,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 
     if (t_norm > 0.0) {
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         if(dbg) {
             printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS START: i_elm=%d st=[%.17e,%.17e] phi=%.17e\n",
                    debug_j, debug_k, i_elm_f, st[0], st[1], phi);
@@ -1104,7 +1105,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         P_time[1] = Pd[1] * dt;
     }
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if(dbg) {
         printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS END: i_elm=%d R=%.17e Z=%.17e R_s=%.17e R_t=%.17e Z_s=%.17e Z_t=%.17e\n",
                debug_j, debug_k, i_elm_f, R, Zc, R_s, R_t, Z_s, Z_t);
@@ -1147,7 +1148,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     E[1] -= E[1] * B[1] * Bnorm_inv;
     E[2] -= E[2] * B[2] * Bnorm_inv;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if(dbg) printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU OUTPUT: psi=%.17e U=%.17e E=[%.17e,%.17e,%.17e] B=[%.17e,%.17e,%.17e]\n",
            debug_j, debug_k, psi, U, E[0], E[1], E[2], B[0], B[1], B[2]);
 #endif
@@ -1186,7 +1187,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     double scaling = 0.5 * timestep * charge * EL_CHG / (ATOMIC_MASS_UNIT * mass * SPEED_OF_LIGHT);
     double mc = mass * SPEED_OF_LIGHT;
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] VPA_INPUT: i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, i_elm_f, x[0], x[1], x[2], p_mom[0], p_mom[1], p_mom[2]);
@@ -1215,7 +1216,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     // Compute cylindrical coordinates from cartesian ones
     double half_cyl[3];
     cartesian_to_cylindrical(half_xyz, half_cyl);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] VPA_STEP1: pm_normed=[%.17e,%.17e,%.17e] gamma=%.17e\n",
                debug_j, debug_k, pm[0], pm[1], pm[2], gamma);
@@ -1232,7 +1233,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                        half_cyl[0], half_cyl[1],
                        s_new, t_new, i_elm_new, ifail, debug_j, debug_k);
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg || ifail != 0)
         printf("[GPU_DEBUG j=%d k=%d] VPA_FIND1: s_new=%.17e t_new=%.17e i_elm_new=%d ifail=%d\n",
                debug_j, debug_k, s_new, t_new, i_elm_new, ifail);
@@ -1254,7 +1255,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 i_elm_f, st, x[2], time + 0.5 * timestep,
                 E, B_field, psi_loc, U_loc,
                 debug_j, debug_k);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: E_cyl=[%.17e,%.17e,%.17e] B_cyl=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, E[0], E[1], E[2], B_field[0], B_field[1], B_field[2]);
@@ -1269,7 +1270,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     double E_cart[3], B_cart[3];
     vector_cylindrical_to_cartesian(x[2], E, E_cart);
     vector_cylindrical_to_cartesian(x[2], B_field, B_cart);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: E_cart=[%.17e,%.17e,%.17e] B_cart=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, E_cart[0], E_cart[1], E_cart[2], B_cart[0], B_cart[1], B_cart[2]);
 #endif
@@ -1279,14 +1280,14 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     pm[0] += scaling * E_cart[0];
     pm[1] += scaling * E_cart[1];
     pm[2] += scaling * E_cart[2];
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: pm_afterE1=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, pm[0], pm[1], pm[2]);
 #endif
 
     // Cayley transform rotation
     cayley_transform_rotate(pm, B_cart, scaling);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: pm_afterCayley=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, pm[0], pm[1], pm[2]);
 #endif
@@ -1295,7 +1296,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     pm[0] += scaling * E_cart[0];
     pm[1] += scaling * E_cart[1];
     pm[2] += scaling * E_cart[2];
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: pm_afterE2=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, pm[0], pm[1], pm[2]);
 #endif
@@ -1314,7 +1315,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // Turn back from cartesian to cylindrical coordinates
     cartesian_to_cylindrical(half_xyz, half_cyl);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg) printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: final_xyz=[%.17e,%.17e,%.17e] final_cyl=[%.17e,%.17e,%.17e]\n",
                debug_j, debug_k, half_xyz[0], half_xyz[1], half_xyz[2], half_cyl[0], half_cyl[1], half_cyl[2]);
 #endif
@@ -1325,7 +1326,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                        x[0], x[1], st[0], st[1], i_elm_f,
                        half_cyl[0], half_cyl[1],
                        s_new, t_new, i_elm_new, ifail, debug_j, debug_k);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (dbg || ifail != 0) {
         printf("[GPU_DEBUG j=%d k=%d] VPA_FIND2: s_new=%.17e t_new=%.17e i_elm_new=%d ifail=%d\n",
                debug_j, debug_k, s_new, t_new, i_elm_new, ifail);
@@ -1400,7 +1401,7 @@ void evolve_REs_kernel(
     int    i_elm = p_i_elm[j];
     double w = p_weight[j];
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (j < 3) {
         printf("[GPU_DEBUG j=%d] START: my_id=%d i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] st=[%.17e,%.17e] w=%.17e q=%.17e\n",
                j, my_id, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1], w, charge);
@@ -1468,7 +1469,7 @@ void evolve_REs_kernel(
         //   index = ie + n_elements*(n + NDEG*(m + NV*(it + N_TOR*var)))  (all 0-based)
         // n_elements is first so warp threads (differing in ie) access adjacent addresses.
         int ie = i_elm - 1;
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         if (rz_dbg_enabled(j, k)) {
             printf("[GPU_DEBUG j=%d k=%d] PROJ: cyl_mom=[%.17e,%.17e,%.17e] cyl_vel=[%.17e,%.17e,%.17e]\n",
                    j, k, cyl_mom[0], cyl_mom[1], cyl_mom[2], cyl_vel[0], cyl_vel[1], cyl_vel[2]);
@@ -1488,7 +1489,7 @@ void evolve_REs_kernel(
                                    * el_size[idx3(ie, m, n, n_elements, NV)]
                                    * w;
             
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 if (rz_dbg_enabled(j, k)) {
                     printf("[GPU_DEBUG j=%d k=%d i_elm=%d] PROJ_FACTOR: deg=%d vert=%d HH=%.17e el_size=%.17e w=%.17e proj_factor=%.17e\n",
                            j, k, ie+1, n+1, m+1, HH[idx2(n, m, NDEG)], el_size[idx3(ie, m, n, n_elements, NV)], w, proj_factor);
@@ -1498,7 +1499,7 @@ void evolve_REs_kernel(
                 for (int it = 0; it < N_TOR; ++it) {
                     double hz = HZ_proj[it];
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
                 if (rz_dbg_enabled(j, k)) {
                     printf("[MYDEBUG j=%d k=%d i_elm=%d] FEEDBACK UPDATE: deg=%d vert=%d itor=%d, var_idx(incr)=%d -> add_value=%.17e\n",
                            j, k, ie+1, n+1, m+1, it+1, P_PAR_IDX+1, hz * v_Ppar * proj_factor);
@@ -1529,7 +1530,7 @@ void evolve_REs_kernel(
                                group_mass, sim_time, tstep_part_adj,
                                ifail,
                                j, k, my_id);
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
         if (ifail != 0) {
             printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.17e,%.17e,%.17e]\n",
                    j, k, ifail, i_elm, x[0], x[1], x[2]);
@@ -1538,7 +1539,7 @@ void evolve_REs_kernel(
 
     } // end time-step loop
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if (j < 3) {
         printf("[GPU_DEBUG j=%d] END: i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] st=[%.17e,%.17e]\n",
                j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1]);
@@ -1551,7 +1552,7 @@ void evolve_REs_kernel(
     p_st[idx2(j, 0, num_particles)] = st[0]; p_st[idx2(j, 1, num_particles)] = st[1];
     p_i_elm[j] = i_elm;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     if(j < 3) {
         printf("[GPU_DEBUG j=%d] WRITEBACK: i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] st=[%.17e,%.17e]\n",
                j, i_elm, x[0], x[1], x[2], pm[0], pm[1], pm[2], st[0], st[1]);
@@ -1672,7 +1673,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     constexpr int BLOCK_SIZE = 256;
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     fprintf(stderr, "[GPU_DEBUG host] launch_evolve_REs: num=%d n_el=%d n_nodes=%d NVAR=%d\n",
             num_particles, n_elements, n_nodes, NVAR);
     fprintf(stderr, "[GPU_DEBUG host]   sim_time=%.17e  tstep=%.17e  nstep=%d\n",
@@ -1710,7 +1711,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         sim.my_id);
 
     HIP_CHECK(hipGetLastError());
-#ifdef GPU_DEBUG
+#if GPU_DEBUG
     // Synchronise before reading results so any kernel printf output is flushed
     // and device-side errors are caught immediately rather than at the next API call.
     // Oss: without it, there is anyway implicit synchronisation at first hipMemcpy after kernel launch
