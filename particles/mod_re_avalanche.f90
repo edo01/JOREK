@@ -87,27 +87,28 @@ contains
     use mod_random_seed
     
     type(particle_sim)                  :: sim
-    type(particle_kinetic_relativistic) :: particle_kin_rel
+    type(pcg32_rng), dimension(:), allocatable ::  rng1, rng2, rng3             ! Rngs used for the collisions
 
-    type(pcg32_rng), dimension(:), allocatable ::  rng1, rng2, rng3
+    real*8 :: gamma_0                                 ! Lorentz factor incoming RE
+    real*8 :: gamma_min                               ! Cut-off energy/momentum expressed as Lorentz factor
+    real*8 :: gamma, gamma_prime                      ! Lorentz factors (energies) of the collision products
+    real*8 :: theta, phi                              ! Angles related to the collision
+    real*8 :: sigma                                   ! Total cross-section
+    real*8 :: dt_coll                                 ! Time between knock-on collisions [s]
+    real*8 :: prob                                    ! Probability of a collision
+    integer*4 :: n_part, n_part_old, n_part_bound     ! Amount of particles after and before collisions and the maximum
+    integer*4 :: emptyind(:)                          ! Array with all 'living' markers at the start 
 
-    real*8 :: gamma_min, gamma, gamma_0, gamma_rand, theta, phi, sigma, re
-    real*8 :: rand, Pgamma, gamma_prime, ne, Te, dt_coll
-    real*8 :: tang1(3), tang2(3), pnorm(3), vector(3)
-    integer*4 :: n_part, n_part_old, n_part_bound, emptyind(:), j !Nbin, test, 
-    real*8 :: E(3), B(3), Bhat(3), psi, U, Ec
-    real*8 :: rand_rng1(1), rand_rng2(1), rand_rng3(1)
+    integer*4 :: i, j
+
+    real*8 :: re    ! Classical electron radius
+    real*8 :: ne    ! Free electron density (currently hard-coded)
+    real*8 :: gamma_rand, Pgamma, rand, rand_rng1(1), rand_rng2(1), rand_rng3(1)    !Random numbers
+    real*8 :: pnorm(3), vector(3)   !Vectors with the direction of the incoming momentum vector pnorm and a orthonormal vector vector
     integer*4 :: counter
-    integer*4 :: process_rank, process_rank_plus_one, ierror
-    character(len=50) :: part_save
-    character(len=10) :: file_id
-
-    integer*4 :: amount_processes, i, ifail
-    real*8 :: vel(3), prob, n1(3), n2(3)
-
-    real*8 :: start_time, end_time, tot_time(3)
-
-    start_time = MPI_WTIME()
+    integer*4 :: process_rank, process_rank_plus_one, amount_processes 
+    integer*4 :: ierror, ifail
+    real*8 :: vel(3), n1(3), n2(3) !velocity vector and orthonormal vectors used for the collisions
 
     call reorder_indices(sim, n_part_bound, emptyind)
 
@@ -120,12 +121,14 @@ contains
 
     process_rank_plus_one = process_rank+1
 
+    ! Initialize the needed rngs
     do i = 1, 1
       call rng1(i)%initialize(n_dims=1, seed=random_seed(), n_streams=amount_processes, i_stream=process_rank_plus_one, ierr=ifail)
       call rng2(i)%initialize(n_dims=1, seed=random_seed(), n_streams=amount_processes, i_stream=process_rank_plus_one, ierr=ifail)
       call rng3(i)%initialize(n_dims=1, seed=random_seed(), n_streams=amount_processes, i_stream=process_rank_plus_one, ierr=ifail)
     end do
 
+    ! Loop over all particles
     do j=1,n_part_old
 
       select type (pini=>sim%groups(1)%particles(emptyind(j)))
@@ -133,32 +136,30 @@ contains
 
       if (pini%i_elm .le. 0) cycle
 
-      call sim%fields%calc_EBpsiU(sim%time, pini%i_elm, pini%st, pini%x(3), E, B, psi, U)
-
-      if (psi .gt. 1.d0) cycle  !!!!! -- double check/ correct -- !!!!
-
       ne = 1.d19
 
       vel = pini%p/sqrt(dot_product(pini%p, pini%p)/(c_light**2.d0) + sim%groups(1)%mass**2.d0)
 
       gamma_0 = 1/(sim%groups(1)%mass*c_light)*sqrt(dot_product(pini%p,pini%p) + sim%groups(1)%mass**2.d0*c_light**2.d0)
 
-      if (gamma_0 .le. gamma_min) cycle
-      if (0.5d0*(gamma_0 + 1) .lt. gamma_min) cycle
+      if (gamma_0 .le. gamma_min) cycle ! Large-ancle collision is impossible
+      if (0.5d0*(gamma_0 + 1) .lt. gamma_min) cycle ! Large-angle collision would lead to negative growthrate (comment this line if you want to include this)
 
       re = el_chg**2.d0/(4.d0*pi*eps_zero*(9.109d-31)*c_light**2.d0) ! Classical electron radius
       sigma = (4.d0*pi*re**2.d0/(gamma_0**2.d0-1.d0))*(gamma_0**2.d0*(gamma_0-2.d0*gamma_min+1.d0)/((gamma_min-1.d0)*(gamma_0-gamma_min)) &
               + 0.5d0*(gamma_0+1.d0)- gamma_min -(2.d0*gamma_0-1.d0)/(gamma_0-1.d0)*log((gamma_0-gamma_min)/(gamma_min-1.d0)))
-      prob = sigma*ne*sqrt(dot_product(vel,vel))*dt_coll/2.d0
+      prob = sigma*ne*sqrt(dot_product(vel,vel))*dt_coll/2.d0 ! Probability of the RE having collided during dt_coll
 
       
       if ((prob .lt. 0.d0) .or. (prob .gt. 1.d0)) then
-        write(*,*) 'probability', prob
-        write(*,*) 'Something is wrong, sigma', sigma, 'vel', sqrt(dot_product(vel,vel)), 'ne', ne, 'dt_coll', dt_coll, 'gamma_0', gamma_0
+        write(*,*) 'WARNING: timestep dt_coll chosen too large, current dt_coll:', dt_coll, 'Leads to collisional probability:', prob, 'Decrease dt_coll to at most', 1/(2*prob/dt_coll)
       end if 
 
+      ! Select the outgoing momentum of one of the electrons
+      ! This is done based on rejection sampling with respect to the probability density
+      ! function p(gamma), which is proportional to the differential cross-section
       counter = 0
-      do !while(found .eq. .false.)
+      do 
         call rng1(1)%next(rand_rng1)
         call rng2(1)%next(rand_rng2)
         rand = rand_rng1(1)
@@ -172,14 +173,10 @@ contains
         counter = counter+1
       end do 
 
+      ! Now we know gamma, we can calculate the enrgies and angles of all particles after the collision
       theta = acos(sqrt((gamma-1)/(gamma+1))*sqrt((gamma_0+1)/(gamma_0-1)))
       gamma_prime = gamma_0 + 1 -gamma
       phi = asin(sqrt((gamma**2-1)/(gamma_prime**2-1))*sin(theta))
-
-      if (cos(theta) .lt. 0) write(*,*) 'Apperently cosine theta can be negative?'
-      if (cos(phi) .lt. 0) write(*,*) 'Apperently cosine phi can be negative?'
-
-      if ((gamma .ge. gamma_0) .or. (gamma_prime .ge. gamma_0)) write(*,*) 'Particle after collision has higher energy than initial RE, gamma_0:', gamma_0, 'gamma:', gamma, 'gamma_prime', gamma_prime
 
       call rng3(1)%next(rand_rng3)
 
@@ -188,7 +185,7 @@ contains
       !n1 = [0.d0, pini%p(3), - pini%p(2)]/sqrt(pini%p(2)**2 + pini%p(3)**2)
       !n2 = [-1/pini%p(1)*(pini%p(2)**2/pini%p(3)+pini%p(3))*(1/(pini%p(1))**2*(pini%p(2)**2/pini%p(3)+pini%p(3))**2+1+pini%p(2)**2/(pini%p(3)**2))**(-0.5d0), pini%p(2)/pini%p(3)*(1/(pini%p(1))**2*(pini%p(2)**2/pini%p(3)+pini%p(3))**2+1+pini%p(2)**2/(pini%p(3)**2))**(-0.5d0), (1/(pini%p(1))**2*(pini%p(2)**2/pini%p(3)+pini%p(3))**2+1+pini%p(2)**2/(pini%p(3)**2))**(-0.5d0)]
       call get_orthonormals(pini%p,n1,n2)
-      vector = cos(rand*2*Pi)*n1 + sin(rand*2*Pi)*n2
+      vector = cos(rand*2*Pi)*n1 + sin(rand*2*Pi)*n2 ! A vector orthonomal to p
 
       ! Select target and colliding markers
       select type (pc=>sim%groups(1)%particles(emptyind(n_part_old+1+(j-1)*2)))
@@ -204,26 +201,18 @@ contains
       pt%weight = prob*pini%weight
       pini%weight = (1-prob)*pini%weight
 
-      pnorm = pini%p/sqrt(dot_product(pini%p,pini%p))
-      !if (dot_product(pnorm, vector) .ne. 0.d0) write(*,*) 'vector not orthogonal to pnorm', dot_product(pnorm, vector), 'size vector2', dot_product(vector, vector)
+      pnorm = pini%p/sqrt(dot_product(pini%p,pini%p)) ! Direction momentum vector
+
       pt%p = sim%groups(1)%mass*c_light*sqrt(gamma**2-1)*(cos(theta)*pnorm - sin(theta)*vector)
       pc%p = sim%groups(1)%mass*c_light*sqrt(gamma_prime**2-1)*(cos(phi)*pnorm +sin(phi)*vector)
 
-      n_part = n_part+2
-
-      if ((pini%weight + pc%weight + pt%weight) .lt. pini%weight/(1-prob)) write(*,*) '!!!!!!!!!!!!!!!!!!! mistake in weights in scattering !!!!!!!!!!!!!!!!!!!!!!!!!', 'prob', prob, 'pini%weight', pini%weight, 'pc%weight', pc%weight, 'pt%weight', pt%weight
+      n_part = n_part+2 ! Update amount of particles
 
       end select
       end select
       end select
 
     end do
-
-    end_time = MPI_WTIME()
-    tot_time = mpi_minmeanmax(end_time-start_time)
-    if (sim%my_id .eq. 0) then
-        write(*,"(A,3f10.3,A)") , "Time taken for collisions finished in (min/mean/max): ", tot_time, " seconds"
-    endif
   end subroutine Moller_scatt
 
   subroutine do_binning_mpi(sim, n_part, n_part_bound, n_limit, Nbin, Ntor, element_part_s, element_part_t, new_markers_per_element, emptyind, iterations)
@@ -267,7 +256,7 @@ contains
     integer*4 :: element_part_s, element_part_t
     integer*4 :: iterations
 
-    real*8 :: rand_sob(2), ran(4), rand_sob2(1), factor
+    real*8 ::  ran(4), factor
     type(pcg32_rng), dimension(:), allocatable ::  rng1, rng, rng2
 
     real*8 :: B_val_old
@@ -277,7 +266,7 @@ contains
 
     real*8 ::  pvec(3), ran_p_mu(2)
 
-    integer*4 :: process_rank, amount_processes, ki, kj, process_rank_plus_one, counter, ierr
+    integer*4 :: process_rank, amount_processes, process_rank_plus_one, counter, ierr
 
     integer*4 :: kii, kjj, n_limit, test, new_markers_per_element_loop, new_markers_loop_count, ifail
 
