@@ -448,7 +448,14 @@ contains
 #else
       write(*,*) 'INFO: particle ordering: none'
 #endif
+#if LUT_VALUES_DELTAS == 1
+      write(*,*) 'INFO: LUT values/deltas: enabled'
+      write(*,*) '      # slots = ', LUT_N_SLOTS
+      write(*,*) '      refresh interval = ', LUT_REFRESH_INTERVAL
+      write(*,*) '      min occupancy = ', LUT_MIN_OCCUPANCY
+#endif
     endif
+    
 
     ! --- Call GPU kernel ---
 #if GPU_DEBUG
