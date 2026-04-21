@@ -33,6 +33,9 @@ static constexpr int NDIM     = n_dim;
 static constexpr int NMODE    = (N_TOR - 1) / 2;
 
 static constexpr int NVAR = 3;
+// nl_values / nl_deltas only carry P_par and P_perp (not j_Phi), so their
+// first (fastest) dimension is 2, not NVAR. NVAR is for feedback_rhs only.
+static constexpr int N_FIELD_VARS = 2;
 static constexpr int P_PAR_IDX = 0;
 static constexpr int P_PERP_IDX = 1;
 static constexpr int J_PHI_IDX = 2;
@@ -128,18 +131,18 @@ struct particle_group {
 // Fortran: type node_list_SoA
 struct node_list_SoA {
     int     n_nodes;   // total number of nodes
-    double* x;         // (n_nodes, N_COORD_TOR, NDEG, NDIM) grid coordinates
-    double* values;    // (n_nodes, N_TOR, NDEG, NVAR) field values at current time
-    double* deltas;    // (n_nodes, N_TOR, NDEG, NVAR) field increments (for time interp)
+    double* x;         // (NDIM, NDEG, N_COORD_TOR, n_nodes) grid coordinates       — n_nodes slowest for stride-1 it-loop
+    double* values;    // (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes)  field values     — n_nodes slowest for stride-1 it-loop
+    double* deltas;    // (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes)  field increments — n_nodes slowest for stride-1 it-loop
 };
 
 // Element list in Structure-of-Arrays layout.
 // Fortran: type element_list_SoA
 struct element_list_SoA {
     int     n_elements; // total number of elements
-    int*    vertex;     // (n_elements, NV)       1-based node indices per vertex
-    int*    neighbours; // (n_elements, NV)       1-based neighbour element indices (0=boundary)
-    double* size;       // (n_elements, NV, NDEG) basis-function scale factors
+    int*    vertex;     // (NV, n_elements)       1-based node indices — n_elements fastest for coalesced warp access
+    int*    neighbours; // (NV, n_elements)       1-based neighbour element indices (0=boundary)
+    double* size;       // (NDEG, NV, n_elements) basis-function scale factors — n_elements fastest
 };
 
 // Linear time-interpolated field accessor.
@@ -454,17 +457,17 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
     int ie = i_elm_f - 1;       // Element idx, 0-based
 
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;       // Node number, 0-based
+        int iv = el_vertex[idx2(kv, ie, NV)] - 1;       // Node number, 0-based
         for (int kf = 0; kf < NDEG; ++kf) {
-            double ss = el_size[idx3(ie, kv, kf, n_elements, NV)];
+            double ss = el_size[idx3(kf, kv, ie, NDEG, NV)];
             double g   = G  [idx2(kf, kv, NDEG)];
             double gs  = G_s[idx2(kf, kv, NDEG)];
             double gt  = G_t[idx2(kf, kv, NDEG)];
 
             for (int it = 0; it < N_COORD_TOR; ++it) {
-                // nl_x layout: (n_nodes, N_COORD_TOR, NDEG, NDIM)
-                double xx1 = nl_x[idx4(iv, it, kf, 0, n_nodes, N_COORD_TOR, NDEG)];
-                double xx2 = nl_x[idx4(iv, it, kf, 1, n_nodes, N_COORD_TOR, NDEG)];
+                // nl_x layout: (NDIM, NDEG, N_COORD_TOR, n_nodes)
+                double xx1 = nl_x[idx4(0, kf, it, iv, NDIM, NDEG, N_COORD_TOR)];
+                double xx2 = nl_x[idx4(1, kf, it, iv, NDIM, NDEG, N_COORD_TOR)];
                 double hz  = HZ_coord[it];
                 double dhz = HZ_coord_p[it];
 
@@ -544,7 +547,7 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
     // Find the side in elm2 pointing to elm1
     // If elm2 has no neighbour -> elm1 use the last one that is 0 (i.e. the one on the axis itself)
     for (int i = 0; i < NV; ++i) {
-        if (el_neighbours[idx2(ie2, i, n_elements)] == elm1) {
+        if (el_neighbours[idx2(i, ie2, NV)] == elm1) {
             side2 = i + 1;
             break;
         }
@@ -553,10 +556,10 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
         is_nb = true;
         // Determine node numbers of the sides
         // Node numbers are related to sides as node1=(side-1)%4+1, node2=side%4+1
-        int n1a = el_vertex[idx2(ie1, (side1 - 1) % 4, n_elements)];
-        int n1b = el_vertex[idx2(ie1,  side1      % 4, n_elements)];
-        int n2a = el_vertex[idx2(ie2, (side2 - 1) % 4, n_elements)];
-        int n2b = el_vertex[idx2(ie2,  side2      % 4, n_elements)];
+        int n1a = el_vertex[idx2((side1 - 1) % 4, ie1, NV)];
+        int n1b = el_vertex[idx2( side1      % 4, ie1, NV)];
+        int n2a = el_vertex[idx2((side2 - 1) % 4, ie2, NV)];
+        int n2b = el_vertex[idx2( side2      % 4, ie2, NV)];
         co = (n1a == n2b) || (n1b == n2a);
     }
 
@@ -587,7 +590,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
         q_from = (1.0 - st[0] <= st[1]) ? 3 : 4;
     }
 
-    i_to = el_neighbours[idx2(i_from - 1, q_from - 1, n_elements)];
+    i_to = el_neighbours[idx2(q_from - 1, i_from - 1, NV)];
 #if GPU_DEBUG
     if (rz_dbg_enabled(debug_j, debug_k)) {
         printf("[GPU_DEBUG j=%d k=%d] COORD_NB_IN: i_from=%d q_from=%d i_to_raw=%d st_in=[%.17e,%.17e]\n",
@@ -1023,9 +1026,9 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
+        int iv = el_vertex[idx2(kv, ie, NV)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
-            double sz = el_size[idx3(ie, kv, kf, n_elements, NV)];
+            double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
             int ifv = idx2(kf, kv, NDEG);
             double h  = HT [ifv];
             double hs = HT_s[ifv];
@@ -1037,10 +1040,10 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #if LUT_VALUES_DELTAS
                     double raw_v = (lut_cache_slot >= 0)
                         ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
-                        : nl_values[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)];
+                        : nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
                     double val = raw_v * sz;
 #else
-                    double val = nl_values[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
+                    double val = nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
 #endif
                     v  += val * HZ[it];         // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
                     vp += val * dHZ[it];        // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
@@ -1052,8 +1055,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             }
 
             // Reuse already-loaded h/hs/ht — avoids 6 redundant HT array reads
-            double xR = nl_x[idx4(iv, 0, kf, 0, n_nodes, N_COORD_TOR, NDEG)] * sz;
-            double xZ = nl_x[idx4(iv, 0, kf, 1, n_nodes, N_COORD_TOR, NDEG)] * sz;
+            double xR = nl_x[idx4(0, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
+            double xZ = nl_x[idx4(1, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
             R   += xR * h;
             R_s += xR * hs;
             R_t += xR * ht;
@@ -1082,18 +1085,18 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 HT[idx2(0, 2, NDEG)], HT[idx2(1, 2, NDEG)], HT[idx2(2, 2, NDEG)], HT[idx2(3, 2, NDEG)],
                 HT[idx2(0, 3, NDEG)], HT[idx2(1, 3, NDEG)], HT[idx2(2, 3, NDEG)], HT[idx2(3, 3, NDEG)]);
             printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS START: sizes=[%d, %d,%d, %d, %d, %d,%d, %d, %d, %d,%d, %d, %d, %d,%d, %d]\n", debug_j, debug_k, i_elm_f,
-                el_size[idx3(ie, 0, 0, n_elements, NV)], el_size[idx3(ie, 0, 1, n_elements, NV)], el_size[idx3(ie, 0, 2, n_elements, NV)], el_size[idx3(ie, 0, 3, n_elements, NV)],
-                el_size[idx3(ie, 1, 0, n_elements, NV)], el_size[idx3(ie, 1, 1, n_elements, NV)], el_size[idx3(ie, 1, 2, n_elements, NV)], el_size[idx3(ie, 1, 3, n_elements, NV)],
-                el_size[idx3(ie, 2, 0, n_elements, NV)], el_size[idx3(ie, 2, 1, n_elements, NV)], el_size[idx3(ie, 2, 2, n_elements, NV)], el_size[idx3(ie, 2, 3, n_elements, NV)],
-                el_size[idx3(ie, 3, 0, n_elements, NV)], el_size[idx3(ie, 3, 1, n_elements, NV)], el_size[idx3(ie, 3, 2, n_elements, NV)], el_size[idx3(ie, 3, 3, n_elements, NV)]);
+                el_size[idx3(0, 0, ie, NDEG, NV)], el_size[idx3(1, 0, ie, NDEG, NV)], el_size[idx3(2, 0, ie, NDEG, NV)], el_size[idx3(3, 0, ie, NDEG, NV)],
+                el_size[idx3(0, 1, ie, NDEG, NV)], el_size[idx3(1, 1, ie, NDEG, NV)], el_size[idx3(2, 1, ie, NDEG, NV)], el_size[idx3(3, 1, ie, NDEG, NV)],
+                el_size[idx3(0, 2, ie, NDEG, NV)], el_size[idx3(1, 2, ie, NDEG, NV)], el_size[idx3(2, 2, ie, NDEG, NV)], el_size[idx3(3, 2, ie, NDEG, NV)],
+                el_size[idx3(0, 3, ie, NDEG, NV)], el_size[idx3(1, 3, ie, NDEG, NV)], el_size[idx3(2, 3, ie, NDEG, NV)], el_size[idx3(3, 3, ie, NDEG, NV)]);
         }
 #endif
 
         for (int kv = 0; kv < NV; ++kv) {
-            int iv = el_vertex[idx2(ie, kv, n_elements)] - 1;
+            int iv = el_vertex[idx2(kv, ie, NV)] - 1;
 
             for (int kf = 0; kf < NDEG; ++kf) {
-                double sz = el_size[idx3(ie, kv, kf, n_elements, NV)];
+                double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
                 int ifv = idx2(kf, kv, NDEG);
                 double h  = HT [ifv];
                 double hs = HT_s[ifv];
@@ -1105,10 +1108,10 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #if LUT_VALUES_DELTAS
                         double raw_d = (lut_cache_slot >= 0)
                             ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
-                            : nl_deltas[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)];
+                            : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
                         double d = raw_d * sz;
 #else
-                        double d = nl_deltas[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
+                        double d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
 #endif
                         v  += d * HZ[it];       // v = dot_product(deltas(1:n_tor,kf,1,kv),HZ(1:n_tor))
                         vp += d * dHZ[it];      // vp = dot_product(deltas(1:n_tor,kf,1,kv),dHZ(1:n_tor))
@@ -1446,7 +1449,7 @@ void lut_build_cooperative(int i_elm_thread,
 
         int ivs[NV];
         for (int kv = 0; kv < NV; ++kv)
-            ivs[kv] = el_vertex[idx2(ie_s, kv, n_elements)] - 1;
+            ivs[kv] = el_vertex[idx2(kv, ie_s, NV)] - 1;
 
         for (int pass = 0; pass * BLOCK_SIZE < LUT_SLOT_SIZE; ++pass) {
             int lid = pass * BLOCK_SIZE + threadIdx.x;
@@ -1457,7 +1460,8 @@ void lut_build_cooperative(int i_elm_thread,
                 int kf_l   = tmp % NDEG;  tmp /= NDEG;
                 int ivar_l = tmp;
                 int node   = ivs[kv_l];
-                int gi     = idx4(node, it_l, kf_l, ivar_l, n_nodes, N_TOR, NDEG);
+                // nl_values/nl_deltas layout: (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes)
+                int gi     = idx4(ivar_l, kf_l, it_l, node, N_FIELD_VARS, NDEG, N_TOR);
                 sh_cache_v[s * LUT_SLOT_SIZE + lid] = nl_values[gi];
                 sh_cache_d[s * LUT_SLOT_SIZE + lid] = nl_deltas[gi];
             }
@@ -1489,14 +1493,14 @@ void evolve_REs_kernel(
     const double* __restrict__ p_weight, // (num_particles)
     double charge,                       // group charge number (uniform per group)
     // Field node list SoA
-    const double* __restrict__ nl_values, // (n_nodes, N_TOR, NDEG, NVAR)
-    const double* __restrict__ nl_deltas,
-    const double* __restrict__ nl_x,      // (n_nodes, N_COORD_TOR, NDEG, NDIM)
+    const double* __restrict__ nl_values, // (NVAR, NDEG, N_TOR, n_nodes)
+    const double* __restrict__ nl_deltas, // (NVAR, NDEG, N_TOR, n_nodes)
+    const double* __restrict__ nl_x,      // (NDIM, NDEG, N_COORD_TOR, n_nodes)
     int n_nodes,
     // Field element list SoA
-    const int*    __restrict__ el_vertex,     // (n_elements, NV)
-    const int*    __restrict__ el_neighbours, // (n_elements, NV)
-    const double* __restrict__ el_size,       // (n_elements, NV, NDEG)
+    const int*    __restrict__ el_vertex,     // (NV, n_elements)
+    const int*    __restrict__ el_neighbours, // (NV, n_elements)
+    const double* __restrict__ el_size,       // (NDEG, NV, n_elements)
     int n_elements,
     // Field time parameters
     double time_now, double time_prev,
@@ -1629,13 +1633,13 @@ void evolve_REs_kernel(
         for (int n = 0; n < NDEG; ++n) {
             for (int m = 0; m < NV; ++m) {
                 double proj_factor = HH[idx2(n, m, NDEG)]
-                                   * el_size[idx3(ie, m, n, n_elements, NV)]
+                                   * el_size[idx3(n, m, ie, NDEG, NV)]
                                    * w;
-            
+
 #if GPU_DEBUG
                 if (rz_dbg_enabled(j, k)) {
                     printf("[GPU_DEBUG j=%d k=%d i_elm=%d] PROJ_FACTOR: deg=%d vert=%d HH=%.17e el_size=%.17e w=%.17e proj_factor=%.17e\n",
-                           j, k, ie+1, n+1, m+1, HH[idx2(n, m, NDEG)], el_size[idx3(ie, m, n, n_elements, NV)], w, proj_factor);
+                           j, k, ie+1, n+1, m+1, HH[idx2(n, m, NDEG)], el_size[idx3(n, m, ie, NDEG, NV)], w, proj_factor);
                 }
 #endif
 
@@ -1751,8 +1755,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_weight  = num_particles * sizeof(double);
 
     const size_t sz_nl_x      = (size_t)N_COORD_TOR * NDEG * NDIM * n_nodes * sizeof(double);
-    const size_t sz_nl_values = (size_t)N_TOR  * NDEG * NVAR * n_nodes * sizeof(double);
-    const size_t sz_nl_deltas = (size_t)N_TOR  * NDEG * NVAR * n_nodes * sizeof(double);
+    const size_t sz_nl_values = (size_t)N_TOR  * NDEG * N_FIELD_VARS * n_nodes * sizeof(double);
+    const size_t sz_nl_deltas = (size_t)N_TOR  * NDEG * N_FIELD_VARS * n_nodes * sizeof(double);
 
     const size_t sz_el_vertex = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_neigh  = (size_t)n_elements * NV   * sizeof(int);

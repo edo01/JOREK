@@ -176,17 +176,17 @@ module mod_particle_types
   !> Node list in SoA layout for GPU (bind(C))
   type, bind(C) :: node_list_SoA_c
     integer(c_int) :: n_nodes  !< total number of nodes
-    type(c_ptr)    :: x        = c_null_ptr !< (n_nodes, n_coord_tor, n_degrees, n_dim)
-    type(c_ptr)    :: values   = c_null_ptr !< (n_nodes, n_tor, n_degrees, n_var)
-    type(c_ptr)    :: deltas   = c_null_ptr !< (n_nodes, n_tor, n_degrees, n_var)
+    type(c_ptr)    :: x        = c_null_ptr !< (n_dim, n_degrees, n_coord_tor, n_nodes) — n_nodes slowest for stride-1 it-loop
+    type(c_ptr)    :: values   = c_null_ptr !< (n_var, n_degrees, n_tor, n_nodes)       — n_nodes slowest for stride-1 it-loop
+    type(c_ptr)    :: deltas   = c_null_ptr !< (n_var, n_degrees, n_tor, n_nodes)       — n_nodes slowest for stride-1 it-loop
   end type node_list_SoA_c
 
   !> Element list in SoA layout for GPU (bind(C))
   type, bind(C) :: element_list_SoA_c
     integer(c_int) :: n_elements !< total number of elements
-    type(c_ptr)    :: vertex     = c_null_ptr !< (n_elements, n_vertex_max)
-    type(c_ptr)    :: neighbours = c_null_ptr !< (n_elements, n_vertex_max)
-    type(c_ptr)    :: size       = c_null_ptr !< (n_elements, n_vertex_max, n_degrees)
+    type(c_ptr)    :: vertex     = c_null_ptr !< (n_vertex_max, n_elements) — n_elements fastest for coalesced warp access
+    type(c_ptr)    :: neighbours = c_null_ptr !< (n_vertex_max, n_elements) — n_elements fastest for coalesced warp access
+    type(c_ptr)    :: size       = c_null_ptr !< (n_degrees, n_vertex_max, n_elements) — n_elements fastest
   end type element_list_SoA_c
 
   !> Fields accessor for GPU (bind(C))
@@ -1288,23 +1288,24 @@ end subroutine deallocate_particle_arrays
 
     nl_soa%n_nodes = int(nn, c_int)
 
-    ! Allocate flat arrays in the same order as the C code expects:
-    !   x:      (n_nodes, n_coord_tor, n_degrees, n_dim)
-    !   values: (n_nodes, n_tor, n_degrees, n_var)
-    !   deltas: (n_nodes, n_tor, n_degrees, n_var)
+    ! Allocate flat arrays in the order the C kernel expects (new optimal layout):
+    !   x:      (n_dim, n_degrees, n_coord_tor, n_nodes)         — n_nodes slowest
+    !   values: (2,     n_degrees, n_tor,       n_nodes)         — n_nodes slowest
+    !   deltas: (2,     n_degrees, n_tor,       n_nodes)         — n_nodes slowest
+    ! Only 2 field vars (P_par, P_perp) are stored; j_Phi is never read on GPU.
     allocate(x_flat(n_coord_tor * n_degrees * n_dim * nn))
-    allocate(val_flat(n_tor * n_degrees * 3 * nn))
-    allocate(del_flat(n_tor * n_degrees * 3 * nn))
+    allocate(val_flat(n_tor * n_degrees * 2 * nn))
+    allocate(del_flat(n_tor * n_degrees * 2 * nn))
 
     ! Copy node coordinates: node(i)%x(kc, kf, kd)
-    ! C layout: x_flat[ iv + n_nodes * (kc + n_coord_tor * (kf + n_degrees * kd)) ]
-    ! Fortran column-major: same indexing, 1-based
+    ! C layout (new optimal): x_flat[ (kd-1) + n_dim*((kf-1) + n_degrees*((kc-1) + n_coord_tor*(i-1))) ]
+    ! i.e. (n_dim, n_degrees, n_coord_tor, n_nodes) — n_nodes is the slowest dimension.
     !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, n_dim
         do kf = 1, n_degrees
           do kc = 1, n_coord_tor
-            idx = i + nn * ((kc-1) + n_coord_tor * ((kf-1) + n_degrees * (kd-1)))
+            idx = (kd-1) + n_dim * ((kf-1) + n_degrees * ((kc-1) + n_coord_tor * (i-1))) + 1
             x_flat(idx) = node_list%node(i)%x(kc, kf, kd)
           end do
         end do
@@ -1312,14 +1313,15 @@ end subroutine deallocate_particle_arrays
     end do
     !$omp end parallel do
 
-    ! Copy values: node(i)%values(kt, kf, kv)
-    ! C layout: val_flat[ iv + n_nodes * (kt + n_tor * (kf + n_degrees * kv)) ]
+    ! Copy values/deltas: node(i)%values(kt, kf, kd), but only kd=1,2 (P_par, P_perp).
+    ! C layout (new optimal): val_flat[ (kd-1) + 2*((kf-1) + n_degrees*((kt-1) + n_tor*(i-1))) ]
+    ! i.e. (2, n_degrees, n_tor, n_nodes) — n_nodes is the slowest dimension.
     !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
     do i = 1, nn
-      do kd = 1, 3
+      do kd = 1, 2
         do kf = 1, n_degrees
           do kt = 1, n_tor
-            idx = i + nn * ((kt-1) + n_tor * ((kf-1) + n_degrees * (kd-1)))
+            idx = (kd-1) + 2 * ((kf-1) + n_degrees * ((kt-1) + n_tor * (i-1))) + 1
             val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
             del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
           end do
@@ -1361,21 +1363,27 @@ end subroutine deallocate_particle_arrays
     ne = element_list%n_elements
     el_soa%n_elements = int(ne, c_int)
 
-    ! vertex:     (n_elements, n_vertex_max)
-    ! neighbours: (n_elements, n_vertex_max)
-    ! size:       (n_elements, n_vertex_max, n_degrees)
-    allocate(vert_flat(ne * n_vertex_max))
-    allocate(neigh_flat(ne * n_vertex_max))
-    allocate(size_flat(ne * n_vertex_max * n_degrees))
+    ! C layout (new optimal):
+    !   vertex/neighbours: (n_vertex_max, n_elements)       — kv fastest, then i
+    !   size:              (n_degrees, n_vertex_max, n_elements) — kf fastest, then kv, then i
+    ! Warp threads on consecutive elements stride by n_vertex_max (or n_degrees*n_vertex_max)
+    ! which is small and fits in a single cache line broadcast.
+    allocate(vert_flat(n_vertex_max * ne))
+    allocate(neigh_flat(n_vertex_max * ne))
+    allocate(size_flat(n_degrees * n_vertex_max * ne))
 
+    ! Fortran 1-based index formulas derived from C idx2(kv,ie,NV)=kv+NV*ie
+    ! and idx3(kf,kv,ie,NDEG,NV)=kf+NDEG*(kv+NV*ie):
+    !   vert/neigh:  idx = kv + n_vertex_max*(i-1)
+    !   size:        idx = kf + n_degrees*((kv-1) + n_vertex_max*(i-1))
     !$omp parallel do default(none) shared(element_list, vert_flat, neigh_flat, size_flat, ne) private(i, kv, kf, idx) collapse(2)
-    do kv = 1, n_vertex_max
-      do i = 1, ne
-        idx = i + ne * (kv - 1)
+    do i = 1, ne
+      do kv = 1, n_vertex_max
+        idx = kv + n_vertex_max*(i-1)
         vert_flat(idx)  = int(element_list%element(i)%vertex(kv), c_int)
         neigh_flat(idx) = int(element_list%element(i)%neighbours(kv), c_int)
         do kf = 1, n_degrees
-          size_flat(i + ne * ((kv-1) + n_vertex_max * (kf-1))) = element_list%element(i)%size(kv, kf)
+          size_flat(kf + n_degrees*((kv-1) + n_vertex_max*(i-1))) = element_list%element(i)%size(kv, kf)
         end do
       end do
     end do
