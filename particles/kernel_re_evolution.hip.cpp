@@ -37,6 +37,13 @@ static constexpr int P_PAR_IDX = 0;
 static constexpr int P_PERP_IDX = 1;
 static constexpr int J_PHI_IDX = 2;
 
+#if LUT_VALUES_DELTAS
+// Shared-memory LUT for nl_values / nl_deltas in calc_EBpsiU.
+// SLOT_SIZE: number of doubles cached per element (NV * NDEG * 2 * N_TOR).
+// Tuning knobs (LUT_N_SLOTS, LUT_REFRESH_INTERVAL, LUT_MIN_OCCUPANCY) come from optimization_defines.h.
+static constexpr int LUT_SLOT_SIZE = NV * NDEG * 2 * N_TOR;  // = 32 * N_TOR
+#endif
+
 // ---------------------------------------------------------------------------
 // Physical constants (matching jorek/models/constants.f90)
 // ---------------------------------------------------------------------------
@@ -979,7 +986,13 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
                  double time,
                  double E[3], double B[3], double &psi, double &U,
-                 int debug_j, int debug_k)
+                 int debug_j, int debug_k
+#if LUT_VALUES_DELTAS
+                 , const int*    sh_lut_keys
+                 , const double* sh_cache_v_flat
+                 , const double* sh_cache_d_flat
+#endif
+                 )
 {
     double HT[NDEG * NV], HT_s[NDEG * NV], HT_t[NDEG * NV];
     basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
@@ -1000,6 +1013,12 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double P_phi[2] = {0.0, 0.0};
     double P_time[2] = {0.0, 0.0};
 
+#if LUT_VALUES_DELTAS
+    int lut_cache_slot = -1;
+    for (int s = 0; s < LUT_N_SLOTS; ++s)
+        if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
+#endif
+
     // First interpolation of values
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
@@ -1015,7 +1034,14 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             for (int ivar = 0; ivar < 2; ++ivar) {
                 double v = 0.0, vp = 0.0;
                 for (int it = 0; it < N_TOR; ++it) {
+#if LUT_VALUES_DELTAS
+                    double raw_v = (lut_cache_slot >= 0)
+                        ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        : nl_values[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)];
+                    double val = raw_v * sz;
+#else
                     double val = nl_values[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
+#endif
                     v  += val * HZ[it];         // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
                     vp += val * dHZ[it];        // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                 }
@@ -1076,7 +1102,14 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 for (int ivar = 0; ivar < 2; ++ivar) {
                     double v = 0.0, vp = 0.0;
                     for (int it = 0; it < N_TOR; ++it) {
+#if LUT_VALUES_DELTAS
+                        double raw_d = (lut_cache_slot >= 0)
+                            ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                            : nl_deltas[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)];
+                        double d = raw_d * sz;
+#else
                         double d = nl_deltas[idx4(iv, it, kf, ivar, n_nodes, N_TOR, NDEG)] * sz;
+#endif
                         v  += d * HZ[it];       // v = dot_product(deltas(1:n_tor,kf,1,kv),HZ(1:n_tor))
                         vp += d * dHZ[it];      // vp = dot_product(deltas(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                     }
@@ -1174,7 +1207,13 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             double F0, double t_norm,
                             double mass, double time, double timestep,
                             int &ifail,
-                            int debug_j, int debug_k, int my_id)
+                            int debug_j, int debug_k, int my_id
+#if LUT_VALUES_DELTAS
+                            , const int*    sh_lut_keys
+                            , const double* sh_cache_v_flat
+                            , const double* sh_cache_d_flat
+#endif
+                            )
 {
     const bool dbg = rz_dbg_enabled(debug_j, debug_k);
 
@@ -1254,7 +1293,11 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 F0, t_norm,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
                 E, B_field, psi_loc, U_loc,
-                debug_j, debug_k);
+                debug_j, debug_k
+#if LUT_VALUES_DELTAS
+                , sh_lut_keys, sh_cache_v_flat, sh_cache_d_flat
+#endif
+                );
 #if GPU_DEBUG
     if (dbg) {
         printf("[GPU_DEBUG j=%d k=%d] VPA_STEP2: E_cyl=[%.17e,%.17e,%.17e] B_cyl=[%.17e,%.17e,%.17e]\n",
@@ -1347,6 +1390,84 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // ===========================================================================================
 
 // ---------------------------------------------------------------------------
+// lut_build_cooperative: cooperatively build the shared-memory LUT.
+// Called by all threads in a block; must NOT be called with divergent control flow.
+// Phase 1 (thread 0): finds the LUT_N_SLOTS most-populated elements.
+// Phase 2 (all threads): loads nl_values / nl_deltas fragments into shared memory.
+// Two __syncthreads() barriers are embedded; the caller must not hold any
+// pending sync before calling and must not rely on per-thread state that crosses
+// those barriers (e.g., local variables captured in a lambda — use function params).
+// ---------------------------------------------------------------------------
+#if LUT_VALUES_DELTAS
+__device__
+void lut_build_cooperative(int i_elm_thread,
+                            const int*    __restrict__ el_vertex,
+                            int n_elements, int n_nodes,
+                            const double* __restrict__ nl_values,
+                            const double* __restrict__ nl_deltas,
+                            int*    sh_lut_keys,
+                            double* sh_cache_v,
+                            double* sh_cache_d,
+                            int*    sh_scratch)
+{
+    // Phase 1 — publish current element, thread 0 finds top-N_SLOTS.
+    sh_scratch[threadIdx.x] = (i_elm_thread > 0) ? i_elm_thread : -1;
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        int top_elm[LUT_N_SLOTS], top_cnt[LUT_N_SLOTS];
+        for (int s = 0; s < LUT_N_SLOTS; ++s) { top_elm[s] = -1; top_cnt[s] = 0; }
+
+        for (int tid = 0; tid < BLOCK_SIZE; ++tid) {
+            int elm = sh_scratch[tid];
+            if (elm <= 0) continue;
+            int found = -1;
+            for (int s = 0; s < LUT_N_SLOTS; ++s)
+                if (top_elm[s] == elm) { found = s; break; }
+            if (found >= 0) {
+                top_cnt[found]++;
+            } else {
+                int ms = 0;
+                for (int s = 1; s < LUT_N_SLOTS; ++s)
+                    if (top_cnt[s] < top_cnt[ms]) ms = s;
+                if (top_cnt[ms] == 0) { top_elm[ms] = elm; top_cnt[ms] = 1; }
+            }
+        }
+        for (int s = 0; s < LUT_N_SLOTS; ++s)
+            sh_lut_keys[s] = (top_cnt[s] >= LUT_MIN_OCCUPANCY) ? top_elm[s] : -1;
+    }
+    __syncthreads();
+
+    // Phase 2 — all threads cooperatively load field data.
+    for (int s = 0; s < LUT_N_SLOTS; ++s) {
+        int elm = sh_lut_keys[s];
+        if (elm <= 0) continue;
+        int ie_s = elm - 1;
+
+        int ivs[NV];
+        for (int kv = 0; kv < NV; ++kv)
+            ivs[kv] = el_vertex[idx2(ie_s, kv, n_elements)] - 1;
+
+        for (int pass = 0; pass * BLOCK_SIZE < LUT_SLOT_SIZE; ++pass) {
+            int lid = pass * BLOCK_SIZE + threadIdx.x;
+            if (lid < LUT_SLOT_SIZE) {
+                int tmp    = lid;
+                int kv_l   = tmp % NV;    tmp /= NV;
+                int it_l   = tmp % N_TOR; tmp /= N_TOR;
+                int kf_l   = tmp % NDEG;  tmp /= NDEG;
+                int ivar_l = tmp;
+                int node   = ivs[kv_l];
+                int gi     = idx4(node, it_l, kf_l, ivar_l, n_nodes, N_TOR, NDEG);
+                sh_cache_v[s * LUT_SLOT_SIZE + lid] = nl_values[gi];
+                sh_cache_d[s * LUT_SLOT_SIZE + lid] = nl_deltas[gi];
+            }
+        }
+    }
+    __syncthreads();
+}
+#endif
+
+// ---------------------------------------------------------------------------
 // evolve_REs_kernel: each thread evolves one particle through all time steps.
 // feedback_rhs accumulation uses atomicAdd.
 //
@@ -1401,6 +1522,17 @@ void evolve_REs_kernel(
     int    i_elm = p_i_elm[j];
     double w = p_weight[j];
 
+#if LUT_VALUES_DELTAS
+    __shared__ int    sh_lut_keys[LUT_N_SLOTS];
+    __shared__ double sh_cache_v[LUT_N_SLOTS * LUT_SLOT_SIZE];
+    __shared__ double sh_cache_d[LUT_N_SLOTS * LUT_SLOT_SIZE];
+    __shared__ int    sh_scratch[BLOCK_SIZE];
+
+    lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
+                          nl_values, nl_deltas,
+                          sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
+#endif
+
 #if GPU_DEBUG
     if (j < 3) {
         printf("[GPU_DEBUG j=%d] START: my_id=%d i_elm=%d x=[%.17e,%.17e,%.17e] p=[%.17e,%.17e,%.17e] st=[%.17e,%.17e] w=%.17e q=%.17e\n",
@@ -1417,6 +1549,13 @@ void evolve_REs_kernel(
     for (int k = 0; k < nstep_particles; ++k) {
 
         if (i_elm <= 0) break;
+
+#if LUT_VALUES_DELTAS
+        if (k > 0 && (k % LUT_REFRESH_INTERVAL) == 0)
+            lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
+                                  nl_values, nl_deltas,
+                                  sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
+#endif
 
         // ===========================================================
         // 1. Projection: compute feedback_rhs contribution
@@ -1445,7 +1584,11 @@ void evolve_REs_kernel(
                     F0, t_norm,
                     i_elm, st, x[2], sim_time,
                     E_loc, B_loc, psi_loc, U_loc,
-                    j, k); 
+                    j, k
+#if LUT_VALUES_DELTAS
+                    , sh_lut_keys, sh_cache_v, sh_cache_d
+#endif
+                    );
 
         double Bnorm = sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
         double B_hat[3] = {B_loc[0]/Bnorm, B_loc[1]/Bnorm, B_loc[2]/Bnorm};
@@ -1529,7 +1672,11 @@ void evolve_REs_kernel(
                                F0, t_norm,
                                group_mass, sim_time, tstep_part_adj,
                                ifail,
-                               j, k, my_id);
+                               j, k, my_id
+#if LUT_VALUES_DELTAS
+                               , sh_lut_keys, sh_cache_v, sh_cache_d
+#endif
+                               );
 #if GPU_DEBUG
         if (ifail != 0) {
             printf("[GPU_DEBUG j=%d k=%d] VPA push failed: ifail=%d i_elm=%d x=[%.17e,%.17e,%.17e]\n",
@@ -1670,7 +1817,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
 
     // --- Launch kernel ---
-    constexpr int BLOCK_SIZE = 256;
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
 #if GPU_DEBUG
