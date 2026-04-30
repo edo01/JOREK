@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 #include "models/mod_settings.h"
 #include "optimization_defines.h"
 
@@ -172,16 +173,17 @@ struct particle_sim {
 //                            DEVICE HELPER FUNCTIONS
 // ===========================================================================================
 
-// TODO: in basisfunctions_2D_0 and basisfunctions_2D_1, we are assuming N_ORDER = 3
+// TODO: in bf2D_0_scalar and bf2D_1_scalar we are assuming N_ORDER = 3
 // Implement also for N_ORDER = 5 ??
 
 // ---------------------------------------------------------------------------
-// 2D cubic basis functions – H indexed as idx2(kf, kv, NDEG) = kf + NDEG * kv
-// kv in [0, NV-1], kf in [0, NDEG-1]  (kf is the fast-varying dimension)
+// Scalar on-the-fly basis function evaluation (N_ORDER = 3, NV = NDEG = 4).
+// Returns the single H value for a given (kf, kv) pair without allocating
+// a full NV*NDEG array.  All threads in a warp share the same kf/kv at any
+// loop iteration, so the if-else chain is warp-uniform — no divergence.
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
-void basisfunctions_2D_0(double s, double t,
-                         double* __restrict__ H)
+double bf2D_0_scalar(double s, double t, int kf, int kv)
 {
     double sm1  = s - 1.0;
     double tm1  = t - 1.0;
@@ -190,41 +192,38 @@ void basisfunctions_2D_0(double s, double t,
     double tm12 = tm1 * tm1;
     double t2   = t * t;
 
-    // vertex 1 (kv=0)
-    H[idx2(0, 0, NDEG)] = sm12 * (1.0 + 2.0*s) * tm12 * (1.0 + 2.0*t);
-    H[idx2(1, 0, NDEG)] = 3.0 * sm12 * s * tm12 * (1.0 + 2.0*t);
-    H[idx2(2, 0, NDEG)] = 3.0 * sm12 * (1.0 + 2.0*s) * tm12 * t;
-    H[idx2(3, 0, NDEG)] = 9.0 * sm12 * s * tm12 * t;
-    // vertex 2 (kv=1)
-    H[idx2(0, 1, NDEG)] = -(s2 * (-3.0 + 2.0*s) * tm12 * (1.0 + 2.0*t));
-    H[idx2(1, 1, NDEG)] = -3.0 * sm1 * s2 * tm12 * (1.0 + 2.0*t);
-    H[idx2(2, 1, NDEG)] = -3.0 * s2 * (-3.0 + 2.0*s) * tm12 * t;
-    H[idx2(3, 1, NDEG)] = -9.0 * sm1 * s2 * tm12 * t;
-    // vertex 3 (kv=2)
-    H[idx2(0, 2, NDEG)] = s2 * (-3.0 + 2.0*s) * t2 * (-3.0 + 2.0*t);
-    H[idx2(1, 2, NDEG)] = 3.0 * sm1 * s2 * t2 * (-3.0 + 2.0*t);
-    H[idx2(2, 2, NDEG)] = 3.0 * s2 * (-3.0 + 2.0*s) * tm1 * t2;
-    H[idx2(3, 2, NDEG)] = 9.0 * sm1 * s2 * tm1 * t2;
-    // vertex 4 (kv=3)
-    H[idx2(0, 3, NDEG)] = -(sm12 * (1.0 + 2.0*s) * t2 * (-3.0 + 2.0*t));
-    H[idx2(1, 3, NDEG)] = -3.0 * sm12 * s * t2 * (-3.0 + 2.0*t);
-    H[idx2(2, 3, NDEG)] = -3.0 * sm12 * (1.0 + 2.0*s) * tm1 * t2;
-    H[idx2(3, 3, NDEG)] = -9.0 * sm12 * s * tm1 * t2;
+    if (kv == 0) {
+        if      (kf == 0) return  sm12 * (1.0 + 2.0*s) * tm12 * (1.0 + 2.0*t);
+        else if (kf == 1) return  3.0 * sm12 * s * tm12 * (1.0 + 2.0*t);
+        else if (kf == 2) return  3.0 * sm12 * (1.0 + 2.0*s) * tm12 * t;
+        else              return  9.0 * sm12 * s * tm12 * t;
+    } else if (kv == 1) {
+        if      (kf == 0) return -(s2 * (-3.0 + 2.0*s) * tm12 * (1.0 + 2.0*t));
+        else if (kf == 1) return -3.0 * sm1 * s2 * tm12 * (1.0 + 2.0*t);
+        else if (kf == 2) return -3.0 * s2 * (-3.0 + 2.0*s) * tm12 * t;
+        else              return -9.0 * sm1 * s2 * tm12 * t;
+    } else if (kv == 2) {
+        if      (kf == 0) return  s2 * (-3.0 + 2.0*s) * t2 * (-3.0 + 2.0*t);
+        else if (kf == 1) return  3.0 * sm1 * s2 * t2 * (-3.0 + 2.0*t);
+        else if (kf == 2) return  3.0 * s2 * (-3.0 + 2.0*s) * tm1 * t2;
+        else              return  9.0 * sm1 * s2 * tm1 * t2;
+    } else {
+        if      (kf == 0) return -(sm12 * (1.0 + 2.0*s) * t2 * (-3.0 + 2.0*t));
+        else if (kf == 1) return -3.0 * sm12 * s * t2 * (-3.0 + 2.0*t);
+        else if (kf == 2) return -3.0 * sm12 * (1.0 + 2.0*s) * tm1 * t2;
+        else              return -9.0 * sm12 * s * tm1 * t2;
+    }
 }
 
 // ---------------------------------------------------------------------------
-// 2D cubic basis functions with first derivatives.
-// H, H_s, H_t all indexed as idx2(kf, kv, NDEG) = kf + NDEG * kv
-// (kf is the fast-varying dimension, matching basisfunctions_2D_0).
-// Used by interp_RZP_1_gpu and calc_EBpsiU.
+// Scalar on-the-fly basis function evaluation with first derivatives.
+// Fills h, hs, ht for the given (kf, kv) pair without allocating arrays.
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
-void basisfunctions_2D_1(double s, double t,
-                         double* __restrict__ H,
-                         double* __restrict__ H_s,
-                         double* __restrict__ H_t)
+void bf2D_1_scalar(double s, double t, int kf, int kv,
+                   double &h, double &hs, double &ht)
 {
-    basisfunctions_2D_0(s, t, H);
+    h = bf2D_0_scalar(s, t, kf, kv);
 
     double sm1  = s - 1.0;
     double tm1  = t - 1.0;
@@ -233,42 +232,63 @@ void basisfunctions_2D_1(double s, double t,
     double tm12 = tm1 * tm1;
     double t2   = t * t;
 
-    // vertex 1
-    H_s[idx2(0, 0, NDEG)] = 6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[idx2(0, 0, NDEG)] = 6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H_s[idx2(1, 0, NDEG)] = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[idx2(1, 0, NDEG)] = 18.0*sm12*s * tm1*t;
-    H_s[idx2(2, 0, NDEG)] = 18.0*sm1*s * tm12*t;
-    H_t[idx2(2, 0, NDEG)] = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
-    H_s[idx2(3, 0, NDEG)] = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
-    H_t[idx2(3, 0, NDEG)] = 9.0*sm12*s * tm1*(-1.0+3.0*t);
-    // vertex 2
-    H_s[idx2(0, 1, NDEG)] = -6.0*sm1*s * tm12*(1.0+2.0*t);
-    H_t[idx2(0, 1, NDEG)] = -6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H_s[idx2(1, 1, NDEG)] = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
-    H_t[idx2(1, 1, NDEG)] = -18.0*sm1*s2 * tm1*t;
-    H_s[idx2(2, 1, NDEG)] = -18.0*sm1*s * tm12*t;
-    H_t[idx2(2, 1, NDEG)] = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
-    H_s[idx2(3, 1, NDEG)] = -9.0*s*(-2.0+3.0*s) * tm12*t;
-    H_t[idx2(3, 1, NDEG)] = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
-    // vertex 3
-    H_s[idx2(0, 2, NDEG)] = 6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[idx2(0, 2, NDEG)] = 6.0*s2*(-3.0+2.0*s) * tm1*t;
-    H_s[idx2(1, 2, NDEG)] = 3.0*s*(-2.0+3.0*s) * t2*(-3.0+2.0*t);
-    H_t[idx2(1, 2, NDEG)] = 18.0*sm1*s2 * tm1*t;
-    H_s[idx2(2, 2, NDEG)] = 18.0*sm1*s * tm1*t2;
-    H_t[idx2(2, 2, NDEG)] = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
-    H_s[idx2(3, 2, NDEG)] = 9.0*s*(-2.0+3.0*s) * tm1*t2;
-    H_t[idx2(3, 2, NDEG)] = 9.0*sm1*s2 * t*(-2.0+3.0*t);
-    // vertex 4
-    H_s[idx2(0, 3, NDEG)] = -6.0*sm1*s * t2*(-3.0+2.0*t);
-    H_t[idx2(0, 3, NDEG)] = -6.0*sm12*(1.0+2.0*s) * tm1*t;
-    H_s[idx2(1, 3, NDEG)] = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
-    H_t[idx2(1, 3, NDEG)] = -18.0*sm12*s * tm1*t;
-    H_s[idx2(2, 3, NDEG)] = -18.0*sm1*s * tm1*t2;
-    H_t[idx2(2, 3, NDEG)] = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
-    H_s[idx2(3, 3, NDEG)] = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
-    H_t[idx2(3, 3, NDEG)] = -9.0*sm12*s * t*(-2.0+3.0*t);
+    if (kv == 0) {
+        if (kf == 0) {
+            hs = 6.0*sm1*s * tm12*(1.0+2.0*t);
+            ht = 6.0*sm12*(1.0+2.0*s) * tm1*t;
+        } else if (kf == 1) {
+            hs = 3.0*sm1*(-1.0+3.0*s) * tm12*(1.0+2.0*t);
+            ht = 18.0*sm12*s * tm1*t;
+        } else if (kf == 2) {
+            hs = 18.0*sm1*s * tm12*t;
+            ht = 3.0*sm12*(1.0+2.0*s) * tm1*(-1.0+3.0*t);
+        } else {
+            hs = 9.0*sm1*(-1.0+3.0*s) * tm12*t;
+            ht = 9.0*sm12*s * tm1*(-1.0+3.0*t);
+        }
+    } else if (kv == 1) {
+        if (kf == 0) {
+            hs = -6.0*sm1*s * tm12*(1.0+2.0*t);
+            ht = -6.0*s2*(-3.0+2.0*s) * tm1*t;
+        } else if (kf == 1) {
+            hs = -3.0*s*(-2.0+3.0*s) * tm12*(1.0+2.0*t);
+            ht = -18.0*sm1*s2 * tm1*t;
+        } else if (kf == 2) {
+            hs = -18.0*sm1*s * tm12*t;
+            ht = 3.0*s2*(-3.0+2.0*s) * (1.0-3.0*t)*tm1;
+        } else {
+            hs = -9.0*s*(-2.0+3.0*s) * tm12*t;
+            ht = 9.0*sm1*s2 * (1.0-3.0*t)*tm1;
+        }
+    } else if (kv == 2) {
+        if (kf == 0) {
+            hs = 6.0*sm1*s * t2*(-3.0+2.0*t);
+            ht = 6.0*s2*(-3.0+2.0*s) * tm1*t;
+        } else if (kf == 1) {
+            hs = 3.0*s*(-2.0+3.0*s) * t2*(-3.0 +2.0*t);
+            ht = 18.0*sm1*s2 * tm1*t;
+        } else if (kf == 2) {
+            hs = 18.0*sm1*s * tm1*t2;
+            ht = 3.0*s2*(-3.0+2.0*s) * t*(-2.0+3.0*t);
+        } else {
+            hs = 9.0*s*(-2.0+3.0*s) * tm1*t2;
+            ht = 9.0*sm1*s2 * t*(-2.0+3.0*t);
+        }
+    } else {
+        if (kf == 0) {
+            hs = -6.0*sm1*s * t2*(-3.0+2.0*t);
+            ht = -6.0*sm12*(1.0+2.0*s) * tm1*t;
+        } else if (kf == 1) {
+            hs = 3.0*(1.0-3.0*s)*sm1 * t2*(-3.0+2.0*t);
+            ht = -18.0*sm12*s * tm1*t;
+        } else if (kf == 2) {
+            hs = -18.0*sm1*s * tm1*t2;
+            ht = -3.0*sm12*(1.0+2.0*s) * t*(-2.0+3.0*t);
+        } else {
+            hs = 9.0*(1.0-3.0*s)*sm1 * tm1*t2;
+            ht = -9.0*sm12*s * t*(-2.0+3.0*t);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,9 +456,6 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
     }
 #endif
 
-    double G[NV * NDEG], G_s[NV * NDEG], G_t[NV * NDEG];
-    basisfunctions_2D_1(s, t, G, G_s, G_t);
-
     // Toroidal coordinate harmonics (for N_COORD_TOR == 1 this is trivial)
     double HZ_coord[N_COORD_TOR], HZ_coord_p[N_COORD_TOR];
     HZ_coord[0]   = 1.0;
@@ -460,9 +477,8 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
         int iv = el_vertex[idx2(kv, ie, NV)] - 1;       // Node number, 0-based
         for (int kf = 0; kf < NDEG; ++kf) {
             double ss = el_size[idx3(kf, kv, ie, NDEG, NV)];
-            double g   = G  [idx2(kf, kv, NDEG)];
-            double gs  = G_s[idx2(kf, kv, NDEG)];
-            double gt  = G_t[idx2(kf, kv, NDEG)];
+            double g, gs, gt;
+            bf2D_1_scalar(s, t, kf, kv, g, gs, gt);
 
             for (int it = 0; it < N_COORD_TOR; ++it) {
                 // nl_x layout: (NDIM, NDEG, N_COORD_TOR, n_nodes)
@@ -997,9 +1013,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #endif
                  )
 {
-    double HT[NDEG * NV], HT_s[NDEG * NV], HT_t[NDEG * NV];
-    basisfunctions_2D_1(st[0], st[1], HT, HT_s, HT_t);
-
     double HZ[N_TOR], dHZ[N_TOR];
     sincosperiod_moivre(phi, HZ, dHZ);
 
@@ -1029,10 +1042,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         int iv = el_vertex[idx2(kv, ie, NV)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
             double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
-            int ifv = idx2(kf, kv, NDEG);
-            double h  = HT [ifv];
-            double hs = HT_s[ifv];
-            double ht = HT_t[ifv];
+            double h, hs, ht;
+            bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
             for (int ivar = 0; ivar < 2; ++ivar) {
                 double v = 0.0, vp = 0.0;
@@ -1054,7 +1065,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 P_phi[ivar] += vp * h;
             }
 
-            // Reuse already-loaded h/hs/ht — avoids 6 redundant HT array reads
+            // h/hs/ht already computed above
             double xR = nl_x[idx4(0, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
             double xZ = nl_x[idx4(1, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
             R   += xR * h;
@@ -1079,11 +1090,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         if(dbg) {
             printf("[GPU_DEBUG j=%d k=%d] calc_EBpsiU INTERP DIFFERENTIALS START: i_elm=%d st=[%.17e,%.17e] phi=%.17e\n",
                    debug_j, debug_k, i_elm_f, st[0], st[1], phi);
-            printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS START): HT=[%.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e, %.17e]\n", debug_j, debug_k, i_elm_f,
-                HT[idx2(0, 0, NDEG)], HT[idx2(1, 0, NDEG)], HT[idx2(2, 0, NDEG)], HT[idx2(3, 0, NDEG)],
-                HT[idx2(0, 1, NDEG)], HT[idx2(1, 1, NDEG)], HT[idx2(2, 1, NDEG)], HT[idx2(3, 1, NDEG)],
-                HT[idx2(0, 2, NDEG)], HT[idx2(1, 2, NDEG)], HT[idx2(2, 2, NDEG)], HT[idx2(3, 2, NDEG)],
-                HT[idx2(0, 3, NDEG)], HT[idx2(1, 3, NDEG)], HT[idx2(2, 3, NDEG)], HT[idx2(3, 3, NDEG)]);
             printf("[GPU_DEBUG j=%d k=%d i_elm=%d] calc_EBpsiU INTERP DIFFERENTIALS START: sizes=[%d, %d,%d, %d, %d, %d,%d, %d, %d, %d,%d, %d, %d, %d,%d, %d]\n", debug_j, debug_k, i_elm_f,
                 el_size[idx3(0, 0, ie, NDEG, NV)], el_size[idx3(1, 0, ie, NDEG, NV)], el_size[idx3(2, 0, ie, NDEG, NV)], el_size[idx3(3, 0, ie, NDEG, NV)],
                 el_size[idx3(0, 1, ie, NDEG, NV)], el_size[idx3(1, 1, ie, NDEG, NV)], el_size[idx3(2, 1, ie, NDEG, NV)], el_size[idx3(3, 1, ie, NDEG, NV)],
@@ -1097,10 +1103,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 
             for (int kf = 0; kf < NDEG; ++kf) {
                 double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
-                int ifv = idx2(kf, kv, NDEG);
-                double h  = HT [ifv];
-                double hs = HT_s[ifv];
-                double ht = HT_t[ifv];
+                double h, hs, ht;
+                bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
                 for (int ivar = 0; ivar < 2; ++ivar) {
                     double v = 0.0, vp = 0.0;
@@ -1565,10 +1569,6 @@ void evolve_REs_kernel(
         // 1. Projection: compute feedback_rhs contribution
         // ===========================================================
 
-        // Basis functions for projection (non-transposed)
-        double HH[NV * NDEG];
-        basisfunctions_2D_0(st[0], st[1], HH);
-
         // Toroidal harmonics
         double HZ_proj[N_TOR];
         mode_moivre(x[2], HZ_proj);
@@ -1632,14 +1632,14 @@ void evolve_REs_kernel(
 #endif
         for (int n = 0; n < NDEG; ++n) {
             for (int m = 0; m < NV; ++m) {
-                double proj_factor = HH[idx2(n, m, NDEG)]
+                double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
                                    * el_size[idx3(n, m, ie, NDEG, NV)]
                                    * w;
 
 #if GPU_DEBUG
                 if (rz_dbg_enabled(j, k)) {
                     printf("[GPU_DEBUG j=%d k=%d i_elm=%d] PROJ_FACTOR: deg=%d vert=%d HH=%.17e el_size=%.17e w=%.17e proj_factor=%.17e\n",
-                           j, k, ie+1, n+1, m+1, HH[idx2(n, m, NDEG)], el_size[idx3(n, m, ie, NDEG, NV)], w, proj_factor);
+                           j, k, ie+1, n+1, m+1, bf2D_0_scalar(st[0], st[1], n, m), el_size[idx3(n, m, ie, NDEG, NV)], w, proj_factor);
                 }
 #endif
 
