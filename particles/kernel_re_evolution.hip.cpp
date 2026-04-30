@@ -592,7 +592,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
 // find_RZ_single_gpu: Newton search in a single element (5 starting points)
 // i_elm_f is 1-based.  ifail=0 on success, 999 on failure.
 // ---------------------------------------------------------------------------
-__device__
+__device__ __noinline__
 void find_RZ_single_gpu(const double* __restrict__ nl_x,
                          const int*    __restrict__ el_vertex,
                          const double* __restrict__ el_size,
@@ -665,7 +665,7 @@ void find_RZ_single_gpu(const double* __restrict__ nl_x,
 // ---------------------------------------------------------------------------
 // find_RZ_gpu: brute-force search over all elements
 // ---------------------------------------------------------------------------
-__device__
+__device__ __noinline__
 void find_RZ_gpu(const double* __restrict__ nl_x,
                  const int*    __restrict__ el_vertex,
                  const double* __restrict__ el_size,
@@ -1223,8 +1223,8 @@ void evolve_REs_kernel(
     // Physics parameters
     double F0, double t_norm,
     // Simulation parameters
-    double sim_time, double group_mass, double tstep_part_adj, 
-    int nstep_particles, int num_particles,
+    double sim_time, double group_mass, double tstep_part_adj,
+    int num_particles,
     // Feedback RHS (atomically updated)
     double* __restrict__ feedback_rhs, // column-major (n_elements, NDEG, NV, N_TOR, NVAR) -- n_elements first for GPU coalescing
     // mode_coord for interp_RZP_1_gpu
@@ -1251,16 +1251,7 @@ void evolve_REs_kernel(
                           sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
 #endif
 
-    for (int k = 0; k < nstep_particles; ++k) {
-
-        if (i_elm <= 0) break;
-
-#if LUT_VALUES_DELTAS
-        if (k > 0 && (k % LUT_REFRESH_INTERVAL) == 0)
-            lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
-                                  nl_values, nl_deltas,
-                                  sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
-#endif
+    if (i_elm > 0) {
 
         // ===========================================================
         // 1. Projection: compute feedback_rhs contribution
@@ -1349,7 +1340,7 @@ void evolve_REs_kernel(
 #endif
                                );
 
-    } // end time-step loop
+    } // end single kinetic step
 
     // Store particle data back to global memory
     p_x[idx2(j, 0, num_particles)] = x[0]; p_x[idx2(j, 1, num_particles)] = x[1]; p_x[idx2(j, 2, num_particles)] = x[2];
@@ -1474,30 +1465,32 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(d_feedback_rhs, h_feedback_rhs,       sz_feedback,   hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
 
-    // --- Launch kernel ---
+    // --- Launch one kernel per kinetic iteration ---
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    hipLaunchKernelGGL(evolve_REs_kernel,
-        dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
-        // Particle SoA
-        d_x, d_p, d_st, d_i_elm, d_weight, charge,
-        // Field node list SoA
-        d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
-        // Field element list SoA
-        d_el_vertex, d_el_neighbours, d_el_size, n_elements,
-        // Field time parameters
-        time_now, time_prev, flag_static, flag_zero_dp,
-        // Physics parameters
-        F0, t_norm,
-        // Simulation parameters
-        sim_time, group_mass, tstep_part_adj,
-        nstep_particles, num_particles,
-        // Feedback RHS
-        d_feedback_rhs,
-        // mode_coord
-        d_mode_coord);
+    for (int k = 0; k < nstep_particles; ++k) {
+        hipLaunchKernelGGL(evolve_REs_kernel,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+            // Particle SoA
+            d_x, d_p, d_st, d_i_elm, d_weight, charge,
+            // Field node list SoA
+            d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
+            // Field element list SoA
+            d_el_vertex, d_el_neighbours, d_el_size, n_elements,
+            // Field time parameters
+            time_now, time_prev, flag_static, flag_zero_dp,
+            // Physics parameters
+            F0, t_norm,
+            // Simulation parameters
+            sim_time, group_mass, tstep_part_adj,
+            num_particles,
+            // Feedback RHS
+            d_feedback_rhs,
+            // mode_coord
+            d_mode_coord);
 
-    HIP_CHECK(hipGetLastError());
+        HIP_CHECK(hipGetLastError());
+    }
 
     // --- Copy results back: device -> host ---
     HIP_CHECK(hipMemcpy(part->x,       d_x,            sz_x,        hipMemcpyDeviceToHost));
