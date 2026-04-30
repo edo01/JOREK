@@ -161,8 +161,6 @@ module mod_particle_types
     type(c_ptr) :: st      = c_null_ptr !< (num_particles, 2) element-local coords
     type(c_ptr) :: weight  = c_null_ptr !< (num_particles)    macro-particle weight
     type(c_ptr) :: i_elm   = c_null_ptr !< (num_particles)    element index (C_INT)
-    type(c_ptr) :: i_life  = c_null_ptr !< (num_particles)    life-step counter (C_INT)
-    type(c_ptr) :: t_birth = c_null_ptr !< (num_particles)    birth time-step (C_INT)
   end type particle_SoA_kinetic_relativistic_c
 
   !> Particle group for GPU (bind(C))
@@ -1183,20 +1181,20 @@ end subroutine deallocate_particle_arrays
   !> directly.  c_f_pointer + DEALLOCATE on a pointer recovered from c_loc is non-standard
   !> and raises Intel Fortran error 173.
   subroutine particles_AoS_to_SoA(particles, np, soa, &
-      x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr)
+      x_arr, p_arr, st_arr, w_arr, ielm_arr)
     use mod_settings, only: n_tor  ! just needed for parameter consistency
     implicit none
     type(particle_kinetic_relativistic), intent(in) :: particles(:)
     integer, intent(in) :: np  !< number of particles to convert
     type(particle_SoA_kinetic_relativistic_c), intent(out) :: soa
     real(c_double), allocatable, intent(out), target :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
-    integer(c_int), allocatable, intent(out), target :: ielm_arr(:), ilife_arr(:), tbirth_arr(:)
+    integer(c_int), allocatable, intent(out), target :: ielm_arr(:)
     integer :: j
 
     allocate(x_arr(3*np), p_arr(3*np), st_arr(2*np), w_arr(np))
-    allocate(ielm_arr(np), ilife_arr(np), tbirth_arr(np))
+    allocate(ielm_arr(np))
 
-    !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, w_arr, ielm_arr, ilife_arr, tbirth_arr) private(j)
+    !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, w_arr, ielm_arr) private(j)
     do j = 1, np
       x_arr(j)        = particles(j)%x(1)
       x_arr(j + np)   = particles(j)%x(2)
@@ -1208,8 +1206,6 @@ end subroutine deallocate_particle_arrays
       st_arr(j + np)  = particles(j)%st(2)
       w_arr(j)             = particles(j)%weight
       ielm_arr(j)          = int(particles(j)%i_elm, c_int)
-      ilife_arr(j)         = int(particles(j)%i_life, c_int)
-      tbirth_arr(j)        = int(particles(j)%t_birth, c_int)
     end do
     !$omp end parallel do
 
@@ -1218,8 +1214,6 @@ end subroutine deallocate_particle_arrays
     soa%st      = c_loc(st_arr(1))
     soa%weight  = c_loc(w_arr(1))
     soa%i_elm   = c_loc(ielm_arr(1))
-    soa%i_life  = c_loc(ilife_arr(1))
-    soa%t_birth = c_loc(tbirth_arr(1))
   end subroutine particles_AoS_to_SoA
 
   !> Copy SoA buffers back into an AoS array of particle_kinetic_relativistic.
@@ -1266,8 +1260,6 @@ end subroutine deallocate_particle_arrays
     soa%st      = c_null_ptr
     soa%weight  = c_null_ptr
     soa%i_elm   = c_null_ptr
-    soa%i_life  = c_null_ptr
-    soa%t_birth = c_null_ptr
   end subroutine dealloc_particle_SoA
 
   !> Convert the Fortran AoS type_node_list to a SoA node_list_SoA_c.

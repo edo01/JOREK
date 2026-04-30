@@ -104,8 +104,6 @@ struct particle_SoA_kinetic_relativistic {
     double* st;       // (num_particles, 2) element-local coordinates (s, t)
     double* weight;   // (num_particles)    macro-particle weight
     int*    i_elm;    // (num_particles)    element index (1-based; <=0 means lost)
-    int*    i_life;   // (num_particles)    life-step counter
-    int*    t_birth;  // (num_particles)    birth time-step
 };
 
 // Group of particles sharing the same species properties.
@@ -897,54 +895,51 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double Pd_t[2] = {0.0, 0.0};
     double Pd_phi[2] = {0.0, 0.0};
 
-    if (t_norm > 0.0) {
+    for (int kv = 0; kv < NV; ++kv) {
+        int iv = el_vertex[idx2(kv, ie, NV)] - 1;
 
-        for (int kv = 0; kv < NV; ++kv) {
-            int iv = el_vertex[idx2(kv, ie, NV)] - 1;
+        for (int kf = 0; kf < NDEG; ++kf) {
+            double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
+            double h, hs, ht;
+            bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
-            for (int kf = 0; kf < NDEG; ++kf) {
-                double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
-                double h, hs, ht;
-                bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
-
-                for (int ivar = 0; ivar < 2; ++ivar) {
-                    double v = 0.0, vp = 0.0;
-                    for (int it = 0; it < N_TOR; ++it) {
+            for (int ivar = 0; ivar < 2; ++ivar) {
+                double v = 0.0, vp = 0.0;
+                for (int it = 0; it < N_TOR; ++it) {
 #if LUT_VALUES_DELTAS
-                        double raw_d = (lut_cache_slot >= 0)
-                            ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
-                            : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                        double d = raw_d * sz;
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
+                    double d = raw_d * sz;
 #else
-                        double d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
+                    double d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
 #endif
-                        v  += d * HZ[it];       // v = dot_product(deltas(1:n_tor,kf,1,kv),HZ(1:n_tor))
-                        vp += d * dHZ[it];      // vp = dot_product(deltas(1:n_tor,kf,1,kv),dHZ(1:n_tor))
-                    }
-                    Pd[ivar]     += v  * h;
-                    Pd_s[ivar]   += v  * hs;
-                    Pd_t[ivar]   += v  * ht;
-                    Pd_phi[ivar] += vp * h;
+                    v  += d * HZ[it];       // v = dot_product(deltas(1:n_tor,kf,1,kv),HZ(1:n_tor))
+                    vp += d * dHZ[it];      // vp = dot_product(deltas(1:n_tor,kf,1,kv),dHZ(1:n_tor))
                 }
+                Pd[ivar]     += v  * h;
+                Pd_s[ivar]   += v  * hs;
+                Pd_t[ivar]   += v  * ht;
+                Pd_phi[ivar] += vp * h;
             }
         }
-
-        double dt;
-        if (fabs(time_now - time_prev) > 1.0e-10 && !flag_static) {
-            dt = 1.0 / (time_now - time_prev);
-            double df = (time_now - time) * dt;
-            for (int i = 0; i < 2; ++i) {
-                P[i]     -= Pd[i]     * df;
-                P_s[i]   -= Pd_s[i]   * df;
-                P_t[i]   -= Pd_t[i]   * df;
-                P_phi[i] -= Pd_phi[i] * df;
-            }
-        } else {
-            dt = 1.0 / t_norm;
-        }
-        P_time[0] = Pd[0] * dt;
-        P_time[1] = Pd[1] * dt;
     }
+
+    double dt;
+    if (fabs(time_now - time_prev) > 1.0e-10 && !flag_static) {
+        dt = 1.0 / (time_now - time_prev);
+        double df = (time_now - time) * dt;
+        for (int i = 0; i < 2; ++i) {
+            P[i]     -= Pd[i]     * df;
+            P_s[i]   -= Pd_s[i]   * df;
+            P_t[i]   -= Pd_t[i]   * df;
+            P_phi[i] -= Pd_phi[i] * df;
+        }
+    } else {
+        dt = 1.0 / t_norm;
+    }
+    P_time[0] = Pd[0] * dt;
+    P_time[1] = Pd[1] * dt;
 
     double R_inv      = 1.0 / R;
     double st_jac_inv = 1.0 / (R_s * Z_t - R_t * Z_s);
@@ -1398,6 +1393,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // Simulation
     const double sim_time       = sim.sim_time;
     const int    nstep_particles= nstep_part_adj;
+
+    // Sanity checks
+    if(t_norm <= 0.0) {
+        if(sim.my_id == 0)
+            fprintf(stderr, "[launch_evolve_REs] Error: t_norm must be positive.\n");
+        exit(1);
+    }
 
     // --- Compute buffer sizes ---
     const size_t sz_x       = 3 * num_particles * sizeof(double);

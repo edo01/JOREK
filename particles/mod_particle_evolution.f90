@@ -345,7 +345,7 @@ contains
     ! Must be kept alive until after the C call and then freed here directly
     ! Since retrieving them from the structures for deallocation triggers memory errors.
     real(c_double), allocatable, target :: part_x(:), part_p(:), part_st(:), part_w(:)
-    integer(c_int), allocatable, target :: part_ielm(:), part_ilife(:), part_tbirth(:)
+    integer(c_int), allocatable, target :: part_ielm(:)
     real(c_double), allocatable, target :: nl_x_flat(:), nl_val_flat(:), nl_del_flat(:)
     integer(c_int), allocatable, target :: el_vert_flat(:), el_neigh_flat(:)
     real(c_double), allocatable, target :: el_size_flat(:)
@@ -357,7 +357,7 @@ contains
       if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Allocating particle SoA for num_gpu_particles=', num_gpu_particles
     #endif
       call particles_AoS_to_SoA(p, num_gpu_particles, part_soa, &
-          part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
+          part_x, part_p, part_st, part_w, part_ielm)
     #if GPU_DEBUG
       if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] particle SoA built'
     #endif
@@ -525,7 +525,7 @@ contains
   #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating particle SoA backing arrays'
   #endif
-    deallocate(part_x, part_p, part_st, part_w, part_ielm, part_ilife, part_tbirth)
+    deallocate(part_x, part_p, part_st, part_w, part_ielm)
   #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating node_list SoA backing arrays'
   #endif
