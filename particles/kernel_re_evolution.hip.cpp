@@ -1719,7 +1719,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             HIP_CHECK(hipEventSynchronize(t_sort_stop));
             float sort_ms = 0.0f;
             HIP_CHECK(hipEventElapsedTime(&sort_ms, t_sort_start, t_sort_stop));
-            printf("[launch_evolve_REs rank %d] sort_particles_by_i_elm_gpu call #%d (step k=%d): %.3f ms\n",
+            if(sim.my_id == 0)
+                printf("[launch_evolve_REs (only) rank %d] sort_particles_by_i_elm_gpu call #%d (step k=%d): %.3f ms\n",
                    sim.my_id, sort_call_count, k, sort_ms);
             ++sort_call_count;
             HIP_CHECK(hipEventDestroy(t_sort_start));
