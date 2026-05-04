@@ -1497,7 +1497,7 @@ void evolve_REs_kernel(
 // ---------------------------------------------------------------------------
 static void sort_particles_by_i_elm_gpu(
     double*& d_x, double*& d_p, double*& d_st, int*& d_i_elm, double*& d_weight,
-    double* d_x_alt, double* d_p_alt, double* d_st_alt, int* d_i_elm_alt, double* d_weight_alt,
+    double*& d_x_alt, double*& d_p_alt, double*& d_st_alt, int*& d_i_elm_alt, double*& d_weight_alt,
     int num_particles,
     int* d_hist, int* d_offsets, int* d_cursors,
     int* d_block_sums, int* d_block_offsets)
@@ -1551,6 +1551,40 @@ static void sort_particles_by_i_elm_gpu(
 // ===========================================================================================
 //                       HOST LAUNCH FUNCTION (Fortran-callable via bind(C))
 // ===========================================================================================
+
+// ---------------------------------------------------------------------------
+// Debug helpers: write p_i_elm and p_pol snapshots to binary files (rank-0 only).
+//
+// i_elm file  re_sort_debug_step<NNNNN>_<tag>_ielm.bin
+//   Format: int32 num_particles, then num_particles x int32 i_elm values
+//
+// p_pol file  re_sort_debug_step<NNNNN>_<tag>_ppol.bin
+//   Format: int32 num_particles, then num_particles x float64 p_pol values
+//
+// p_pol is the poloidal momentum magnitude: sqrt(p_R^2 + p_Z^2)
+//   where p_R, p_Z are obtained by converting the stored Cartesian momentum
+//   (p_x, p_y, p_z) to cylindrical using the particle's phi angle:
+//     p_R   =  p_x*cos(phi) - p_y*sin(phi)
+//     p_Z   =  p_z
+//     p_pol = sqrt(p_R^2 + p_Z^2)
+// ---------------------------------------------------------------------------
+static void write_i_elm_snapshot(const int* h_i_elm, int num_particles,
+                                 int fluid_step, const char* tag)
+{
+    char fname[256];
+    snprintf(fname, sizeof(fname), "re_sort_debug_step%05d_%s_ielm.bin", fluid_step, tag);
+    FILE* f = fopen(fname, "wb");
+    if (!f) {
+        fprintf(stderr, "[RE_SORT_DBG] Could not open %s for writing\n", fname);
+        return;
+    }
+    fwrite(&num_particles, sizeof(int), 1, f);
+    fwrite(h_i_elm, sizeof(int), num_particles, f);
+    fclose(f);
+    fprintf(stderr, "[RE_SORT_DBG] Wrote %s (%d particles)\n", fname, num_particles);
+}
+
+
 
 // Called from Fortran as:  call launch_evolve_REs(sim, feedback_rhs, tstep_part_adj, nstep_part_adj)
 // All fields of particle_sim are already filled on the host by Fortran.
@@ -1706,6 +1740,11 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     for (int k = 0; k < nstep_particles; ++k) {
 #if N_SORTING > 0
         if ((k % N_SORTING) == 0) {
+            if(sim.my_id == 0) {
+                HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
+                write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "before_sort");
+            }
+
             hipEvent_t t_sort_start, t_sort_stop;
             HIP_CHECK(hipEventCreate(&t_sort_start));
             HIP_CHECK(hipEventCreate(&t_sort_stop));
@@ -1725,6 +1764,11 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             ++sort_call_count;
             HIP_CHECK(hipEventDestroy(t_sort_start));
             HIP_CHECK(hipEventDestroy(t_sort_stop));
+
+            if(sim.my_id == 0) {
+                HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
+                write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
+            }
         }
 #endif
 
