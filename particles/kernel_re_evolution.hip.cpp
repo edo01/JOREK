@@ -6,6 +6,7 @@
 // Fortran conventions; C code uses 0-based offsets.
 // =============================================================================
 #include <hip/hip_runtime.h>
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include "models/mod_settings.h"
@@ -33,6 +34,14 @@ static constexpr int N_FIELD_VARS = 2;
 static constexpr int P_PAR_IDX = 0;
 static constexpr int P_PERP_IDX = 1;
 static constexpr int J_PHI_IDX = 2;
+
+// ---------------------------------------------------------------------------
+// Particle sorting parameters
+// ---------------------------------------------------------------------------
+static constexpr int I_ELM_MAX = 11000;
+static constexpr int I_ELM_BINS = I_ELM_MAX + 1; // extra bin for invalid i_elm
+static constexpr int HIST_SCAN_CHUNK = 1024;
+static constexpr int HIST_SCAN_THREADS = 256;
 
 #if LUT_VALUES_DELTAS
 // Shared-memory LUT for nl_values / nl_deltas in calc_EBpsiU.
@@ -79,6 +88,140 @@ int idx5(int i0, int i1, int i2, int i3, int i4,
 int idx5_host(int i0, int i1, int i2, int i3, int i4,
          int d0, int d1, int d2, int d3)
 { return i0 + d0 * (i1 + d1 * (i2 + d2 * (i3 + d3 * i4))); }
+
+// ---------------------------------------------------------------------------
+// Sorting helpers: map i_elm to a histogram bin
+// ---------------------------------------------------------------------------
+__device__ __forceinline__
+int i_elm_to_bin(int i_elm)
+{
+    if (i_elm >= 1 && i_elm <= I_ELM_MAX) return i_elm - 1;
+    return I_ELM_MAX;
+}
+
+// ---------------------------------------------------------------------------
+// Counting sort kernels for particle SoA
+// ---------------------------------------------------------------------------
+__global__
+void count_i_elm_histogram(const int* __restrict__ i_elm,
+                           int num_particles,
+                           int* __restrict__ global_hist)
+{
+    extern __shared__ int sh_hist[];
+    for (int idx = threadIdx.x; idx < I_ELM_BINS; idx += blockDim.x)
+        sh_hist[idx] = 0;
+    __syncthreads();
+
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int j = tid; j < num_particles; j += stride) {
+        int key = i_elm_to_bin(i_elm[j]);
+        atomicAdd(&sh_hist[key], 1);
+    }
+    __syncthreads();
+
+    for (int idx = threadIdx.x; idx < I_ELM_BINS; idx += blockDim.x) {
+        int val = sh_hist[idx];
+        if (val > 0) atomicAdd(&global_hist[idx], val);
+    }
+}
+
+__global__
+void exclusive_scan_blocks(const int* __restrict__ in,
+                           int* __restrict__ out,
+                           int* __restrict__ block_sums,
+                           int n)
+{
+    __shared__ int sh_data[HIST_SCAN_CHUNK];
+    int base = blockIdx.x * HIST_SCAN_CHUNK;
+
+    for (int i = threadIdx.x; i < HIST_SCAN_CHUNK; i += blockDim.x) {
+        int idx = base + i;
+        sh_data[i] = (idx < n) ? in[idx] : 0;
+    }
+    __syncthreads();
+
+    for (int offset = 1; offset < HIST_SCAN_CHUNK; offset <<= 1) {
+        for (int idx = (threadIdx.x + 1) * offset * 2 - 1;
+             idx < HIST_SCAN_CHUNK;
+             idx += blockDim.x * offset * 2) {
+            sh_data[idx] += sh_data[idx - offset];
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        if (block_sums) block_sums[blockIdx.x] = sh_data[HIST_SCAN_CHUNK - 1];
+        sh_data[HIST_SCAN_CHUNK - 1] = 0;
+    }
+    __syncthreads();
+
+    for (int offset = HIST_SCAN_CHUNK >> 1; offset > 0; offset >>= 1) {
+        for (int idx = (threadIdx.x + 1) * offset * 2 - 1;
+             idx < HIST_SCAN_CHUNK;
+             idx += blockDim.x * offset * 2) {
+            int t = sh_data[idx - offset];
+            sh_data[idx - offset] = sh_data[idx];
+            sh_data[idx] += t;
+        }
+        __syncthreads();
+    }
+
+    for (int i = threadIdx.x; i < HIST_SCAN_CHUNK; i += blockDim.x) {
+        int idx = base + i;
+        if (idx < n) out[idx] = sh_data[i];
+    }
+}
+
+__global__
+void add_block_offsets(int* __restrict__ data,
+                       const int* __restrict__ block_offsets,
+                       int n)
+{
+    int base = blockIdx.x * HIST_SCAN_CHUNK;
+    int add = block_offsets[blockIdx.x];
+    for (int i = threadIdx.x; i < HIST_SCAN_CHUNK; i += blockDim.x) {
+        int idx = base + i;
+        if (idx < n) data[idx] += add;
+    }
+}
+
+__global__
+void scatter_particles_by_i_elm(
+    const double* __restrict__ x_in,
+    const double* __restrict__ p_in,
+    const double* __restrict__ st_in,
+    const int*    __restrict__ i_elm_in,
+    const double* __restrict__ weight_in,
+    int num_particles,
+    int* __restrict__ cursors,
+    double* __restrict__ x_out,
+    double* __restrict__ p_out,
+    double* __restrict__ st_out,
+    int*    __restrict__ i_elm_out,
+    double* __restrict__ weight_out)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= num_particles) return;
+
+    int i_elm = i_elm_in[j];
+    int key = i_elm_to_bin(i_elm);
+    int pos = atomicAdd(&cursors[key], 1);
+
+    x_out[idx2(pos, 0, num_particles)] = x_in[idx2(j, 0, num_particles)];
+    x_out[idx2(pos, 1, num_particles)] = x_in[idx2(j, 1, num_particles)];
+    x_out[idx2(pos, 2, num_particles)] = x_in[idx2(j, 2, num_particles)];
+
+    p_out[idx2(pos, 0, num_particles)] = p_in[idx2(j, 0, num_particles)];
+    p_out[idx2(pos, 1, num_particles)] = p_in[idx2(j, 1, num_particles)];
+    p_out[idx2(pos, 2, num_particles)] = p_in[idx2(j, 2, num_particles)];
+
+    st_out[idx2(pos, 0, num_particles)] = st_in[idx2(j, 0, num_particles)];
+    st_out[idx2(pos, 1, num_particles)] = st_in[idx2(j, 1, num_particles)];
+
+    weight_out[pos] = weight_in[j];
+    i_elm_out[pos] = i_elm;
+}
 
 // ---------------------------------------------------------------------------
 // HIP error check macro
@@ -1349,6 +1492,61 @@ void evolve_REs_kernel(
     p_i_elm[j] = i_elm;
 }
 
+// ---------------------------------------------------------------------------
+// sort_particles_by_i_elm_gpu: GPU counting sort for particle SoA
+// ---------------------------------------------------------------------------
+static void sort_particles_by_i_elm_gpu(
+    double*& d_x, double*& d_p, double*& d_st, int*& d_i_elm, double*& d_weight,
+    double* d_x_alt, double* d_p_alt, double* d_st_alt, int* d_i_elm_alt, double* d_weight_alt,
+    int num_particles,
+    int* d_hist, int* d_offsets, int* d_cursors,
+    int* d_block_sums, int* d_block_offsets)
+{
+    if (num_particles <= 0) return;
+
+    const size_t hist_bytes = I_ELM_BINS * sizeof(int);
+    HIP_CHECK(hipMemset(d_hist, 0, hist_bytes));
+
+    int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    size_t shared_bytes = I_ELM_BINS * sizeof(int);
+
+    hipLaunchKernelGGL(count_i_elm_histogram,
+        dim3(grid_size), dim3(BLOCK_SIZE), shared_bytes, 0,
+        d_i_elm, num_particles, d_hist);
+    HIP_CHECK(hipGetLastError());
+
+    int scan_blocks = (I_ELM_BINS + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
+    hipLaunchKernelGGL(exclusive_scan_blocks,
+        dim3(scan_blocks), dim3(HIST_SCAN_THREADS), 0, 0,
+        d_hist, d_offsets, d_block_sums, I_ELM_BINS);
+    HIP_CHECK(hipGetLastError());
+
+    hipLaunchKernelGGL(exclusive_scan_blocks,
+        dim3(1), dim3(HIST_SCAN_THREADS), 0, 0,
+        d_block_sums, d_block_offsets, nullptr, scan_blocks);
+    HIP_CHECK(hipGetLastError());
+
+    hipLaunchKernelGGL(add_block_offsets,
+        dim3(scan_blocks), dim3(HIST_SCAN_THREADS), 0, 0,
+        d_offsets, d_block_offsets, I_ELM_BINS);
+    HIP_CHECK(hipGetLastError());
+
+    HIP_CHECK(hipMemcpy(d_cursors, d_offsets, hist_bytes, hipMemcpyDeviceToDevice));
+
+    hipLaunchKernelGGL(scatter_particles_by_i_elm,
+        dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+        d_x, d_p, d_st, d_i_elm, d_weight,
+        num_particles, d_cursors,
+        d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt);
+    HIP_CHECK(hipGetLastError());
+
+    std::swap(d_x, d_x_alt);
+    std::swap(d_p, d_p_alt);
+    std::swap(d_st, d_st_alt);
+    std::swap(d_i_elm, d_i_elm_alt);
+    std::swap(d_weight, d_weight_alt);
+}
+
 
 // ===========================================================================================
 //                       HOST LAUNCH FUNCTION (Fortran-callable via bind(C))
@@ -1447,7 +1645,36 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_feedback_rhs, sz_feedback));
     HIP_CHECK(hipMalloc(&d_mode_coord,   sz_mode_coord));
 
+    // --- Allocate sorting buffers ---
+    double *d_x_sorted = nullptr, *d_p_sorted = nullptr, *d_st_sorted = nullptr, *d_weight_sorted = nullptr;
+    int    *d_i_elm_sorted = nullptr;
+    int    *d_hist = nullptr, *d_offsets = nullptr, *d_cursors = nullptr;
+    int    *d_block_sums = nullptr, *d_block_offsets = nullptr;
+
+#if N_SORTING > 0
+    HIP_CHECK(hipMalloc(&d_x_sorted,      sz_x));
+    HIP_CHECK(hipMalloc(&d_p_sorted,      sz_p));
+    HIP_CHECK(hipMalloc(&d_st_sorted,     sz_st));
+    HIP_CHECK(hipMalloc(&d_weight_sorted, sz_weight));
+    HIP_CHECK(hipMalloc(&d_i_elm_sorted,  sz_i_elm));
+
+    HIP_CHECK(hipMalloc(&d_hist,    I_ELM_BINS * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_offsets, I_ELM_BINS * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_cursors, I_ELM_BINS * sizeof(int)));
+
+    int scan_blocks = (I_ELM_BINS + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
+    HIP_CHECK(hipMalloc(&d_block_sums, scan_blocks * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_block_offsets, scan_blocks * sizeof(int)));
+#endif
+
+    // --- Timing events ---
+    hipEvent_t t_start, t_stop;
+    HIP_CHECK(hipEventCreate(&t_start));
+    HIP_CHECK(hipEventCreate(&t_stop));
+    float elapsed_ms = 0.0f;
+
     // --- Copy host -> device ---
+    HIP_CHECK(hipEventRecord(t_start, 0));
     HIP_CHECK(hipMemcpy(d_x,      part->x,      sz_x,      hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_p,      part->p,      sz_p,      hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_st,     part->st,     sz_st,     hipMemcpyHostToDevice));
@@ -1464,15 +1691,46 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     HIP_CHECK(hipMemcpy(d_feedback_rhs, h_feedback_rhs,       sz_feedback,   hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
+    HIP_CHECK(hipEventRecord(t_stop, 0));
+    HIP_CHECK(hipEventSynchronize(t_stop));
+    HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
+    printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, elapsed_ms);
 
     // --- Launch one kernel per kinetic iteration ---
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
+    int    *d_i_elm_curr = d_i_elm;
+    int sort_call_count = 0;
 
+    HIP_CHECK(hipEventRecord(t_start, 0));
     for (int k = 0; k < nstep_particles; ++k) {
+#if N_SORTING > 0
+        if ((k % N_SORTING) == 0) {
+            hipEvent_t t_sort_start, t_sort_stop;
+            HIP_CHECK(hipEventCreate(&t_sort_start));
+            HIP_CHECK(hipEventCreate(&t_sort_stop));
+            HIP_CHECK(hipEventRecord(t_sort_start, 0));
+            sort_particles_by_i_elm_gpu(
+                d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr,
+                d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
+                num_particles, d_hist, d_offsets, d_cursors,
+                d_block_sums, d_block_offsets);
+            HIP_CHECK(hipEventRecord(t_sort_stop, 0));
+            HIP_CHECK(hipEventSynchronize(t_sort_stop));
+            float sort_ms = 0.0f;
+            HIP_CHECK(hipEventElapsedTime(&sort_ms, t_sort_start, t_sort_stop));
+            printf("[launch_evolve_REs rank %d] sort_particles_by_i_elm_gpu call #%d (step k=%d): %.3f ms\n",
+                   sim.my_id, sort_call_count, k, sort_ms);
+            ++sort_call_count;
+            HIP_CHECK(hipEventDestroy(t_sort_start));
+            HIP_CHECK(hipEventDestroy(t_sort_stop));
+        }
+#endif
+
         hipLaunchKernelGGL(evolve_REs_kernel,
             dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
             // Particle SoA
-            d_x, d_p, d_st, d_i_elm, d_weight, charge,
+            d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr, charge,
             // Field node list SoA
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             // Field element list SoA
@@ -1491,13 +1749,27 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
         HIP_CHECK(hipGetLastError());
     }
+    HIP_CHECK(hipEventRecord(t_stop, 0));
+    HIP_CHECK(hipEventSynchronize(t_stop));
+    HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
+    printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps): %.3f ms\n",
+           sim.my_id, nstep_particles, elapsed_ms);
 
     // --- Copy results back: device -> host ---
-    HIP_CHECK(hipMemcpy(part->x,       d_x,            sz_x,        hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->p,       d_p,            sz_p,        hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->st,      d_st,           sz_st,       hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm,        sz_i_elm,    hipMemcpyDeviceToHost));
+    HIP_CHECK(hipEventRecord(t_start, 0));
+    HIP_CHECK(hipMemcpy(part->x,       d_x_curr,       sz_x,        hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->p,       d_p_curr,       sz_p,        hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->st,      d_st_curr,      sz_st,       hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->weight,  d_weight_curr,  sz_weight,   hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs, sz_feedback, hipMemcpyDeviceToHost));
+    HIP_CHECK(hipEventRecord(t_stop, 0));
+    HIP_CHECK(hipEventSynchronize(t_stop));
+    HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
+    printf("[launch_evolve_REs rank %d] D2H transfers: %.3f ms\n", sim.my_id, elapsed_ms);
+
+    HIP_CHECK(hipEventDestroy(t_start));
+    HIP_CHECK(hipEventDestroy(t_stop));
 
     // --- Free device memory ---
     HIP_CHECK(hipFree(d_x));
@@ -1505,6 +1777,18 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_st));
     HIP_CHECK(hipFree(d_i_elm));
     HIP_CHECK(hipFree(d_weight));
+#if N_SORTING > 0
+    HIP_CHECK(hipFree(d_x_sorted));
+    HIP_CHECK(hipFree(d_p_sorted));
+    HIP_CHECK(hipFree(d_st_sorted));
+    HIP_CHECK(hipFree(d_i_elm_sorted));
+    HIP_CHECK(hipFree(d_weight_sorted));
+    HIP_CHECK(hipFree(d_hist));
+    HIP_CHECK(hipFree(d_offsets));
+    HIP_CHECK(hipFree(d_cursors));
+    HIP_CHECK(hipFree(d_block_sums));
+    HIP_CHECK(hipFree(d_block_offsets));
+#endif
     HIP_CHECK(hipFree(d_nl_x));
     HIP_CHECK(hipFree(d_nl_values));
     HIP_CHECK(hipFree(d_nl_deltas));
