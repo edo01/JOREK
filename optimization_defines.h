@@ -4,7 +4,7 @@
 
 #define ORDERING_TYPE 0
 
-#define N_SORTING 10000
+#define N_SORTING 100
 
 #define LUT_VALUES_DELTAS 0
 #define LUT_N_SLOTS          8

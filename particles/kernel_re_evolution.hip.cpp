@@ -836,7 +836,7 @@ void find_RZ_gpu(const double* __restrict__ nl_x,
 // All element indices are 1-based (matching Fortran convention).
 // On exit: i_elm_new <=0 means particle lost.
 // ---------------------------------------------------------------------------
-__device__
+__device__ __noinline__
 void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
                         const int*    __restrict__ el_vertex,
                         const double* __restrict__ el_size,
@@ -952,7 +952,7 @@ void find_RZ_nearby_gpu(const double* __restrict__ nl_x,
 // ---------------------------------------------------------------------------
 // calc_EBpsiU: compute E, B, psi, U at a point using linear time interpolation
 // ---------------------------------------------------------------------------
-__device__
+__device__ __noinline__
 void calc_EBpsiU(const double* __restrict__ nl_values,
                  const double* __restrict__ nl_deltas,
                  const double* __restrict__ nl_x,
@@ -972,16 +972,28 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #endif
                  )
 {
-    double HZ[N_TOR], dHZ[N_TOR];
-    sincosperiod_moivre(phi, HZ, dHZ);
+    // Replace HZ[N_TOR]/dHZ[N_TOR] (2*N_TOR = 30 doubles = 60 registers for N_TOR=15)
+    // with NMODE+1 cos/sin pairs (16 registers). Identical trig cost: NMODE sincos calls.
+    // hz/dhz values are reconstructed per 'it' index on demand inside the loops.
+    double cmode[NMODE + 1], smode[NMODE + 1];
+    cmode[0] = 1.0; smode[0] = 0.0;
+    for (int i = 1; i <= NMODE; ++i) {
+        double phase = double(N_PERIOD * i) * phi;
+        cmode[i] = cos(phase);
+        smode[i] = sin(phase);
+    }
 
     int ie = i_elm_f - 1;
 
-    double P[2] = {0.0, 0.0};
-    double P_s[2] = {0.0, 0.0};
-    double P_t[2] = {0.0, 0.0};
-    double P_phi[2] = {0.0, 0.0};
+    double P[2]      = {0.0, 0.0};
+    double P_s[2]    = {0.0, 0.0};
+    double P_t[2]    = {0.0, 0.0};
+    double P_phi[2]  = {0.0, 0.0};
     double P_time[2] = {0.0, 0.0};
+    double Pd[2]     = {0.0, 0.0};
+    double Pd_s[2]   = {0.0, 0.0};
+    double Pd_t[2]   = {0.0, 0.0};
+    double Pd_phi[2] = {0.0, 0.0};
 
 #if LUT_VALUES_DELTAS
     int lut_cache_slot = -1;
@@ -989,9 +1001,11 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
 #endif
 
-    // First interpolation of values
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
+
+    // Fused loop: nl_values and nl_deltas processed together, sharing
+    // bf2D_1_scalar and element lookups (halves instruction count vs two passes).
     for (int kv = 0; kv < NV; ++kv) {
         int iv = el_vertex[idx2(kv, ie, NV)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
@@ -1000,26 +1014,44 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
             for (int ivar = 0; ivar < 2; ++ivar) {
-                double v = 0.0, vp = 0.0;
+                double v = 0.0, vp = 0.0, vd = 0.0, vpd = 0.0;
                 for (int it = 0; it < N_TOR; ++it) {
+                    // Reconstruct hz/dhz from compact mode pairs.
+                    // For it=2i-1 (odd):  hz=cmode[i], dhz=-N_PERIOD*i*smode[i]
+                    // For it=2i   (even): hz=smode[i], dhz= N_PERIOD*i*cmode[i]
+                    double hz_it, dhz_it;
+                    if (it == 0) {
+                        hz_it = 1.0; dhz_it = 0.0;
+                    } else {
+                        int i = (it + 1) / 2;
+                        double ni = double(N_PERIOD * i);
+                        if (it & 1) { hz_it = cmode[i]; dhz_it = -ni * smode[i]; }
+                        else        { hz_it = smode[i]; dhz_it =  ni * cmode[i]; }
+                    }
 #if LUT_VALUES_DELTAS
                     double raw_v = (lut_cache_slot >= 0)
                         ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
                         : nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                    double val = raw_v * sz;
+                    double val_v = raw_v * sz;
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
+                    double val_d = raw_d * sz;
 #else
-                    double val = nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
+                    double val_v = nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
+                    double val_d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
 #endif
-                    v  += val * HZ[it];         // v = dot_product(values(1:n_tor,kf,1,kv),HZ(1:n_tor))
-                    vp += val * dHZ[it];        // vp = dot_product(values(1:n_tor,kf,1,kv),dHZ(1:n_tor))
+                    v   += val_v * hz_it;
+                    vp  += val_v * dhz_it;
+                    vd  += val_d * hz_it;
+                    vpd += val_d * dhz_it;
                 }
-                P[ivar]     += v  * h;
-                P_s[ivar]   += v  * hs;
-                P_t[ivar]   += v  * ht;
-                P_phi[ivar] += vp * h;
+                P[ivar]      += v   * h;    P_s[ivar]   += v   * hs;
+                P_t[ivar]    += v   * ht;   P_phi[ivar] += vp  * h;
+                Pd[ivar]     += vd  * h;    Pd_s[ivar]  += vd  * hs;
+                Pd_t[ivar]   += vd  * ht;   Pd_phi[ivar]+= vpd * h;
             }
 
-            // h/hs/ht already computed above
             double xR = nl_x[idx4(0, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
             double xZ = nl_x[idx4(1, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
             R   += xR * h;
@@ -1028,43 +1060,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             Zc  += xZ * h;
             Z_s += xZ * hs;
             Z_t += xZ * ht;
-        }
-    }
-
-    // Second interpolation of differentials (deltas)
-    // Pd[] declared here to limit live register range to this block only
-    double Pd[2] = {0.0, 0.0};
-    double Pd_s[2] = {0.0, 0.0};
-    double Pd_t[2] = {0.0, 0.0};
-    double Pd_phi[2] = {0.0, 0.0};
-
-    for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(kv, ie, NV)] - 1;
-
-        for (int kf = 0; kf < NDEG; ++kf) {
-            double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
-            double h, hs, ht;
-            bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
-
-            for (int ivar = 0; ivar < 2; ++ivar) {
-                double v = 0.0, vp = 0.0;
-                for (int it = 0; it < N_TOR; ++it) {
-#if LUT_VALUES_DELTAS
-                    double raw_d = (lut_cache_slot >= 0)
-                        ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
-                        : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                    double d = raw_d * sz;
-#else
-                    double d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
-#endif
-                    v  += d * HZ[it];       // v = dot_product(deltas(1:n_tor,kf,1,kv),HZ(1:n_tor))
-                    vp += d * dHZ[it];      // vp = dot_product(deltas(1:n_tor,kf,1,kv),dHZ(1:n_tor))
-                }
-                Pd[ivar]     += v  * h;
-                Pd_s[ivar]   += v  * hs;
-                Pd_t[ivar]   += v  * ht;
-                Pd_phi[ivar] += vp * h;
-            }
         }
     }
 
@@ -1118,7 +1113,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 // volume_preserving_push: VPA integrator for a relativistic particle
 // All position/element data is modified in-place.
 // ---------------------------------------------------------------------------
-__device__
+__device__ __noinline__
 void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             int &i_elm_f, double charge,                // i_elm_f is 1-based
                             const double* __restrict__ nl_values,
@@ -1341,7 +1336,11 @@ void lut_build_cooperative(int i_elm_thread,
 //   (n_elements, NDEG, NV, N_TOR, NVAR)  -- n_elements first for GPU coalescing
 //   feedback_rhs[ie + n_elements*(n + NDEG*(m + NV*(it + N_TOR*var)))]
 // ---------------------------------------------------------------------------
-__global__
+// __launch_bounds__(BLOCK_SIZE, 2): cap at 128 registers/thread to allow 2 blocks/SM on H100.
+// After __noinline__ on calc_EBpsiU / volume_preserving_push the kernel frame
+// naturally drops well below 128 regs; this communicates that target to the compiler
+// and prevents it from inflating registers on future inlining regressions.
+__global__ __launch_bounds__(BLOCK_SIZE, 2)
 void evolve_REs_kernel(
     // Particle SoA
     double* __restrict__ p_x,            // (num_particles, 3)
@@ -1740,10 +1739,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     for (int k = 0; k < nstep_particles; ++k) {
 #if N_SORTING > 0
         if ((k % N_SORTING) == 0) {
-            if(sim.my_id == 0) {
-                HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
-                write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "before_sort");
-            }
+            // if(sim.my_id == 0) {
+            //     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
+            //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "before_sort");
+            // }
 
             hipEvent_t t_sort_start, t_sort_stop;
             HIP_CHECK(hipEventCreate(&t_sort_start));
@@ -1758,17 +1757,17 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             HIP_CHECK(hipEventSynchronize(t_sort_stop));
             float sort_ms = 0.0f;
             HIP_CHECK(hipEventElapsedTime(&sort_ms, t_sort_start, t_sort_stop));
-            if(sim.my_id == 0)
-                printf("[launch_evolve_REs (only) rank %d] sort_particles_by_i_elm_gpu call #%d (step k=%d): %.3f ms\n",
-                   sim.my_id, sort_call_count, k, sort_ms);
+            // if(sim.my_id == 0)
+            //     printf("[launch_evolve_REs (only) rank %d] sort_particles_by_i_elm_gpu call #%d (step k=%d): %.3f ms\n",
+            //        sim.my_id, sort_call_count, k, sort_ms);
             ++sort_call_count;
             HIP_CHECK(hipEventDestroy(t_sort_start));
             HIP_CHECK(hipEventDestroy(t_sort_stop));
 
-            if(sim.my_id == 0) {
-                HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
-                write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
-            }
+            // if(sim.my_id == 0) {
+            //     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
+            //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
+            // }
         }
 #endif
 
@@ -1817,11 +1816,16 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventDestroy(t_stop));
 
     // --- Free device memory ---
-    HIP_CHECK(hipFree(d_x));
-    HIP_CHECK(hipFree(d_p));
-    HIP_CHECK(hipFree(d_st));
-    HIP_CHECK(hipFree(d_i_elm));
-    HIP_CHECK(hipFree(d_weight));
+    // sort_particles_by_i_elm_gpu swaps d_x_curr <-> d_x_sorted on each call.
+    // After an odd number of sorts d_x_sorted == d_x (both point to the same
+    // allocation), so freeing d_x then d_x_sorted is a double-free.
+    // Instead free d_x_curr (always one of the two allocations) and d_x_sorted
+    // (always the other), which is correct regardless of sort-call parity.
+    HIP_CHECK(hipFree(d_x_curr));
+    HIP_CHECK(hipFree(d_p_curr));
+    HIP_CHECK(hipFree(d_st_curr));
+    HIP_CHECK(hipFree(d_i_elm_curr));
+    HIP_CHECK(hipFree(d_weight_curr));
 #if N_SORTING > 0
     HIP_CHECK(hipFree(d_x_sorted));
     HIP_CHECK(hipFree(d_p_sorted));
