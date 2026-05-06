@@ -1756,11 +1756,12 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_i_elm,   sz_i_elm));
     HIP_CHECK(hipMalloc(&d_weight,  sz_weight));
 
-    // Save original allocation handles — d_x_curr may drift via swaps
-    double *const d_x_orig     = d_x;
-    double *const d_p_orig     = d_p;
-    double *const d_st_orig    = d_st;
-    int    *const d_i_elm_orig = d_i_elm;
+    // Save original allocation handles — d_x_curr/d_weight_curr may drift via swaps
+    double *const d_x_orig      = d_x;
+    double *const d_p_orig      = d_p;
+    double *const d_st_orig     = d_st;
+    int    *const d_i_elm_orig  = d_i_elm;
+    double *const d_weight_orig = d_weight;
 
     HIP_CHECK(hipMalloc(&d_nl_x,      sz_nl_x));
     HIP_CHECK(hipMalloc(&d_nl_values, sz_nl_values));
@@ -1809,6 +1810,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_st_sorted,     sz_st));
     HIP_CHECK(hipMalloc(&d_weight_sorted, sz_weight));
     HIP_CHECK(hipMalloc(&d_i_elm_sorted,  sz_i_elm));
+    // Save original handles — sort swaps these pointers with d_x_curr etc.
+    // just like the primary and push-alt buffers, so free the originals at cleanup.
+    double *const d_x_sorted_orig      = d_x_sorted;
+    double *const d_p_sorted_orig      = d_p_sorted;
+    double *const d_st_sorted_orig     = d_st_sorted;
+    double *const d_weight_sorted_orig = d_weight_sorted;
+    int    *const d_i_elm_sorted_orig  = d_i_elm_sorted;
 
     HIP_CHECK(hipMalloc(&d_hist,    I_ELM_BINS * sizeof(int)));
     HIP_CHECK(hipMalloc(&d_offsets, I_ELM_BINS * sizeof(int)));
@@ -2037,17 +2045,17 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_p_orig));
     HIP_CHECK(hipFree(d_st_orig));
     HIP_CHECK(hipFree(d_i_elm_orig));
-    HIP_CHECK(hipFree(d_weight_curr));   // weight never swapped: d_weight_curr == d_weight always
+    HIP_CHECK(hipFree(d_weight_orig));
     HIP_CHECK(hipFree(d_x_push_alt_orig));
     HIP_CHECK(hipFree(d_p_push_alt_orig));
     HIP_CHECK(hipFree(d_st_push_alt_orig));
     HIP_CHECK(hipFree(d_i_elm_push_alt_orig));
 #if N_SORTING > 0
-    HIP_CHECK(hipFree(d_x_sorted));
-    HIP_CHECK(hipFree(d_p_sorted));
-    HIP_CHECK(hipFree(d_st_sorted));
-    HIP_CHECK(hipFree(d_i_elm_sorted));
-    HIP_CHECK(hipFree(d_weight_sorted));
+    HIP_CHECK(hipFree(d_x_sorted_orig));
+    HIP_CHECK(hipFree(d_p_sorted_orig));
+    HIP_CHECK(hipFree(d_st_sorted_orig));
+    HIP_CHECK(hipFree(d_i_elm_sorted_orig));
+    HIP_CHECK(hipFree(d_weight_sorted_orig));
     HIP_CHECK(hipFree(d_hist));
     HIP_CHECK(hipFree(d_offsets));
     HIP_CHECK(hipFree(d_cursors));
