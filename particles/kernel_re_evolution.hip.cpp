@@ -60,6 +60,8 @@ static constexpr double ATOMIC_MASS_UNIT = 1.660539040e-27;
 static constexpr double MASS_ELECTRON    = 9.10938291e-31;
 static constexpr double SPEED_OF_LIGHT   = 2.997924580105029e+8;
 
+#define TO_KB(x) ((double)(x) / 1024.0)
+
 // ---------------------------------------------------------------------------
 // Fortran column-major indexing helpers (0-based indices)
 // ---------------------------------------------------------------------------
@@ -991,12 +993,29 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 {
     int ie = i_elm_f - 1;
 
-    // -------------------------------------------------------------------------
-    // Pass 1: geometry — accumulate R, Z and s/t derivatives.
-    // All geometry registers are dead before Pass 2 begins.
-    // -------------------------------------------------------------------------
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
+
+    double P[2]      = {0.0, 0.0};
+    double P_s[2]    = {0.0, 0.0};
+    double P_t[2]    = {0.0, 0.0};
+    double P_phi[2]  = {0.0, 0.0};
+    double Pd[2]     = {0.0, 0.0};
+    double Pd_s[2]   = {0.0, 0.0};
+    double Pd_t[2]   = {0.0, 0.0};
+    double Pd_phi[2] = {0.0, 0.0};
+
+#if LUT_VALUES_DELTAS
+    int lut_cache_slot = -1;
+    for (int s = 0; s < LUT_N_SLOTS; ++s)
+        if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
+#endif
+
+    // Fused loop: geometry and field values share el_vertex, el_size, bf2D loads.
+    // Toroidal harmonics computed on the fly via De Moivre recurrence inside the
+    // it loop (one sincos call total, then complex multiply for higher modes).
+    double base_c, base_s;
+    sincos(double(N_PERIOD) * phi, &base_s, &base_c);
 
     for (int kv = 0; kv < NV; ++kv) {
         int iv = el_vertex[idx2(kv, ie, NV)] - 1;
@@ -1013,41 +1032,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             Zc  += xZ * h;
             Z_s += xZ * hs;
             Z_t += xZ * ht;
-        }
-    }
 
-    // -------------------------------------------------------------------------
-    // Pass 2: field values — accumulate P, Pd and their spatial/phi derivatives.
-    // Toroidal harmonics computed on the fly via De Moivre recurrence inside the
-    // it loop; base_c/base_s are scoped to the kv/kf body to avoid keeping them
-    // alive across iterations where they are not needed.
-    // -------------------------------------------------------------------------
-    double P[2]      = {0.0, 0.0};
-    double P_s[2]    = {0.0, 0.0};
-    double P_t[2]    = {0.0, 0.0};
-    double P_phi[2]  = {0.0, 0.0};
-    double Pd[2]     = {0.0, 0.0};
-    double Pd_s[2]   = {0.0, 0.0};
-    double Pd_t[2]   = {0.0, 0.0};
-    double Pd_phi[2] = {0.0, 0.0};
-
-#if LUT_VALUES_DELTAS
-    int lut_cache_slot = -1;
-    for (int s = 0; s < LUT_N_SLOTS; ++s)
-        if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
-#endif
-
-    for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(kv, ie, NV)] - 1;
-        for (int kf = 0; kf < NDEG; ++kf) {
-            double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
-            double h, hs, ht;
-            bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
-
-            // On-the-fly De Moivre recurrence for toroidal harmonics.
-            // base_c/base_s are live only inside this kv/kf body.
-            double base_c = 0.0, base_s = 0.0;  // initialised at it==1
-            double c = 1.0, s = 0.0;             // tracks cos/sin of current mode i
+            double c = 1.0, s = 0.0;  // cos/sin of current mode i, reset each kv/kf
 
             double v0 = 0.0, vp0 = 0.0, vd0 = 0.0, vpd0 = 0.0;
             double v1 = 0.0, vp1 = 0.0, vd1 = 0.0, vpd1 = 0.0;
@@ -1057,19 +1043,15 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 if (it == 0) {
                     hz_it = 1.0; dhz_it = 0.0;
                 } else if (it == 1) {
-                    // First non-trivial mode: one sincos call, advance to mode i=1.
-                    sincos(double(N_PERIOD) * phi, &base_s, &base_c);
                     c = base_c; s = base_s;
                     hz_it = c; dhz_it = -double(N_PERIOD) * s;
                 } else if (it & 1) {
-                    // Odd it = 2i-1: advance to next mode i via De Moivre.
                     double cn = c * base_c - s * base_s;
                     double sn = c * base_s + s * base_c;
                     c = cn; s = sn;
                     int i = (it + 1) / 2;
                     hz_it = c; dhz_it = -double(N_PERIOD * i) * s;
                 } else {
-                    // Even it = 2i: reuse current mode i, pick sine component.
                     int i = it / 2;
                     hz_it = s; dhz_it = double(N_PERIOD * i) * c;
                 }
@@ -1729,6 +1711,25 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
+
+
+    // print dimension of arrays used by kernel
+    if(sim.my_id == 0) {
+        printf("[Array Dimensions] x: %.2f KB (3 * %zu * %zu)\n", TO_KB(sz_x), (size_t)num_particles, sizeof(double));
+        printf("[Array Dimensions] p: %.2f KB (3 * %zu * %zu)\n", TO_KB(sz_p), (size_t)num_particles, sizeof(double));
+        printf("[Array Dimensions] st: %.2f KB (2 * %zu * %zu)\n", TO_KB(sz_st), (size_t)num_particles, sizeof(double));
+        printf("[Array Dimensions] i_elm: %.2f KB (%zu * %zu)\n", TO_KB(sz_i_elm), (size_t)num_particles, sizeof(int));
+        printf("[Array Dimensions] weight: %.2f KB (%zu * %zu)\n", TO_KB(sz_weight), (size_t)num_particles, sizeof(double));
+        printf("[Array Dimensions] nl_x: %.2f KB (%d * %d * %d * %zu * %zu)\n", TO_KB(sz_nl_x), N_COORD_TOR, NDEG, NDIM, (size_t)n_nodes, sizeof(double));
+        printf("[Array Dimensions] nl_values: %.2f KB (%d * %d * %d * %zu * %zu)\n", TO_KB(sz_nl_values), N_TOR, NDEG, N_FIELD_VARS, (size_t)n_nodes, sizeof(double));
+        printf("[Array Dimensions] nl_deltas: %.2f KB (%d * %d * %d * %zu * %zu)\n", TO_KB(sz_nl_deltas), N_TOR, NDEG, N_FIELD_VARS, (size_t)n_nodes, sizeof(double));
+        printf("[Array Dimensions] el_vertex: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_vertex), (size_t)n_elements, NV, sizeof(int));
+        printf("[Array Dimensions] el_neigh: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_neigh), (size_t)n_elements, NV, sizeof(int));
+        printf("[Array Dimensions] el_size: %.2f KB (%zu * %d * %d * %zu)\n", TO_KB(sz_el_size), (size_t)n_elements, NV, NDEG, sizeof(double));
+        printf("[Array Dimensions] feedback: %.2f KB (%d * %d * %zu * %d * %d * %zu)\n", TO_KB(sz_feedback), NDEG, NV, (size_t)n_elements, N_TOR, NVAR, sizeof(double));
+        printf("[Array Dimensions] mode_coord: %.2f KB (%d * %zu)\n", TO_KB(sz_mode_coord), N_COORD_TOR, sizeof(int));
+    }
+
 
     // --- Allocate device memory ---
     double *d_x, *d_p, *d_st, *d_weight;
