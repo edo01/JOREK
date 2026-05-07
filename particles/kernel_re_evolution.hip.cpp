@@ -523,8 +523,8 @@ void vector_cylindrical_to_cartesian(double phi, const double* __restrict__ a, d
 __device__ __forceinline__
 void cayley_transform_rotate(double pm[3], const double B_cart[3], double scaling)
 {
-    double alpha = SPEED_OF_LIGHT * scaling /
-                   sqrt(1.0 + pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2]);
+    double alpha = SPEED_OF_LIGHT * scaling *
+                   rsqrt(1.0 + pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2]);
 
     const double vx = B_cart[0];
     const double vy = B_cart[1];
@@ -1131,7 +1131,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     E[2] = (neg_F0_tnorm_inv * U_phi - dpsidt) * R_inv;
 
     // Projection: E = E - E * B / |B| (element-wise, matching Fortran)
-    double Bnorm_inv = 1.0 / sqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
+    double Bnorm_inv = rsqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
     E[0] -= E[0] * B[0] * Bnorm_inv;
     E[1] -= E[1] * B[1] * Bnorm_inv;
     E[2] -= E[2] * B[2] * Bnorm_inv;
@@ -1179,12 +1179,12 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // Compute coordinates at half-step
     double pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    double gamma = sqrt(1.0 + pdot);
+    double gamma_inv = rsqrt(1.0 + pdot);
     double dt_half_c = 0.5 * timestep * SPEED_OF_LIGHT;
     double half_xyz[3] = {
-        cur_xyz[0] + dt_half_c * pm[0] / gamma,
-        cur_xyz[1] + dt_half_c * pm[1] / gamma,
-        cur_xyz[2] + dt_half_c * pm[2] / gamma
+        cur_xyz[0] + dt_half_c * pm[0] * gamma_inv,
+        cur_xyz[1] + dt_half_c * pm[1] * gamma_inv,
+        cur_xyz[2] + dt_half_c * pm[2] * gamma_inv
     };
 
     // Compute cylindrical coordinates from cartesian ones
@@ -1242,10 +1242,10 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // --- Second half position update ---
     pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    gamma = sqrt(1.0 + pdot);
-    half_xyz[0] += dt_half_c * pm[0] / gamma;
-    half_xyz[1] += dt_half_c * pm[1] / gamma;
-    half_xyz[2] += dt_half_c * pm[2] / gamma;
+    gamma_inv = rsqrt(1.0 + pdot);
+    half_xyz[0] += dt_half_c * pm[0] * gamma_inv;
+    half_xyz[1] += dt_half_c * pm[1] * gamma_inv;
+    half_xyz[2] += dt_half_c * pm[2] * gamma_inv;
 
     // Restore dimensional momentum
     p_mom[0] = pm[0] * mc;
@@ -1426,8 +1426,8 @@ void evolve_proj_kernel(
         double cyl_mom[3];
         vector_cartesian_to_cylindrical(x[2], pm, cyl_mom);
         double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
-        double denom_v = sqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
-        double cyl_vel[3] = {cyl_mom[0] / denom_v, cyl_mom[1] / denom_v, cyl_mom[2] / denom_v};
+        double denom_v_inv = rsqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
+        double cyl_vel[3] = {cyl_mom[0] * denom_v_inv, cyl_mom[1] * denom_v_inv, cyl_mom[2] * denom_v_inv};
 
         double E_loc[3], B_loc[3];
         calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
@@ -1441,21 +1441,21 @@ void evolve_proj_kernel(
 #endif
                     );
 
-        double Bnorm = sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
-        double B_hat[3] = {B_loc[0]/Bnorm, B_loc[1]/Bnorm, B_loc[2]/Bnorm};
+        double Bnorm_inv = rsqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
+        double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
 
         double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
         double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
                                  cyl_vel[1] - v_par*B_hat[1],
                                  cyl_vel[2] - v_par*B_hat[2]};
-        double v_perp = sqrt(v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2]);
+        double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
 
         double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
                             + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
                               / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
 
         double v_Ppar  = gamma_m * v_par * v_par * MU_ZERO;
-        double v_Pperp = gamma_m * v_perp * v_perp * 0.5 * MU_ZERO;
+        double v_Pperp = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
         double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
 
         int ie = i_elm - 1;
