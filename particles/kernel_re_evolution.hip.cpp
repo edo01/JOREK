@@ -1779,11 +1779,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipStreamCreate(&stream_proj));
     HIP_CHECK(hipStreamCreate(&stream_push));
 
-    // --- HIP graph state (two alternating graphs per sort interval) ---
-    hipGraph_t     graph_even = nullptr, graph_odd = nullptr;
-    hipGraphExec_t graph_exec_even = nullptr, graph_exec_odd = nullptr;
-    bool graph_valid  = false;
-    int  interval_step = 0;  // step counter within current sort interval
+    // --- Fork/join events for concurrent proj+push (reused across all steps) ---
+    hipEvent_t fork_event, join_event;
+    HIP_CHECK(hipEventCreateWithFlags(&fork_event, hipEventDisableTiming));
+    HIP_CHECK(hipEventCreateWithFlags(&join_event, hipEventDisableTiming));
 
     // --- Allocate sorting buffers ---
     double *d_x_sorted = nullptr, *d_p_sorted = nullptr, *d_st_sorted = nullptr, *d_weight_sorted = nullptr;
@@ -1849,57 +1848,12 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int    *d_i_elm_curr = d_i_elm;
     int sort_call_count = 0;
 
-    // Helper lambda: capture one HIP graph with proj on stream_proj and push on
-    // stream_push, using the given input/output particle pointer pairs.
-    // Both kernels are forked from stream_proj and joined back before EndCapture.
-    auto capture_graph = [&](
-        double* x_in,  double* p_in,  double* st_in,  int* i_elm_in,
-        double* x_out, double* p_out, double* st_out, int* i_elm_out,
-        hipGraph_t& g, hipGraphExec_t& ge)
-    {
-        hipEvent_t fev, jev;
-        HIP_CHECK(hipEventCreateWithFlags(&fev, hipEventDisableTiming));
-        HIP_CHECK(hipEventCreateWithFlags(&jev, hipEventDisableTiming));
-
-        HIP_CHECK(hipStreamBeginCapture(stream_proj, hipStreamCaptureModeGlobal));
-
-        // Fork: stream_push starts from the same graph node as stream_proj
-        HIP_CHECK(hipEventRecord(fev, stream_proj));
-        HIP_CHECK(hipStreamWaitEvent(stream_push, fev, 0));
-
-        // Proj kernel on stream_proj
-        hipLaunchKernelGGL(evolve_proj_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_proj,
-            x_in, p_in, st_in, i_elm_in, d_weight_curr, charge,
-            d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
-            d_el_vertex, d_el_size, n_elements,
-            time_now, time_prev, flag_static, flag_zero_dp,
-            F0, t_norm, sim_time, group_mass,
-            num_particles,
-            d_feedback_rhs, d_mode_coord);
-
-        // Push kernel on stream_push
-        hipLaunchKernelGGL(evolve_push_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_push,
-            x_in, p_in, st_in, i_elm_in, charge,
-            x_out, p_out, st_out, i_elm_out,
-            d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
-            d_el_vertex, d_el_neighbours, d_el_size, n_elements,
-            time_now, time_prev, flag_static, flag_zero_dp,
-            F0, t_norm, sim_time, group_mass, tstep_part_adj,
-            num_particles, d_mode_coord);
-
-        // Join: stream_proj waits for stream_push (single exit node for the graph)
-        HIP_CHECK(hipEventRecord(jev, stream_push));
-        HIP_CHECK(hipStreamWaitEvent(stream_proj, jev, 0));
-
-        HIP_CHECK(hipStreamEndCapture(stream_proj, &g));
-        HIP_CHECK(hipGraphInstantiate(&ge, g, nullptr, nullptr, 0));
-
-        HIP_CHECK(hipEventDestroy(fev));
-        HIP_CHECK(hipEventDestroy(jev));
-    };
-
+    // --- Step loop: proj and push launch concurrently on two streams ---
+    // proj (stream_proj) reads curr and accumulates feedback_rhs via atomicAdd.
+    // push (stream_push) reads curr and writes updated particle state to alt buffers.
+    // The fork/join event pair serialises steps on the GPU without any per-step
+    // host synchronisation.  After each step the alt buffers become curr via a
+    // host-side pointer swap, so d_x_curr always holds the latest state.
     HIP_CHECK(hipEventRecord(t_start, 0));
     for (int k = 0; k < nstep_particles; ++k) {
 #if N_SORTING > 0
@@ -1907,17 +1861,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             // Drain both streams before sort so it sees the final push state
             HIP_CHECK(hipStreamSynchronize(stream_push));
             HIP_CHECK(hipStreamSynchronize(stream_proj));
-
-            // Invalidate graphs — pointers change after sort swap
-            if (graph_valid) {
-                HIP_CHECK(hipGraphExecDestroy(graph_exec_even));
-                HIP_CHECK(hipGraphDestroy(graph_even));
-                HIP_CHECK(hipGraphExecDestroy(graph_exec_odd));
-                HIP_CHECK(hipGraphDestroy(graph_odd));
-                graph_exec_even = nullptr; graph_even = nullptr;
-                graph_exec_odd  = nullptr; graph_odd  = nullptr;
-                graph_valid = false;
-            }
 
             // if(sim.my_id == 0) {
             //     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
@@ -1945,45 +1888,46 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             //     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
             //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
             // }
-
-            interval_step = 0;  // reset parity counter for new sort interval
         }
 #endif
 
-        // --- (Re)capture two alternating graphs at the start of each sort interval ---
-        // graph_even: curr(P) → alt(Q); graph_odd: curr(Q) → alt(P)
-        // Within an interval, d_x_curr and d_x_push_alt alternate P/Q each step.
-        if (!graph_valid) {
-            if (sim.my_id == 0)
-                printf("[launch_evolve_REs rank %d] recapturing graphs at k=%d\n", sim.my_id, k);
+        // Fork: bring stream_push to the same dependency position as stream_proj.
+        // stream_proj already carries the join_event from step k-1, so stream_push
+        // cannot start step k until both kernels from step k-1 have finished.
+        HIP_CHECK(hipEventRecord(fork_event, stream_proj));
+        HIP_CHECK(hipStreamWaitEvent(stream_push, fork_event, 0));
 
-            // even graph: input=curr(P), output=alt(Q)
-            capture_graph(d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr,
-                          d_x_push_alt, d_p_push_alt, d_st_push_alt, d_i_elm_push_alt,
-                          graph_even, graph_exec_even);
+        // Proj kernel: reads curr, accumulates feedback_rhs (atomicAdd)
+        hipLaunchKernelGGL(evolve_proj_kernel,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_proj,
+            d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr, charge,
+            d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
+            d_el_vertex, d_el_size, n_elements,
+            time_now, time_prev, flag_static, flag_zero_dp,
+            F0, t_norm, sim_time, group_mass,
+            num_particles,
+            d_feedback_rhs, d_mode_coord);
 
-            // odd graph: input=alt(Q), output=curr(P)
-            capture_graph(d_x_push_alt, d_p_push_alt, d_st_push_alt, d_i_elm_push_alt,
-                          d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr,
-                          graph_odd, graph_exec_odd);
+        // Push kernel: reads curr, writes updated state to alt (concurrent with proj)
+        hipLaunchKernelGGL(evolve_push_kernel,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_push,
+            d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, charge,
+            d_x_push_alt, d_p_push_alt, d_st_push_alt, d_i_elm_push_alt,
+            d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
+            d_el_vertex, d_el_neighbours, d_el_size, n_elements,
+            time_now, time_prev, flag_static, flag_zero_dp,
+            F0, t_norm, sim_time, group_mass, tstep_part_adj,
+            num_particles, d_mode_coord);
 
-            graph_valid = true;
-        }
+        // Join: stream_proj waits for push to finish before the next step's fork
+        HIP_CHECK(hipEventRecord(join_event, stream_push));
+        HIP_CHECK(hipStreamWaitEvent(stream_proj, join_event, 0));
 
-        // --- Replay the correct graph for this step's parity ---
-        hipGraphExec_t cur_exec = (interval_step % 2 == 0) ? graph_exec_even : graph_exec_odd;
-        HIP_CHECK(hipGraphLaunch(cur_exec, stream_proj));
-        // stream_proj's join_event waits for stream_push, so syncing stream_proj
-        // guarantees both proj and push are complete before the pointer swap.
-        HIP_CHECK(hipStreamSynchronize(stream_proj));
-        HIP_CHECK(hipGetLastError());
-
-        // --- Swap tracking pointers: next step's curr is this step's alt ---
+        // Swap: alt becomes curr for the next step
         std::swap(d_x_curr,     d_x_push_alt);
         std::swap(d_p_curr,     d_p_push_alt);
         std::swap(d_st_curr,    d_st_push_alt);
         std::swap(d_i_elm_curr, d_i_elm_push_alt);
-        ++interval_step;
     }
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
@@ -2011,13 +1955,9 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventDestroy(t_start));
     HIP_CHECK(hipEventDestroy(t_stop));
 
-    // --- Destroy graphs and streams ---
-    if (graph_valid) {
-        HIP_CHECK(hipGraphExecDestroy(graph_exec_even));
-        HIP_CHECK(hipGraphDestroy(graph_even));
-        HIP_CHECK(hipGraphExecDestroy(graph_exec_odd));
-        HIP_CHECK(hipGraphDestroy(graph_odd));
-    }
+    // --- Destroy events and streams ---
+    HIP_CHECK(hipEventDestroy(fork_event));
+    HIP_CHECK(hipEventDestroy(join_event));
     HIP_CHECK(hipStreamDestroy(stream_proj));
     HIP_CHECK(hipStreamDestroy(stream_push));
 
