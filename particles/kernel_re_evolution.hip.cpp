@@ -18,6 +18,8 @@
 // Compile-time parameters, taken and renamed from models/mod_settings.h
 // ---------------------------------------------------------------------------
 
+#define TO_KB(bytes) ((double)(bytes) / 1024.0)
+
 static constexpr int N_TOR = n_tor;
 static constexpr int N_COORD_TOR = n_coord_tor;
 static constexpr int N_PERIOD = n_period;
@@ -59,8 +61,6 @@ static constexpr double EL_CHG           = 1.602176565e-19;
 static constexpr double ATOMIC_MASS_UNIT = 1.660539040e-27;
 static constexpr double MASS_ELECTRON    = 9.10938291e-31;
 static constexpr double SPEED_OF_LIGHT   = 2.997924580105029e+8;
-
-#define TO_KB(x) ((double)(x) / 1024.0)
 
 // ---------------------------------------------------------------------------
 // Fortran column-major indexing helpers (0-based indices)
@@ -426,22 +426,16 @@ void bf2D_1_scalar(double s, double t, int kf, int kv,
 // ---------------------------------------------------------------------------
 // sincosperiod_moivre: compute toroidal harmonics and derivatives
 // HZ[N_TOR], dHZ[N_TOR]
-// Modes are built on the fly via De Moivre recurrence to avoid storing
-// intermediate cos/sin arrays and save registers.
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
 void sincosperiod_moivre(double phi, double* __restrict__ HZ, double* __restrict__ dHZ)
 {
     HZ[0]  = 1.0;
     dHZ[0] = 0.0;
-    // Base angle for one period step; higher modes built via De Moivre recurrence.
-    double base_c, base_s;
-    sincos(double(N_PERIOD) * phi, &base_s, &base_c);
-    double c_prev = 1.0, s_prev = 0.0;
     for (int i = 1; i <= NMODE; ++i) {
-        double c = c_prev * base_c - s_prev * base_s;
-        double sn = c_prev * base_s + s_prev * base_c;
-        c_prev = c; s_prev = sn;
+        double phase = double(N_PERIOD * i) * phi;
+        double c, sn;
+        sincos(phase, &sn, &c);
         HZ [2*i - 1] = c;
         HZ [2*i]     = sn;
         dHZ[2*i - 1] = sn * (-N_PERIOD * i);
@@ -451,19 +445,15 @@ void sincosperiod_moivre(double phi, double* __restrict__ HZ, double* __restrict
 
 // ---------------------------------------------------------------------------
 // mode_moivre: compute toroidal harmonics (without derivatives)
-// Modes built on the fly via De Moivre recurrence (no intermediate storage).
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
 void mode_moivre(double phi, double* __restrict__ HZ)
 {
     HZ[0] = 1.0;
-    double base_c, base_s;
-    sincos(double(N_PERIOD) * phi, &base_s, &base_c);
-    double c_prev = 1.0, s_prev = 0.0;
     for (int i = 1; i <= NMODE; ++i) {
-        double c = c_prev * base_c - s_prev * base_s;
-        double sn = c_prev * base_s + s_prev * base_c;
-        c_prev = c; s_prev = sn;
+        double phase = double(N_PERIOD * i) * phi;
+        double c, sn;
+        sincos(phase, &sn, &c);
         HZ[2*i - 1] = c;
         HZ[2*i]     = sn;
     }
@@ -600,13 +590,10 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
     for (int it = 1; it <= (N_COORD_TOR - 1) / 2; ++it) {
         int mc_cos = mode_coord[2*it - 1];
         int mc_sin = mode_coord[2*it];
-        double hzc_s, hzc_c, hzs_s, hzs_c;
-        sincos(double(mc_cos) * phi, &hzc_s, &hzc_c);
-        sincos(double(mc_sin) * phi, &hzs_s, &hzs_c);
-        HZ_coord  [2*it - 1] =  hzc_c;
-        HZ_coord_p[2*it - 1] = -double(mc_cos) * hzc_s;
-        HZ_coord  [2*it]     = -hzs_s;
-        HZ_coord_p[2*it]     = -double(mc_sin) * hzs_c;
+        HZ_coord  [2*it - 1] =  cos(double(mc_cos) * phi);
+        HZ_coord_p[2*it - 1] = -double(mc_cos) * sin(double(mc_cos) * phi);
+        HZ_coord  [2*it]     = -sin(double(mc_sin) * phi);
+        HZ_coord_p[2*it]     = -double(mc_sin) * cos(double(mc_sin) * phi);
     }
 
     R = 0.0; R_s = 0.0; R_t = 0.0; R_p = 0.0;
@@ -991,15 +978,23 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #endif
                  )
 {
-    int ie = i_elm_f - 1;
+    // Replace HZ[N_TOR]/dHZ[N_TOR] (2*N_TOR = 30 doubles = 60 registers for N_TOR=15)
+    // with NMODE+1 cos/sin pairs (16 registers). Identical trig cost: NMODE sincos calls.
+    // hz/dhz values are reconstructed per 'it' index on demand inside the loops.
+    double cmode[NMODE + 1], smode[NMODE + 1];
+    cmode[0] = 1.0; smode[0] = 0.0;
+    for (int i = 1; i <= NMODE; ++i) {
+        double phase = double(N_PERIOD * i) * phi;
+        sincos(phase, &smode[i], &cmode[i]);
+    }
 
-    double R = 0.0, R_s = 0.0, R_t = 0.0;
-    double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
+    int ie = i_elm_f - 1;
 
     double P[2]      = {0.0, 0.0};
     double P_s[2]    = {0.0, 0.0};
     double P_t[2]    = {0.0, 0.0};
     double P_phi[2]  = {0.0, 0.0};
+    double P_time[2] = {0.0, 0.0};
     double Pd[2]     = {0.0, 0.0};
     double Pd_s[2]   = {0.0, 0.0};
     double Pd_t[2]   = {0.0, 0.0};
@@ -1011,18 +1006,56 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
         if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
 #endif
 
-    // Fused loop: geometry and field values share el_vertex, el_size, bf2D loads.
-    // Toroidal harmonics computed on the fly via De Moivre recurrence inside the
-    // it loop (one sincos call total, then complex multiply for higher modes).
-    double base_c, base_s;
-    sincos(double(N_PERIOD) * phi, &base_s, &base_c);
+    double R = 0.0, R_s = 0.0, R_t = 0.0;
+    double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
 
+    // Fused loop: nl_values and nl_deltas processed together, sharing
+    // bf2D_1_scalar and element lookups (halves instruction count vs two passes).
     for (int kv = 0; kv < NV; ++kv) {
         int iv = el_vertex[idx2(kv, ie, NV)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
             double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
             double h, hs, ht;
             bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
+
+            for (int ivar = 0; ivar < 2; ++ivar) {
+                double v = 0.0, vp = 0.0, vd = 0.0, vpd = 0.0;
+                for (int it = 0; it < N_TOR; ++it) {
+                    // Reconstruct hz/dhz from compact mode pairs.
+                    // For it=2i-1 (odd):  hz=cmode[i], dhz=-N_PERIOD*i*smode[i]
+                    // For it=2i   (even): hz=smode[i], dhz= N_PERIOD*i*cmode[i]
+                    double hz_it, dhz_it;
+                    if (it == 0) {
+                        hz_it = 1.0; dhz_it = 0.0;
+                    } else {
+                        int i = (it + 1) / 2;
+                        double ni = double(N_PERIOD * i);
+                        if (it & 1) { hz_it = cmode[i]; dhz_it = -ni * smode[i]; }
+                        else        { hz_it = smode[i]; dhz_it =  ni * cmode[i]; }
+                    }
+#if LUT_VALUES_DELTAS
+                    double raw_v = (lut_cache_slot >= 0)
+                        ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        : nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
+                    double val_v = raw_v * sz;
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
+                    double val_d = raw_d * sz;
+#else
+                    double val_v = nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
+                    double val_d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
+#endif
+                    v   += val_v * hz_it;
+                    vp  += val_v * dhz_it;
+                    vd  += val_d * hz_it;
+                    vpd += val_d * dhz_it;
+                }
+                P[ivar]      += v   * h;    P_s[ivar]   += v   * hs;
+                P_t[ivar]    += v   * ht;   P_phi[ivar] += vp  * h;
+                Pd[ivar]     += vd  * h;    Pd_s[ivar]  += vd  * hs;
+                Pd_t[ivar]   += vd  * ht;   Pd_phi[ivar]+= vpd * h;
+            }
 
             double xR = nl_x[idx4(0, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
             double xZ = nl_x[idx4(1, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
@@ -1032,66 +1065,6 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             Zc  += xZ * h;
             Z_s += xZ * hs;
             Z_t += xZ * ht;
-
-            double c = 1.0, s = 0.0;  // cos/sin of current mode i, reset each kv/kf
-
-            double v0 = 0.0, vp0 = 0.0, vd0 = 0.0, vpd0 = 0.0;
-            double v1 = 0.0, vp1 = 0.0, vd1 = 0.0, vpd1 = 0.0;
-
-            for (int it = 0; it < N_TOR; ++it) {
-                double hz_it, dhz_it;
-                if (it == 0) {
-                    hz_it = 1.0; dhz_it = 0.0;
-                } else if (it == 1) {
-                    c = base_c; s = base_s;
-                    hz_it = c; dhz_it = -double(N_PERIOD) * s;
-                } else if (it & 1) {
-                    double cn = c * base_c - s * base_s;
-                    double sn = c * base_s + s * base_c;
-                    c = cn; s = sn;
-                    int i = (it + 1) / 2;
-                    hz_it = c; dhz_it = -double(N_PERIOD * i) * s;
-                } else {
-                    int i = it / 2;
-                    hz_it = s; dhz_it = double(N_PERIOD * i) * c;
-                }
-
-#if LUT_VALUES_DELTAS
-                double raw_v0 = (lut_cache_slot >= 0)
-                    ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*0))]
-                    : nl_values[idx4(0, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                double raw_d0 = (lut_cache_slot >= 0)
-                    ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*0))]
-                    : nl_deltas[idx4(0, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                double raw_v1 = (lut_cache_slot >= 0)
-                    ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*1))]
-                    : nl_values[idx4(1, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                double raw_d1 = (lut_cache_slot >= 0)
-                    ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*1))]
-                    : nl_deltas[idx4(1, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
-                double val_v0 = raw_v0 * sz, val_d0 = raw_d0 * sz;
-                double val_v1 = raw_v1 * sz, val_d1 = raw_d1 * sz;
-#else
-                double val_v0 = nl_values[idx4(0, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
-                double val_d0 = nl_deltas[idx4(0, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
-                double val_v1 = nl_values[idx4(1, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
-                double val_d1 = nl_deltas[idx4(1, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
-#endif
-                v0  += val_v0 * hz_it;  vp0 += val_v0 * dhz_it;
-                vd0 += val_d0 * hz_it;  vpd0+= val_d0 * dhz_it;
-                v1  += val_v1 * hz_it;  vp1 += val_v1 * dhz_it;
-                vd1 += val_d1 * hz_it;  vpd1+= val_d1 * dhz_it;
-            }
-
-            P[0]      += v0  * h;   P_s[0]   += v0  * hs;
-            P_t[0]    += v0  * ht;  P_phi[0] += vp0 * h;
-            Pd[0]     += vd0 * h;   Pd_s[0]  += vd0 * hs;
-            Pd_t[0]   += vd0 * ht;  Pd_phi[0]+= vpd0* h;
-
-            P[1]      += v1  * h;   P_s[1]   += v1  * hs;
-            P_t[1]    += v1  * ht;  P_phi[1] += vp1 * h;
-            Pd[1]     += vd1 * h;   Pd_s[1]  += vd1 * hs;
-            Pd_t[1]   += vd1 * ht;  Pd_phi[1]+= vpd1* h;
         }
     }
 
@@ -1099,15 +1072,17 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     if (fabs(time_now - time_prev) > 1.0e-10 && !flag_static) {
         dt = 1.0 / (time_now - time_prev);
         double df = (time_now - time) * dt;
-        P[0]   -= Pd[0]   * df;  P_s[0]   -= Pd_s[0]   * df;
-        P_t[0] -= Pd_t[0] * df;  P_phi[0] -= Pd_phi[0] * df;
-        P[1]   -= Pd[1]   * df;  P_s[1]   -= Pd_s[1]   * df;
-        P_t[1] -= Pd_t[1] * df;  P_phi[1] -= Pd_phi[1] * df;
+        for (int i = 0; i < 2; ++i) {
+            P[i]     -= Pd[i]     * df;
+            P_s[i]   -= Pd_s[i]   * df;
+            P_t[i]   -= Pd_t[i]   * df;
+            P_phi[i] -= Pd_phi[i] * df;
+        }
     } else {
         dt = 1.0 / t_norm;
     }
-    // Pd[0]*dt = dPsi/dt; only component 0 enters E_phi. Component 1 unused.
-    double dpsidt = flag_zero_dpsidt ? 0.0 : Pd[0] * dt;
+    P_time[0] = Pd[0] * dt;
+    P_time[1] = Pd[1] * dt;
 
     double R_inv      = 1.0 / R;
     double st_jac_inv = 1.0 / (R_s * Z_t - R_t * Z_s);
@@ -1119,6 +1094,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double U_Z   = (-P_s[1] * R_t + P_t[1] * R_s) * st_jac_inv;
     double U_phi = P_phi[1];
 
+    if (flag_zero_dpsidt) P_time[0] = 0.0;
+
     // Magnetic field (cylindrical)
     B[0] =  psi_Z * R_inv;
     B[1] = -psi_R * R_inv;
@@ -1128,7 +1105,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double neg_F0_tnorm_inv = -F0 * t_norm_inv;
     E[0] = neg_F0_tnorm_inv * U_R;
     E[1] = neg_F0_tnorm_inv * U_Z;
-    E[2] = (neg_F0_tnorm_inv * U_phi - dpsidt) * R_inv;
+    E[2] = (neg_F0_tnorm_inv * U_phi - P_time[0]) * R_inv;
 
     // Projection: E = E - E * B / |B| (element-wise, matching Fortran)
     double Bnorm_inv = rsqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
@@ -1179,12 +1156,12 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // Compute coordinates at half-step
     double pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    double gamma_inv = rsqrt(1.0 + pdot);
+    double inv_gamma = rsqrt(1.0 + pdot);
     double dt_half_c = 0.5 * timestep * SPEED_OF_LIGHT;
     double half_xyz[3] = {
-        cur_xyz[0] + dt_half_c * pm[0] * gamma_inv,
-        cur_xyz[1] + dt_half_c * pm[1] * gamma_inv,
-        cur_xyz[2] + dt_half_c * pm[2] * gamma_inv
+        cur_xyz[0] + dt_half_c * pm[0] * inv_gamma,
+        cur_xyz[1] + dt_half_c * pm[1] * inv_gamma,
+        cur_xyz[2] + dt_half_c * pm[2] * inv_gamma
     };
 
     // Compute cylindrical coordinates from cartesian ones
@@ -1242,10 +1219,10 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 
     // --- Second half position update ---
     pdot = pm[0]*pm[0] + pm[1]*pm[1] + pm[2]*pm[2];
-    gamma_inv = rsqrt(1.0 + pdot);
-    half_xyz[0] += dt_half_c * pm[0] * gamma_inv;
-    half_xyz[1] += dt_half_c * pm[1] * gamma_inv;
-    half_xyz[2] += dt_half_c * pm[2] * gamma_inv;
+    inv_gamma = rsqrt(1.0 + pdot);
+    half_xyz[0] += dt_half_c * pm[0] * inv_gamma;
+    half_xyz[1] += dt_half_c * pm[1] * inv_gamma;
+    half_xyz[2] += dt_half_c * pm[2] * inv_gamma;
 
     // Restore dimensional momentum
     p_mom[0] = pm[0] * mc;
@@ -1426,8 +1403,8 @@ void evolve_proj_kernel(
         double cyl_mom[3];
         vector_cartesian_to_cylindrical(x[2], pm, cyl_mom);
         double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
-        double denom_v_inv = rsqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
-        double cyl_vel[3] = {cyl_mom[0] * denom_v_inv, cyl_mom[1] * denom_v_inv, cyl_mom[2] * denom_v_inv};
+        double inv_denom_v = rsqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
+        double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
 
         double E_loc[3], B_loc[3];
         calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
@@ -1712,8 +1689,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
 
-
-    // print dimension of arrays used by kernel
     if(sim.my_id == 0) {
         printf("[Array Dimensions] x: %.2f KB (3 * %zu * %zu)\n", TO_KB(sz_x), (size_t)num_particles, sizeof(double));
         printf("[Array Dimensions] p: %.2f KB (3 * %zu * %zu)\n", TO_KB(sz_p), (size_t)num_particles, sizeof(double));
@@ -1729,7 +1704,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         printf("[Array Dimensions] feedback: %.2f KB (%d * %d * %zu * %d * %d * %zu)\n", TO_KB(sz_feedback), NDEG, NV, (size_t)n_elements, N_TOR, NVAR, sizeof(double));
         printf("[Array Dimensions] mode_coord: %.2f KB (%d * %zu)\n", TO_KB(sz_mode_coord), N_COORD_TOR, sizeof(int));
     }
-
 
     // --- Allocate device memory ---
     double *d_x, *d_p, *d_st, *d_weight;
@@ -1750,6 +1724,18 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipGetDevice(&curr_dev));
     printf("[launch_evolve_REs] MPI process %d (global rank) using device=%d\n", sim.my_id, curr_dev);
 
+
+    // Prefer L1 cache over shared memory for kernels that do not use shared memory.
+    // count_i_elm_histogram and exclusive_scan_blocks use shared memory and are excluded.
+    static bool cache_config_set = false;
+    if (!cache_config_set) {
+#if LUT_VALUES_DELTAS == 0
+        // evolve_proj/push_kernel only avoid shared memory when LUT is disabled.
+        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_proj_kernel), hipFuncCachePreferL1));
+        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_push_kernel), hipFuncCachePreferL1));
+#endif
+        cache_config_set = true;
+    }
 
     HIP_CHECK(hipMalloc(&d_x,       sz_x));
     HIP_CHECK(hipMalloc(&d_p,       sz_p));
