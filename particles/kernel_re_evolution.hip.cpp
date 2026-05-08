@@ -1342,6 +1342,159 @@ void lut_build_cooperative(int i_elm_thread,
 //   feedback_rhs[ie + n_elements*(n + NDEG*(m + NV*(it + N_TOR*var)))]
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// evolve_batch_kernel: fused proj+push kernel that runs nsteps kinetic steps
+// in a single launch.  Each thread holds its particle state in registers for
+// the entire batch (one global-memory read at entry, one write at exit).
+// When LUT is enabled the shared-memory cache is built once and reused for
+// all nsteps — this is the primary motivation for batching.
+// nsteps is normally N_SORTING; the last batch may be smaller.
+// ---------------------------------------------------------------------------
+__global__ __launch_bounds__(BLOCK_SIZE, 2)
+void evolve_batch_kernel(
+    // Particle SoA — in/out (read once at start, written once at end)
+    double* __restrict__ p_x,
+    double* __restrict__ p_p,
+    double* __restrict__ p_st,
+    int*    __restrict__ p_i_elm,
+    const double* __restrict__ p_weight,
+    double charge,
+    // Field node list SoA
+    const double* __restrict__ nl_values,
+    const double* __restrict__ nl_deltas,
+    const double* __restrict__ nl_x,
+    int n_nodes,
+    // Field element list SoA
+    const int*    __restrict__ el_vertex,
+    const int*    __restrict__ el_neighbours,
+    const double* __restrict__ el_size,
+    int n_elements,
+    // Field time parameters
+    double time_now, double time_prev,
+    int flag_static, int flag_zero_dpsidt,
+    // Physics parameters
+    double F0, double t_norm,
+    // Simulation parameters
+    double sim_time, double group_mass, double tstep_part_adj,
+    int num_particles,
+    // Feedback RHS (atomically updated)
+    double* __restrict__ feedback_rhs,
+    const int* __restrict__ mode_coord,
+    int nsteps)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+#if LUT_VALUES_DELTAS
+    __shared__ int    sh_lut_keys[LUT_N_SLOTS];
+    __shared__ double sh_cache_v[LUT_N_SLOTS * LUT_SLOT_SIZE];
+    __shared__ double sh_cache_d[LUT_N_SLOTS * LUT_SLOT_SIZE];
+    __shared__ int    sh_scratch[BLOCK_SIZE];
+
+    // lut_build_cooperative requires all threads in the block to participate,
+    // including out-of-range threads (they contribute i_elm = 0 / -1).
+    int i_elm_lut = (j < num_particles) ? p_i_elm[j] : 0;
+    lut_build_cooperative(i_elm_lut, el_vertex, n_elements, n_nodes,
+                          nl_values, nl_deltas,
+                          sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
+#endif
+
+    if (j >= num_particles) return;
+
+    // Load particle state into registers — only one global read per batch.
+    double x[3]  = {p_x[idx2(j, 0, num_particles)],  p_x[idx2(j, 1, num_particles)],  p_x[idx2(j, 2, num_particles)]};
+    double pm[3] = {p_p[idx2(j, 0, num_particles)],  p_p[idx2(j, 1, num_particles)],  p_p[idx2(j, 2, num_particles)]};
+    double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
+    int    i_elm = p_i_elm[j];
+    double w     = p_weight[j];
+
+    for (int s = 0; s < nsteps; ++s) {
+        // --- PROJ phase: accumulate feedback_rhs from current register state ---
+        if (i_elm > 0) {
+            double HZ_proj[N_TOR];
+            mode_moivre(x[2], HZ_proj);
+
+            double cyl_mom[3];
+            vector_cartesian_to_cylindrical(x[2], pm, cyl_mom);
+            double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
+            double inv_denom_v = rsqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
+            double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
+
+            double E_loc[3], B_loc[3];
+            calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
+                        n_elements, n_nodes,
+                        time_now, time_prev, flag_static, flag_zero_dpsidt,
+                        F0, t_norm,
+                        i_elm, st, x[2], sim_time,
+                        E_loc, B_loc
+#if LUT_VALUES_DELTAS
+                        , sh_lut_keys, sh_cache_v, sh_cache_d
+#endif
+                        );
+
+            double Bnorm_inv = rsqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
+            double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
+
+            double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
+            double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
+                                     cyl_vel[1] - v_par*B_hat[1],
+                                     cyl_vel[2] - v_par*B_hat[2]};
+            double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
+
+            double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
+                                + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
+                                  / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
+
+            double v_Ppar  = gamma_m * v_par * v_par * MU_ZERO;
+            double v_Pperp = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
+            double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
+
+            int ie = i_elm - 1;
+            for (int n = 0; n < NDEG; ++n) {
+                for (int m = 0; m < NV; ++m) {
+                    double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
+                                       * el_size[idx3(n, m, ie, NDEG, NV)]
+                                       * w;
+
+                    for (int it = 0; it < N_TOR; ++it) {
+                        double hz = HZ_proj[it];
+
+                        atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PAR_IDX, n_elements, NDEG, NV, N_TOR)],
+                                  hz * v_Ppar * proj_factor);
+                        atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PERP_IDX, n_elements, NDEG, NV, N_TOR)],
+                                  hz * v_Pperp * proj_factor);
+                        atomicAdd(&feedback_rhs[idx5(ie, n, m, it, J_PHI_IDX, n_elements, NDEG, NV, N_TOR)],
+                                  hz * v_jPhi * proj_factor);
+                    }
+                }
+            }
+        }
+
+        // --- PUSH phase: advance particle in registers ---
+        if (i_elm > 0) {
+            int ifail = 0;
+            volume_preserving_push(x, pm, st, i_elm, charge,
+                                   nl_values, nl_deltas, nl_x,
+                                   el_vertex, el_size, el_neighbours,
+                                   n_elements, n_nodes, mode_coord,
+                                   time_now, time_prev,
+                                   flag_static, flag_zero_dpsidt,
+                                   F0, t_norm,
+                                   group_mass, sim_time, tstep_part_adj,
+                                   ifail
+#if LUT_VALUES_DELTAS
+                                   , sh_lut_keys, sh_cache_v, sh_cache_d
+#endif
+                                   );
+        }
+    }
+
+    // Write final state back to global memory — one write per particle per batch.
+    p_x[idx2(j, 0, num_particles)]  = x[0];  p_x[idx2(j, 1, num_particles)]  = x[1];  p_x[idx2(j, 2, num_particles)]  = x[2];
+    p_p[idx2(j, 0, num_particles)]  = pm[0]; p_p[idx2(j, 1, num_particles)]  = pm[1]; p_p[idx2(j, 2, num_particles)]  = pm[2];
+    p_st[idx2(j, 0, num_particles)] = st[0]; p_st[idx2(j, 1, num_particles)] = st[1];
+    p_i_elm[j] = i_elm;
+}
+
+// ---------------------------------------------------------------------------
 // evolve_proj_kernel: projection phase only.
 // Reads particle state from current buffers (const), accumulates to feedback_rhs.
 // Does NOT modify any particle array.
@@ -1730,9 +1883,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     static bool cache_config_set = false;
     if (!cache_config_set) {
 #if LUT_VALUES_DELTAS == 0
-        // evolve_proj/push_kernel only avoid shared memory when LUT is disabled.
-        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_proj_kernel), hipFuncCachePreferL1));
-        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_push_kernel), hipFuncCachePreferL1));
+        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_batch_kernel), hipFuncCachePreferL1));
 #endif
         cache_config_set = true;
     }
@@ -1743,7 +1894,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_i_elm,   sz_i_elm));
     HIP_CHECK(hipMalloc(&d_weight,  sz_weight));
 
-    // Save original allocation handles — d_x_curr/d_weight_curr may drift via swaps
+    // Save original allocation handles — sort may swap d_x/d_weight with sorted buffers
     double *const d_x_orig      = d_x;
     double *const d_p_orig      = d_p;
     double *const d_st_orig     = d_st;
@@ -1761,28 +1912,9 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_feedback_rhs, sz_feedback));
     HIP_CHECK(hipMalloc(&d_mode_coord,   sz_mode_coord));
 
-    // --- Push double-buffer alt arrays (push reads curr, writes alt; then swap) ---
-    double *d_x_push_alt, *d_p_push_alt, *d_st_push_alt;
-    int    *d_i_elm_push_alt;
-    HIP_CHECK(hipMalloc(&d_x_push_alt,     sz_x));
-    HIP_CHECK(hipMalloc(&d_p_push_alt,     sz_p));
-    HIP_CHECK(hipMalloc(&d_st_push_alt,    sz_st));
-    HIP_CHECK(hipMalloc(&d_i_elm_push_alt, sz_i_elm));
-    // Save original handles for these too (they swap with d_x_curr after each step)
-    double *const d_x_push_alt_orig     = d_x_push_alt;
-    double *const d_p_push_alt_orig     = d_p_push_alt;
-    double *const d_st_push_alt_orig    = d_st_push_alt;
-    int    *const d_i_elm_push_alt_orig = d_i_elm_push_alt;
-
-    // --- Two streams for concurrent proj/push ---
-    hipStream_t stream_proj, stream_push;
+    // --- Single stream for the fused batch kernel ---
+    hipStream_t stream_proj;
     HIP_CHECK(hipStreamCreate(&stream_proj));
-    HIP_CHECK(hipStreamCreate(&stream_push));
-
-    // --- Fork/join events for concurrent proj+push (reused across all steps) ---
-    hipEvent_t fork_event, join_event;
-    HIP_CHECK(hipEventCreateWithFlags(&fork_event, hipEventDisableTiming));
-    HIP_CHECK(hipEventCreateWithFlags(&join_event, hipEventDisableTiming));
 
     // --- Allocate sorting buffers ---
     double *d_x_sorted = nullptr, *d_p_sorted = nullptr, *d_st_sorted = nullptr, *d_weight_sorted = nullptr;
@@ -1796,8 +1928,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_st_sorted,     sz_st));
     HIP_CHECK(hipMalloc(&d_weight_sorted, sz_weight));
     HIP_CHECK(hipMalloc(&d_i_elm_sorted,  sz_i_elm));
-    // Save original handles — sort swaps these pointers with d_x_curr etc.
-    // just like the primary and push-alt buffers, so free the originals at cleanup.
+    // Save original handles — sort swaps these pointers with d_x etc., so free
+    // the originals at cleanup to avoid double-free regardless of swap state.
     double *const d_x_sorted_orig      = d_x_sorted;
     double *const d_p_sorted_orig      = d_p_sorted;
     double *const d_st_sorted_orig     = d_st_sorted;
@@ -1842,110 +1974,75 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
     printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, elapsed_ms);
 
-    // --- Launch one kernel per kinetic iteration ---
+    // --- Batch loop: one kernel launch per sort interval ---
+    // Each launch runs nsteps=N_SORTING kinetic steps internally (remainder on the
+    // last batch).  The fused evolve_batch_kernel does proj+push in a single kernel,
+    // holding particle state in registers across all steps; the LUT is built once per
+    // launch so it is reused for all steps in the batch.
+    // d_x / d_p / d_st / d_i_elm are updated in-place — no double-buffer swap needed.
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
-    int    *d_i_elm_curr = d_i_elm;
     int sort_call_count = 0;
 
-    // --- Step loop: proj and push launch concurrently on two streams ---
-    // proj (stream_proj) reads curr and accumulates feedback_rhs via atomicAdd.
-    // push (stream_push) reads curr and writes updated particle state to alt buffers.
-    // The fork/join event pair serialises steps on the GPU without any per-step
-    // host synchronisation.  After each step the alt buffers become curr via a
-    // host-side pointer swap, so d_x_curr always holds the latest state.
     HIP_CHECK(hipEventRecord(t_start, 0));
-    for (int k = 0; k < nstep_particles; ++k) {
-#if N_SORTING > 0
-        if ((k % N_SORTING) == 0) {
-            // Drain both streams before sort so it sees the final push state
-            HIP_CHECK(hipStreamSynchronize(stream_push));
-            HIP_CHECK(hipStreamSynchronize(stream_proj));
+    for (int k = 0; k < nstep_particles; k += N_SORTING) {
+        int batch = std::min(N_SORTING, nstep_particles - k);
 
-            // if(sim.my_id == 0) {
-            //     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
-            //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "before_sort");
-            // }
+        // Sort before each batch — drain stream first so sort sees latest state.
+        HIP_CHECK(hipStreamSynchronize(stream_proj));
 
-            hipEvent_t t_sort_start, t_sort_stop;
-            HIP_CHECK(hipEventCreate(&t_sort_start));
-            HIP_CHECK(hipEventCreate(&t_sort_stop));
-            HIP_CHECK(hipEventRecord(t_sort_start, 0));
-            sort_particles_by_i_elm_gpu(
-                d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr,
-                d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
-                num_particles, d_hist, d_offsets, d_cursors,
-                d_block_sums, d_block_offsets);
-            HIP_CHECK(hipEventRecord(t_sort_stop, 0));
-            HIP_CHECK(hipEventSynchronize(t_sort_stop));
-            float sort_ms = 0.0f;
-            HIP_CHECK(hipEventElapsedTime(&sort_ms, t_sort_start, t_sort_stop));
-            ++sort_call_count;
-            HIP_CHECK(hipEventDestroy(t_sort_start));
-            HIP_CHECK(hipEventDestroy(t_sort_stop));
+        // if(sim.my_id == 0) {
+        //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
+        //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "before_sort");
+        // }
 
-            // if(sim.my_id == 0) {
-            //     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
-            //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
-            // }
-        }
-#endif
+        hipEvent_t t_sort_start, t_sort_stop;
+        HIP_CHECK(hipEventCreate(&t_sort_start));
+        HIP_CHECK(hipEventCreate(&t_sort_stop));
+        HIP_CHECK(hipEventRecord(t_sort_start, 0));
+        sort_particles_by_i_elm_gpu(
+            d_x, d_p, d_st, d_i_elm, d_weight,
+            d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
+            num_particles, d_hist, d_offsets, d_cursors,
+            d_block_sums, d_block_offsets);
+        HIP_CHECK(hipEventRecord(t_sort_stop, 0));
+        HIP_CHECK(hipEventSynchronize(t_sort_stop));
+        float sort_ms = 0.0f;
+        HIP_CHECK(hipEventElapsedTime(&sort_ms, t_sort_start, t_sort_stop));
+        ++sort_call_count;
+        HIP_CHECK(hipEventDestroy(t_sort_start));
+        HIP_CHECK(hipEventDestroy(t_sort_stop));
 
-        // Fork: bring stream_push to the same dependency position as stream_proj.
-        // stream_proj already carries the join_event from step k-1, so stream_push
-        // cannot start step k until both kernels from step k-1 have finished.
-        HIP_CHECK(hipEventRecord(fork_event, stream_proj));
-        HIP_CHECK(hipStreamWaitEvent(stream_push, fork_event, 0));
+        // if(sim.my_id == 0) {
+        //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
+        //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
+        // }
 
-        // Proj kernel: reads curr, accumulates feedback_rhs (atomicAdd)
-        hipLaunchKernelGGL(evolve_proj_kernel,
+        // Fused batch kernel: runs batch steps, reads+writes d_x/d_p/d_st/d_i_elm in-place.
+        hipLaunchKernelGGL(evolve_batch_kernel,
             dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_proj,
-            d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr, charge,
-            d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
-            d_el_vertex, d_el_size, n_elements,
-            time_now, time_prev, flag_static, flag_zero_dp,
-            F0, t_norm, sim_time, group_mass,
-            num_particles,
-            d_feedback_rhs, d_mode_coord);
-
-        // Push kernel: reads curr, writes updated state to alt (concurrent with proj)
-        hipLaunchKernelGGL(evolve_push_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_push,
-            d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, charge,
-            d_x_push_alt, d_p_push_alt, d_st_push_alt, d_i_elm_push_alt,
+            d_x, d_p, d_st, d_i_elm, d_weight, charge,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_neighbours, d_el_size, n_elements,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, sim_time, group_mass, tstep_part_adj,
-            num_particles, d_mode_coord);
-
-        // Join: stream_proj waits for push to finish before the next step's fork
-        HIP_CHECK(hipEventRecord(join_event, stream_push));
-        HIP_CHECK(hipStreamWaitEvent(stream_proj, join_event, 0));
-
-        // Swap: alt becomes curr for the next step
-        std::swap(d_x_curr,     d_x_push_alt);
-        std::swap(d_p_curr,     d_p_push_alt);
-        std::swap(d_st_curr,    d_st_push_alt);
-        std::swap(d_i_elm_curr, d_i_elm_push_alt);
+            num_particles, d_feedback_rhs, d_mode_coord, batch);
     }
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
-    printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps): %.3f ms\n",
-           sim.my_id, nstep_particles, elapsed_ms);
+    printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps, %d sorts): %.3f ms\n",
+           sim.my_id, nstep_particles, sort_call_count, elapsed_ms);
 
-    // --- Drain streams before D2H ---
+    // --- Drain stream before D2H ---
     HIP_CHECK(hipStreamSynchronize(stream_proj));
-    HIP_CHECK(hipStreamSynchronize(stream_push));
 
     // --- Copy results back: device -> host ---
     HIP_CHECK(hipEventRecord(t_start, 0));
-    HIP_CHECK(hipMemcpy(part->x,       d_x_curr,       sz_x,        hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->p,       d_p_curr,       sz_p,        hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->st,      d_st_curr,      sz_st,       hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(part->weight,  d_weight_curr,  sz_weight,   hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->x,       d_x,            sz_x,        hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->p,       d_p,            sz_p,        hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->st,      d_st,           sz_st,       hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm,        sz_i_elm,    hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(part->weight,  d_weight,       sz_weight,   hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs, sz_feedback, hipMemcpyDeviceToHost));
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
@@ -1955,28 +2052,15 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventDestroy(t_start));
     HIP_CHECK(hipEventDestroy(t_stop));
 
-    // --- Destroy events and streams ---
-    HIP_CHECK(hipEventDestroy(fork_event));
-    HIP_CHECK(hipEventDestroy(join_event));
+    // --- Destroy stream ---
     HIP_CHECK(hipStreamDestroy(stream_proj));
-    HIP_CHECK(hipStreamDestroy(stream_push));
 
     // --- Free device memory ---
-    // Three particle buffer allocations exist:
-    //   A = d_x_orig       (primary hipMalloc)
-    //   B = d_x_sorted     (sort scratch, #if N_SORTING > 0)
-    //   C = d_x_push_alt_orig  (push alt hipMalloc)
-    // d_x_curr and d_x_push_alt may point to any of A/B/C after swaps.
-    // Always free by the original allocation handles to avoid double-free.
     HIP_CHECK(hipFree(d_x_orig));
     HIP_CHECK(hipFree(d_p_orig));
     HIP_CHECK(hipFree(d_st_orig));
     HIP_CHECK(hipFree(d_i_elm_orig));
     HIP_CHECK(hipFree(d_weight_orig));
-    HIP_CHECK(hipFree(d_x_push_alt_orig));
-    HIP_CHECK(hipFree(d_p_push_alt_orig));
-    HIP_CHECK(hipFree(d_st_push_alt_orig));
-    HIP_CHECK(hipFree(d_i_elm_push_alt_orig));
 #if N_SORTING > 0
     HIP_CHECK(hipFree(d_x_sorted_orig));
     HIP_CHECK(hipFree(d_p_sorted_orig));
