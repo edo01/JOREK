@@ -45,7 +45,7 @@ static constexpr int I_ELM_BINS = I_ELM_MAX + 1; // extra bin for invalid i_elm
 static constexpr int HIST_SCAN_CHUNK = 1024;
 static constexpr int HIST_SCAN_THREADS = 256;
 
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
 // Shared-memory LUT for nl_values / nl_deltas in calc_EBpsiU.
 // SLOT_SIZE: number of doubles cached per element (NV * NDEG * 2 * N_TOR).
 // Tuning knobs (LUT_N_SLOTS, LUT_REFRESH_INTERVAL, LUT_MIN_OCCUPANCY) come from optimization_defines.h.
@@ -54,8 +54,7 @@ static constexpr int LUT_SLOT_SIZE = NV * NDEG * 2 * N_TOR;  // = 32 * N_TOR
 // At the read site all threads in a warp share the same lid but have different slots,
 // so the transposed layout makes them access consecutive addresses → no bank conflicts.
 
-// Define LUT_DEBUG to instrument hit/miss counters (adds two global int64 arrays).
-#define LUT_DEBUG
+// LUT_DEBUG: set to 1 in optimization_defines.h to instrument hit/miss counters.
 #endif
 
 // ---------------------------------------------------------------------------
@@ -977,12 +976,12 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
                  double time,
                  double E[3], double B[3]
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
                  , const int*    sh_lut_keys
                  , const double* sh_cache_v_flat
                  , const double* sh_cache_d_flat
 #endif
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
                  , unsigned long long* sh_lut_hits
                  , unsigned long long* sh_lut_misses
 #endif
@@ -1011,11 +1010,11 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double Pd_t[2]   = {0.0, 0.0};
     double Pd_phi[2] = {0.0, 0.0};
 
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
     int lut_cache_slot = -1;
     for (int s = 0; s < LUT_N_SLOTS; ++s)
         if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
-#ifdef LUT_DEBUG
+#if LUT_DEBUG == 1
     if (lut_cache_slot >= 0)
         atomicAdd(sh_lut_hits,    1ULL);
     else
@@ -1050,7 +1049,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                         if (it & 1) { hz_it = cmode[i]; dhz_it = -ni * smode[i]; }
                         else        { hz_it = smode[i]; dhz_it =  ni * cmode[i]; }
                     }
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
                     double raw_v = (lut_cache_slot >= 0)
                         ? sh_cache_v_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
                         : nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
@@ -1151,12 +1150,12 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             double F0, double t_norm,
                             double mass, double time, double timestep,
                             int &ifail
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
                             , const int*    sh_lut_keys
                             , const double* sh_cache_v_flat
                             , const double* sh_cache_d_flat
 #endif
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
                             , unsigned long long* sh_lut_hits
                             , unsigned long long* sh_lut_misses
 #endif
@@ -1212,10 +1211,10 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 F0, t_norm,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
                 E, B_field
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
                 , sh_lut_keys, sh_cache_v_flat, sh_cache_d_flat
 #endif
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
                 , sh_lut_hits, sh_lut_misses
 #endif
                 );
@@ -1283,7 +1282,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // pending sync before calling and must not rely on per-thread state that crosses
 // those barriers (e.g., local variables captured in a lambda — use function params).
 // ---------------------------------------------------------------------------
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
 __device__
 void lut_build_cooperative(int i_elm_thread,
                             const int*    __restrict__ el_vertex,
@@ -1421,7 +1420,7 @@ void evolve_batch_kernel(
     double* __restrict__ feedback_rhs,
     const int* __restrict__ mode_coord,
     int nsteps
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     , unsigned long long* __restrict__ g_lut_hits
     , unsigned long long* __restrict__ g_lut_misses
 #endif
@@ -1429,12 +1428,12 @@ void evolve_batch_kernel(
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
 
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
     __shared__ int    sh_lut_keys[LUT_N_SLOTS];
     __shared__ double sh_cache_v[LUT_SLOT_SIZE * LUT_N_SLOTS];
     __shared__ double sh_cache_d[LUT_SLOT_SIZE * LUT_N_SLOTS];
     __shared__ int    sh_scratch[BLOCK_SIZE];
-#ifdef LUT_DEBUG
+#if LUT_DEBUG == 1
     __shared__ unsigned long long sh_hits;
     __shared__ unsigned long long sh_misses;
     if (threadIdx.x == 0) { sh_hits = 0ULL; sh_misses = 0ULL; }
@@ -1470,7 +1469,7 @@ void evolve_batch_kernel(
     }
 
     for (int s = 0; s < nsteps; ++s) {
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
         if (s > 0 && (s % LUT_REFRESH_INTERVAL) == 0) {
             if(j==0) printf("LUT refresh at step %d, particle %d, i_elm %d\n", s, j, i_elm);
             lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
@@ -1496,10 +1495,10 @@ void evolve_batch_kernel(
                         F0, t_norm,
                         i_elm, st, x[2], sim_time,
                         E_loc, B_loc
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
                         , sh_lut_keys, sh_cache_v, sh_cache_d
 #endif
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
                         , &sh_hits, &sh_misses
 #endif
                         );
@@ -1554,17 +1553,17 @@ void evolve_batch_kernel(
                                    F0, t_norm,
                                    group_mass, sim_time, tstep_part_adj,
                                    ifail
-#if LUT_VALUES_DELTAS
+#if LUT_VALUES_DELTAS == 1
                                    , sh_lut_keys, sh_cache_v, sh_cache_d
 #endif
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
                                    , &sh_hits, &sh_misses
 #endif
                                    );
         }
     }
 
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     __syncthreads();
     if (threadIdx.x == 0) {
         atomicAdd(g_lut_hits,   sh_hits);
@@ -1861,7 +1860,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
     // printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, elapsed_ms);
 
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     unsigned long long *d_lut_hits = nullptr, *d_lut_misses = nullptr;
     HIP_CHECK(hipMalloc(&d_lut_hits,   sizeof(unsigned long long)));
     HIP_CHECK(hipMalloc(&d_lut_misses, sizeof(unsigned long long)));
@@ -1922,13 +1921,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, sim_time, group_mass, tstep_part_adj,
             num_particles, d_feedback_rhs, d_mode_coord, batch
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
             , d_lut_hits, d_lut_misses
 #endif
             );
         HIP_CHECK(hipDeviceSynchronize());
 
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
         {
             unsigned long long h_hits = 0, h_misses = 0;
             HIP_CHECK(hipMemcpy(&h_hits,   d_lut_hits,   sizeof(unsigned long long), hipMemcpyDeviceToHost));
@@ -1997,7 +1996,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_el_size));
     HIP_CHECK(hipFree(d_feedback_rhs));
     HIP_CHECK(hipFree(d_mode_coord));
-#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     HIP_CHECK(hipFree(d_lut_hits));
     HIP_CHECK(hipFree(d_lut_misses));
 #endif

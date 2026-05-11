@@ -4,9 +4,10 @@
 
 #define ORDERING_TYPE 0
 
-#define N_SORTING 100
+#define N_SORTING 30
 
 #define LUT_VALUES_DELTAS 0
-#define LUT_N_SLOTS          8
-#define LUT_REFRESH_INTERVAL 1000
+#define LUT_DEBUG            0
+#define LUT_N_SLOTS          4
 #define LUT_MIN_OCCUPANCY    2
+#define LUT_REFRESH_INTERVAL 30
