@@ -50,6 +50,12 @@ static constexpr int HIST_SCAN_THREADS = 256;
 // SLOT_SIZE: number of doubles cached per element (NV * NDEG * 2 * N_TOR).
 // Tuning knobs (LUT_N_SLOTS, LUT_REFRESH_INTERVAL, LUT_MIN_OCCUPANCY) come from optimization_defines.h.
 static constexpr int LUT_SLOT_SIZE = NV * NDEG * 2 * N_TOR;  // = 32 * N_TOR
+// Transposed layout: sh_cache[lid * LUT_N_SLOTS + slot] instead of sh_cache[slot * LUT_SLOT_SIZE + lid].
+// At the read site all threads in a warp share the same lid but have different slots,
+// so the transposed layout makes them access consecutive addresses → no bank conflicts.
+
+// Define LUT_DEBUG to instrument hit/miss counters (adds two global int64 arrays).
+#define LUT_DEBUG
 #endif
 
 // ---------------------------------------------------------------------------
@@ -976,6 +982,10 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  , const double* sh_cache_v_flat
                  , const double* sh_cache_d_flat
 #endif
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+                 , unsigned long long* sh_lut_hits
+                 , unsigned long long* sh_lut_misses
+#endif
                  )
 {
     // Replace HZ[N_TOR]/dHZ[N_TOR] (2*N_TOR = 30 doubles = 60 registers for N_TOR=15)
@@ -983,9 +993,10 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     // hz/dhz values are reconstructed per 'it' index on demand inside the loops.
     double cmode[NMODE + 1], smode[NMODE + 1];
     cmode[0] = 1.0; smode[0] = 0.0;
-    for (int i = 1; i <= NMODE; ++i) {
-        double phase = double(N_PERIOD * i) * phi;
-        sincos(phase, &smode[i], &cmode[i]);
+    sincos(double(N_PERIOD) * phi, &smode[1], &cmode[1]);
+    for (int i = 2; i <= NMODE; ++i) {
+        cmode[i] = cmode[i-1] * cmode[1] - smode[i-1] * smode[1];
+        smode[i] = smode[i-1] * cmode[1] + cmode[i-1] * smode[1];
     }
 
     int ie = i_elm_f - 1;
@@ -1004,6 +1015,12 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     int lut_cache_slot = -1;
     for (int s = 0; s < LUT_N_SLOTS; ++s)
         if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
+#ifdef LUT_DEBUG
+    if (lut_cache_slot >= 0)
+        atomicAdd(sh_lut_hits,    1ULL);
+    else
+        atomicAdd(sh_lut_misses, 1ULL);
+#endif
 #endif
 
     double R = 0.0, R_s = 0.0, R_t = 0.0;
@@ -1035,11 +1052,11 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                     }
 #if LUT_VALUES_DELTAS
                     double raw_v = (lut_cache_slot >= 0)
-                        ? sh_cache_v_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        ? sh_cache_v_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
                         : nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
                     double val_v = raw_v * sz;
                     double raw_d = (lut_cache_slot >= 0)
-                        ? sh_cache_d_flat[lut_cache_slot * LUT_SLOT_SIZE + kv + NV*(it + N_TOR*(kf + NDEG*ivar))]
+                        ? sh_cache_d_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
                         : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
                     double val_d = raw_d * sz;
 #else
@@ -1139,6 +1156,10 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             , const double* sh_cache_v_flat
                             , const double* sh_cache_d_flat
 #endif
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+                            , unsigned long long* sh_lut_hits
+                            , unsigned long long* sh_lut_misses
+#endif
                             )
 {
     // No need to check if particle is valid, it is already done in the caller
@@ -1193,6 +1214,9 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 E, B_field
 #if LUT_VALUES_DELTAS
                 , sh_lut_keys, sh_cache_v_flat, sh_cache_d_flat
+#endif
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+                , sh_lut_hits, sh_lut_misses
 #endif
                 );
 
@@ -1300,29 +1324,46 @@ void lut_build_cooperative(int i_elm_thread,
     __syncthreads();
 
     // Phase 2 — all threads cooperatively load field data.
-    for (int s = 0; s < LUT_N_SLOTS; ++s) {
-        int elm = sh_lut_keys[s];
-        if (elm <= 0) continue;
-        int ie_s = elm - 1;
+    // Layout: sh_cache[lid * LUT_N_SLOTS + s]  (transposed: slot is fast dim at read time).
+    // Fill strategy: iterate over (pass, s) with lid = pass*BLOCK_SIZE + threadIdx.x fixed
+    // per warp, and loop s in the inner dim. This way each thread writes to addresses
+    // lid*LUT_N_SLOTS+0, lid*LUT_N_SLOTS+1, ... which are consecutive — but across
+    // threads within a warp, lid differs by 1, so addresses differ by LUT_N_SLOTS (= 4)
+    // doubles = 32 bytes, hitting only 4 banks out of 32 → 8-way conflict.
+    //
+    // Fix: reorganise so the warp's 32 threads cover 32 consecutive flat indices.
+    // We iterate over flat index f = pass*BLOCK_SIZE + threadIdx.x and decompose
+    // f = lid * LUT_N_SLOTS + s, so thread t in pass p writes to flat index
+    // f = p*BLOCK_SIZE + t, i.e. lid = f / LUT_N_SLOTS, s = f % LUT_N_SLOTS.
+    // Consecutive threads hit consecutive flat indices → stride-1 shared writes → no conflict.
+    // The read-side index (lid * LUT_N_SLOTS + s) is identical, so reads are unchanged.
+    {
+        // Precompute node indices for all slots (needed for arbitrary s per flat index).
+        int ivs[LUT_N_SLOTS][NV];
+        for (int s = 0; s < LUT_N_SLOTS; ++s) {
+            int elm = sh_lut_keys[s];
+            for (int kv = 0; kv < NV; ++kv)
+                ivs[s][kv] = (elm > 0) ? (el_vertex[idx2(kv, elm - 1, NV)] - 1) : -1;
+        }
 
-        int ivs[NV];
-        for (int kv = 0; kv < NV; ++kv)
-            ivs[kv] = el_vertex[idx2(kv, ie_s, NV)] - 1;
-
-        for (int pass = 0; pass * BLOCK_SIZE < LUT_SLOT_SIZE; ++pass) {
-            int lid = pass * BLOCK_SIZE + threadIdx.x;
-            if (lid < LUT_SLOT_SIZE) {
-                int tmp    = lid;
-                int kv_l   = tmp % NV;    tmp /= NV;
-                int it_l   = tmp % N_TOR; tmp /= N_TOR;
-                int kf_l   = tmp % NDEG;  tmp /= NDEG;
-                int ivar_l = tmp;
-                int node   = ivs[kv_l];
-                // nl_values/nl_deltas layout: (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes)
-                int gi     = idx4(ivar_l, kf_l, it_l, node, N_FIELD_VARS, NDEG, N_TOR);
-                sh_cache_v[s * LUT_SLOT_SIZE + lid] = nl_values[gi];
-                sh_cache_d[s * LUT_SLOT_SIZE + lid] = nl_deltas[gi];
-            }
+        int total = LUT_SLOT_SIZE * LUT_N_SLOTS;
+        for (int pass = 0; pass * BLOCK_SIZE < total; ++pass) {
+            int f      = pass * BLOCK_SIZE + threadIdx.x;
+            if (f >= total) continue;
+            int lid    = f / LUT_N_SLOTS;
+            int s      = f % LUT_N_SLOTS;
+            int elm    = sh_lut_keys[s];
+            if (elm <= 0) continue;
+            int tmp    = lid;
+            int kv_l   = tmp % NV;    tmp /= NV;
+            int it_l   = tmp % N_TOR; tmp /= N_TOR;
+            int kf_l   = tmp % NDEG;  tmp /= NDEG;
+            int ivar_l = tmp;
+            int node   = ivs[s][kv_l];
+            // nl_values/nl_deltas layout: (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes)
+            int gi     = idx4(ivar_l, kf_l, it_l, node, N_FIELD_VARS, NDEG, N_TOR);
+            sh_cache_v[f] = nl_values[gi];
+            sh_cache_d[f] = nl_deltas[gi];
         }
     }
     __syncthreads();
@@ -1379,15 +1420,26 @@ void evolve_batch_kernel(
     // Feedback RHS (atomically updated)
     double* __restrict__ feedback_rhs,
     const int* __restrict__ mode_coord,
-    int nsteps)
+    int nsteps
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+    , unsigned long long* __restrict__ g_lut_hits
+    , unsigned long long* __restrict__ g_lut_misses
+#endif
+    )
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
 
 #if LUT_VALUES_DELTAS
     __shared__ int    sh_lut_keys[LUT_N_SLOTS];
-    __shared__ double sh_cache_v[LUT_N_SLOTS * LUT_SLOT_SIZE];
-    __shared__ double sh_cache_d[LUT_N_SLOTS * LUT_SLOT_SIZE];
+    __shared__ double sh_cache_v[LUT_SLOT_SIZE * LUT_N_SLOTS];
+    __shared__ double sh_cache_d[LUT_SLOT_SIZE * LUT_N_SLOTS];
     __shared__ int    sh_scratch[BLOCK_SIZE];
+#ifdef LUT_DEBUG
+    __shared__ unsigned long long sh_hits;
+    __shared__ unsigned long long sh_misses;
+    if (threadIdx.x == 0) { sh_hits = 0ULL; sh_misses = 0ULL; }
+    __syncthreads();
+#endif
 
     // lut_build_cooperative requires all threads in the block to participate,
     // including out-of-range threads (they contribute i_elm = 0 / -1).
@@ -1397,16 +1449,35 @@ void evolve_batch_kernel(
                           sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
 #endif
 
-    if (j >= num_particles) return;
+    // Out-of-range threads must stay alive through the loop to participate in
+    // lut_build_cooperative's __syncthreads() at every LUT_REFRESH_INTERVAL.
+    // They do no work (i_elm = -1 keeps them in the skip branches) but must
+    // not return before all syncs have fired.
+    const bool active = (j < num_particles);
 
-    // Load particle state into registers — only one global read per batch.
-    double x[3]  = {p_x[idx2(j, 0, num_particles)],  p_x[idx2(j, 1, num_particles)],  p_x[idx2(j, 2, num_particles)]};
-    double pm[3] = {p_p[idx2(j, 0, num_particles)],  p_p[idx2(j, 1, num_particles)],  p_p[idx2(j, 2, num_particles)]};
-    double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
-    int    i_elm = p_i_elm[j];
-    double w     = p_weight[j];
+    double x[3]  = {0.0, 0.0, 0.0};
+    double pm[3] = {0.0, 0.0, 0.0};
+    double st[2] = {0.0, 0.0};
+    int    i_elm = -1;
+    double w     = 0.0;
+
+    if (active) {
+        x[0]  = p_x[idx2(j, 0, num_particles)];  x[1]  = p_x[idx2(j, 1, num_particles)];  x[2]  = p_x[idx2(j, 2, num_particles)];
+        pm[0] = p_p[idx2(j, 0, num_particles)];  pm[1] = p_p[idx2(j, 1, num_particles)];  pm[2] = p_p[idx2(j, 2, num_particles)];
+        st[0] = p_st[idx2(j, 0, num_particles)]; st[1] = p_st[idx2(j, 1, num_particles)];
+        i_elm = p_i_elm[j];
+        w     = p_weight[j];
+    }
 
     for (int s = 0; s < nsteps; ++s) {
+#if LUT_VALUES_DELTAS
+        if (s > 0 && (s % LUT_REFRESH_INTERVAL) == 0) {
+            if(j==0) printf("LUT refresh at step %d, particle %d, i_elm %d\n", s, j, i_elm);
+            lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
+                                  nl_values, nl_deltas,
+                                  sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
+        }
+#endif
         // --- PROJ phase: accumulate feedback_rhs from current register state ---
         if (i_elm > 0) {
             double HZ_proj[N_TOR];
@@ -1427,6 +1498,9 @@ void evolve_batch_kernel(
                         E_loc, B_loc
 #if LUT_VALUES_DELTAS
                         , sh_lut_keys, sh_cache_v, sh_cache_d
+#endif
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+                        , &sh_hits, &sh_misses
 #endif
                         );
 
@@ -1483,214 +1557,30 @@ void evolve_batch_kernel(
 #if LUT_VALUES_DELTAS
                                    , sh_lut_keys, sh_cache_v, sh_cache_d
 #endif
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+                                   , &sh_hits, &sh_misses
+#endif
                                    );
         }
     }
 
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        atomicAdd(g_lut_hits,   sh_hits);
+        atomicAdd(g_lut_misses, sh_misses);
+    }
+#endif
+
     // Write final state back to global memory — one write per particle per batch.
-    p_x[idx2(j, 0, num_particles)]  = x[0];  p_x[idx2(j, 1, num_particles)]  = x[1];  p_x[idx2(j, 2, num_particles)]  = x[2];
-    p_p[idx2(j, 0, num_particles)]  = pm[0]; p_p[idx2(j, 1, num_particles)]  = pm[1]; p_p[idx2(j, 2, num_particles)]  = pm[2];
-    p_st[idx2(j, 0, num_particles)] = st[0]; p_st[idx2(j, 1, num_particles)] = st[1];
-    p_i_elm[j] = i_elm;
-}
-
-// ---------------------------------------------------------------------------
-// evolve_proj_kernel: projection phase only.
-// Reads particle state from current buffers (const), accumulates to feedback_rhs.
-// Does NOT modify any particle array.
-// ---------------------------------------------------------------------------
-__global__ __launch_bounds__(BLOCK_SIZE, 2)
-void evolve_proj_kernel(
-    // Particle SoA — read-only
-    const double* __restrict__ p_x,         // (num_particles, 3)
-    const double* __restrict__ p_p,         // (num_particles, 3)
-    const double* __restrict__ p_st,        // (num_particles, 2)
-    const int*    __restrict__ p_i_elm,     // (num_particles)
-    const double* __restrict__ p_weight,    // (num_particles)
-    double charge,
-    // Field node list SoA
-    const double* __restrict__ nl_values,
-    const double* __restrict__ nl_deltas,
-    const double* __restrict__ nl_x,
-    int n_nodes,
-    // Field element list SoA
-    const int*    __restrict__ el_vertex,
-    const double* __restrict__ el_size,
-    int n_elements,
-    // Field time parameters
-    double time_now, double time_prev,
-    int flag_static, int flag_zero_dpsidt,
-    // Physics parameters
-    double F0, double t_norm,
-    // Simulation parameters
-    double sim_time, double group_mass,
-    int num_particles,
-    // Feedback RHS (atomically updated)
-    double* __restrict__ feedback_rhs,
-    const int* __restrict__ mode_coord)
-{
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= num_particles) return;
-
-    double x[3]  = {p_x[idx2(j, 0, num_particles)], p_x[idx2(j, 1, num_particles)], p_x[idx2(j, 2, num_particles)]};
-    double pm[3] = {p_p[idx2(j, 0, num_particles)], p_p[idx2(j, 1, num_particles)], p_p[idx2(j, 2, num_particles)]};
-    double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
-    int    i_elm = p_i_elm[j];
-    double w = p_weight[j];
-
-#if LUT_VALUES_DELTAS
-    __shared__ int    sh_lut_keys[LUT_N_SLOTS];
-    __shared__ double sh_cache_v[LUT_N_SLOTS * LUT_SLOT_SIZE];
-    __shared__ double sh_cache_d[LUT_N_SLOTS * LUT_SLOT_SIZE];
-    __shared__ int    sh_scratch[BLOCK_SIZE];
-
-    lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
-                          nl_values, nl_deltas,
-                          sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
-#endif
-
-    if (i_elm > 0) {
-        double HZ_proj[N_TOR];
-        mode_moivre(x[2], HZ_proj);
-
-        double cyl_mom[3];
-        vector_cartesian_to_cylindrical(x[2], pm, cyl_mom);
-        double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
-        double inv_denom_v = rsqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
-        double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
-
-        double E_loc[3], B_loc[3];
-        calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
-                    n_elements, n_nodes,
-                    time_now, time_prev, flag_static, flag_zero_dpsidt,
-                    F0, t_norm,
-                    i_elm, st, x[2], sim_time,
-                    E_loc, B_loc
-#if LUT_VALUES_DELTAS
-                    , sh_lut_keys, sh_cache_v, sh_cache_d
-#endif
-                    );
-
-        double Bnorm_inv = rsqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
-        double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
-
-        double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
-        double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
-                                 cyl_vel[1] - v_par*B_hat[1],
-                                 cyl_vel[2] - v_par*B_hat[2]};
-        double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
-
-        double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
-                            + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
-                              / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
-
-        double v_Ppar  = gamma_m * v_par * v_par * MU_ZERO;
-        double v_Pperp = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
-        double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
-
-        int ie = i_elm - 1;
-        for (int n = 0; n < NDEG; ++n) {
-            for (int m = 0; m < NV; ++m) {
-                double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
-                                   * el_size[idx3(n, m, ie, NDEG, NV)]
-                                   * w;
-
-                for (int it = 0; it < N_TOR; ++it) {
-                    double hz = HZ_proj[it];
-
-                    atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PAR_IDX, n_elements, NDEG, NV, N_TOR)],
-                              hz * v_Ppar * proj_factor);
-                    atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PERP_IDX, n_elements, NDEG, NV, N_TOR)],
-                              hz * v_Pperp * proj_factor);
-                    atomicAdd(&feedback_rhs[idx5(ie, n, m, it, J_PHI_IDX, n_elements, NDEG, NV, N_TOR)],
-                              hz * v_jPhi * proj_factor);
-                }
-            }
-        }
+    if (active) {
+        p_x[idx2(j, 0, num_particles)]  = x[0];  p_x[idx2(j, 1, num_particles)]  = x[1];  p_x[idx2(j, 2, num_particles)]  = x[2];
+        p_p[idx2(j, 0, num_particles)]  = pm[0]; p_p[idx2(j, 1, num_particles)]  = pm[1]; p_p[idx2(j, 2, num_particles)]  = pm[2];
+        p_st[idx2(j, 0, num_particles)] = st[0]; p_st[idx2(j, 1, num_particles)] = st[1];
+        p_i_elm[j] = i_elm;
     }
 }
 
-// ---------------------------------------------------------------------------
-// evolve_push_kernel: push phase only.
-// Reads particle state from _in (current) buffers, writes updated state to
-// _out (alternate) buffers. Does NOT touch feedback_rhs.
-// Writes to _out unconditionally so the alt buffer is always a complete copy.
-// ---------------------------------------------------------------------------
-__global__ __launch_bounds__(BLOCK_SIZE, 2)
-void evolve_push_kernel(
-    // Particle SoA — INPUT (current buffers, read-only)
-    const double* __restrict__ p_x_in,
-    const double* __restrict__ p_p_in,
-    const double* __restrict__ p_st_in,
-    const int*    __restrict__ p_i_elm_in,
-    double charge,
-    // Particle SoA — OUTPUT (alternate buffers, write-only)
-    double* __restrict__ p_x_out,
-    double* __restrict__ p_p_out,
-    double* __restrict__ p_st_out,
-    int*    __restrict__ p_i_elm_out,
-    // Field node list SoA
-    const double* __restrict__ nl_values,
-    const double* __restrict__ nl_deltas,
-    const double* __restrict__ nl_x,
-    int n_nodes,
-    // Field element list SoA
-    const int*    __restrict__ el_vertex,
-    const int*    __restrict__ el_neighbours,
-    const double* __restrict__ el_size,
-    int n_elements,
-    // Field time parameters
-    double time_now, double time_prev,
-    int flag_static, int flag_zero_dpsidt,
-    // Physics parameters
-    double F0, double t_norm,
-    // Simulation parameters
-    double sim_time, double group_mass, double tstep_part_adj,
-    int num_particles,
-    const int* __restrict__ mode_coord)
-{
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= num_particles) return;
-
-    double x[3]  = {p_x_in[idx2(j, 0, num_particles)], p_x_in[idx2(j, 1, num_particles)], p_x_in[idx2(j, 2, num_particles)]};
-    double pm[3] = {p_p_in[idx2(j, 0, num_particles)], p_p_in[idx2(j, 1, num_particles)], p_p_in[idx2(j, 2, num_particles)]};
-    double st[2] = {p_st_in[idx2(j, 0, num_particles)], p_st_in[idx2(j, 1, num_particles)]};
-    int    i_elm = p_i_elm_in[j];
-
-#if LUT_VALUES_DELTAS
-    __shared__ int    sh_lut_keys[LUT_N_SLOTS];
-    __shared__ double sh_cache_v[LUT_N_SLOTS * LUT_SLOT_SIZE];
-    __shared__ double sh_cache_d[LUT_N_SLOTS * LUT_SLOT_SIZE];
-    __shared__ int    sh_scratch[BLOCK_SIZE];
-
-    lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
-                          nl_values, nl_deltas,
-                          sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
-#endif
-
-    if (i_elm > 0) {
-        int ifail = 0;
-        volume_preserving_push(x, pm, st, i_elm, charge,
-                               nl_values, nl_deltas, nl_x,
-                               el_vertex, el_size, el_neighbours,
-                               n_elements, n_nodes, mode_coord,
-                               time_now, time_prev,
-                               flag_static, flag_zero_dpsidt,
-                               F0, t_norm,
-                               group_mass, sim_time, tstep_part_adj,
-                               ifail
-#if LUT_VALUES_DELTAS
-                               , sh_lut_keys, sh_cache_v, sh_cache_d
-#endif
-                               );
-    }
-
-    // Always write to output buffers (captures lost-particle state too)
-    p_x_out[idx2(j, 0, num_particles)] = x[0]; p_x_out[idx2(j, 1, num_particles)] = x[1]; p_x_out[idx2(j, 2, num_particles)] = x[2];
-    p_p_out[idx2(j, 0, num_particles)] = pm[0]; p_p_out[idx2(j, 1, num_particles)] = pm[1]; p_p_out[idx2(j, 2, num_particles)] = pm[2];
-    p_st_out[idx2(j, 0, num_particles)] = st[0]; p_st_out[idx2(j, 1, num_particles)] = st[1];
-    p_i_elm_out[j] = i_elm;
-}
 
 // ---------------------------------------------------------------------------
 // sort_particles_by_i_elm_gpu: GPU counting sort for particle SoA
@@ -1912,9 +1802,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_feedback_rhs, sz_feedback));
     HIP_CHECK(hipMalloc(&d_mode_coord,   sz_mode_coord));
 
-    // --- Single stream for the fused batch kernel ---
-    hipStream_t stream_proj;
-    HIP_CHECK(hipStreamCreate(&stream_proj));
 
     // --- Allocate sorting buffers ---
     double *d_x_sorted = nullptr, *d_p_sorted = nullptr, *d_st_sorted = nullptr, *d_weight_sorted = nullptr;
@@ -1972,7 +1859,15 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
-    printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, elapsed_ms);
+    // printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, elapsed_ms);
+
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+    unsigned long long *d_lut_hits = nullptr, *d_lut_misses = nullptr;
+    HIP_CHECK(hipMalloc(&d_lut_hits,   sizeof(unsigned long long)));
+    HIP_CHECK(hipMalloc(&d_lut_misses, sizeof(unsigned long long)));
+    HIP_CHECK(hipMemset(d_lut_hits,   0, sizeof(unsigned long long)));
+    HIP_CHECK(hipMemset(d_lut_misses, 0, sizeof(unsigned long long)));
+#endif
 
     // --- Batch loop: one kernel launch per sort interval ---
     // Each launch runs nsteps=N_SORTING kinetic steps internally (remainder on the
@@ -1985,10 +1880,11 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     HIP_CHECK(hipEventRecord(t_start, 0));
     for (int k = 0; k < nstep_particles; k += N_SORTING) {
+        if(sim.my_id == 0)
+            printf("[launch_evolve_REs rank %d] Starting batch %d / %d (particle steps %d to %d)\n",
+               sim.my_id, sort_call_count+1, (nstep_particles + N_SORTING - 1) / N_SORTING,
+               k, std::min(k + N_SORTING, nstep_particles));
         int batch = std::min(N_SORTING, nstep_particles - k);
-
-        // Sort before each batch — drain stream first so sort sees latest state.
-        HIP_CHECK(hipStreamSynchronize(stream_proj));
 
         // if(sim.my_id == 0) {
         //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
@@ -2019,22 +1915,44 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
         // Fused batch kernel: runs batch steps, reads+writes d_x/d_p/d_st/d_i_elm in-place.
         hipLaunchKernelGGL(evolve_batch_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_proj,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
             d_x, d_p, d_st, d_i_elm, d_weight, charge,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_neighbours, d_el_size, n_elements,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, sim_time, group_mass, tstep_part_adj,
-            num_particles, d_feedback_rhs, d_mode_coord, batch);
+            num_particles, d_feedback_rhs, d_mode_coord, batch
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+            , d_lut_hits, d_lut_misses
+#endif
+            );
+        HIP_CHECK(hipDeviceSynchronize());
+
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+        {
+            unsigned long long h_hits = 0, h_misses = 0;
+            HIP_CHECK(hipMemcpy(&h_hits,   d_lut_hits,   sizeof(unsigned long long), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(&h_misses, d_lut_misses, sizeof(unsigned long long), hipMemcpyDeviceToHost));
+            unsigned long long total = h_hits + h_misses;
+            double hit_rate = (total > 0) ? 100.0 * (double)h_hits / (double)total : 0.0;
+            printf("[LUT_DEBUG rank %d] batch %d: hits=%llu misses=%llu total=%llu hit_rate=%.2f%%\n",
+                   sim.my_id, sort_call_count, h_hits, h_misses, total, hit_rate);
+            // Reset for next batch
+            HIP_CHECK(hipMemset(d_lut_hits,   0, sizeof(unsigned long long)));
+            HIP_CHECK(hipMemset(d_lut_misses, 0, sizeof(unsigned long long)));
+        }
+#endif
+
+        if(sim.my_id == 0)
+            printf("[launch_evolve_REs rank %d] Finished batch %d / %d (particle steps %d to %d): %.3f ms (sort: %.3f ms)\n",
+               sim.my_id, sort_call_count, (nstep_particles + N_SORTING - 1) / N_SORTING,
+               k, std::min(k + N_SORTING, nstep_particles), elapsed_ms, sort_ms);
     }
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
     printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps, %d sorts): %.3f ms\n",
            sim.my_id, nstep_particles, sort_call_count, elapsed_ms);
-
-    // --- Drain stream before D2H ---
-    HIP_CHECK(hipStreamSynchronize(stream_proj));
 
     // --- Copy results back: device -> host ---
     HIP_CHECK(hipEventRecord(t_start, 0));
@@ -2052,8 +1970,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventDestroy(t_start));
     HIP_CHECK(hipEventDestroy(t_stop));
 
-    // --- Destroy stream ---
-    HIP_CHECK(hipStreamDestroy(stream_proj));
 
     // --- Free device memory ---
     HIP_CHECK(hipFree(d_x_orig));
@@ -2081,4 +1997,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_el_size));
     HIP_CHECK(hipFree(d_feedback_rhs));
     HIP_CHECK(hipFree(d_mode_coord));
+#if defined(LUT_VALUES_DELTAS) && defined(LUT_DEBUG)
+    HIP_CHECK(hipFree(d_lut_hits));
+    HIP_CHECK(hipFree(d_lut_misses));
+#endif
 }

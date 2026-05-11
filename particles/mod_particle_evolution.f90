@@ -448,11 +448,14 @@ contains
 #else
       write(*,*) 'INFO: particle ordering: none'
 #endif
+#if N_SORTING > 0
+      write(*,*) 'INFO: Batch execution, with batch_size = ', N_SORTING
+#endif
 #if LUT_VALUES_DELTAS == 1
       write(*,*) 'INFO: LUT values/deltas: enabled'
       write(*,*) '      # slots = ', LUT_N_SLOTS
-      write(*,*) '      refresh interval = ', LUT_REFRESH_INTERVAL
       write(*,*) '      min occupancy = ', LUT_MIN_OCCUPANCY
+      write(*,*) '      refresh frequency (within batch) = ', LUT_REFRESH_INTERVAL
 #endif
     endif
     
