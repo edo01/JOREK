@@ -1387,7 +1387,7 @@ void lut_build_cooperative(int i_elm_thread,
 // the entire batch (one global-memory read at entry, one write at exit).
 // When LUT is enabled the shared-memory cache is built once and reused for
 // all nsteps — this is the primary motivation for batching.
-// nsteps is normally N_SORTING; the last batch may be smaller.
+// nsteps is normally STEPS_PER_BATCH; the last batch may be smaller.
 // ---------------------------------------------------------------------------
 __global__ __launch_bounds__(BLOCK_SIZE, 2)
 void evolve_batch_kernel(
@@ -1808,7 +1808,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int    *d_hist = nullptr, *d_offsets = nullptr, *d_cursors = nullptr;
     int    *d_block_sums = nullptr, *d_block_offsets = nullptr;
 
-#if N_SORTING > 0
+#if STEPS_PER_BATCH > 0
     HIP_CHECK(hipMalloc(&d_x_sorted,      sz_x));
     HIP_CHECK(hipMalloc(&d_p_sorted,      sz_p));
     HIP_CHECK(hipMalloc(&d_st_sorted,     sz_st));
@@ -1869,7 +1869,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #endif
 
     // --- Batch loop: one kernel launch per sort interval ---
-    // Each launch runs nsteps=N_SORTING kinetic steps internally (remainder on the
+    // Each launch runs nsteps=STEPS_PER_BATCH kinetic steps internally (remainder on the
     // last batch).  The fused evolve_batch_kernel does proj+push in a single kernel,
     // holding particle state in registers across all steps; the LUT is built once per
     // launch so it is reused for all steps in the batch.
@@ -1878,16 +1878,16 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int sort_call_count = 0;
 
     HIP_CHECK(hipEventRecord(t_start, 0));
-    for (int k = 0; k < nstep_particles; k += N_SORTING) {
+    for (int k = 0; k < nstep_particles; k += STEPS_PER_BATCH) {
         if(sim.my_id == 0)
             printf("[launch_evolve_REs rank %d] Starting batch %d / %d (particle steps %d to %d)\n",
-               sim.my_id, sort_call_count+1, (nstep_particles + N_SORTING - 1) / N_SORTING,
-               k, std::min(k + N_SORTING, nstep_particles));
-        int batch = std::min(N_SORTING, nstep_particles - k);
+               sim.my_id, sort_call_count+1, (nstep_particles + STEPS_PER_BATCH - 1) / STEPS_PER_BATCH,
+               k, std::min(k + STEPS_PER_BATCH, nstep_particles));
+        int batch = std::min(STEPS_PER_BATCH, nstep_particles - k);
 
         // if(sim.my_id == 0) {
         //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
-        //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "before_sort");
+        //     write_i_elm_snapshot(part->i_elm, num_particles, k/STEPS_PER_BATCH+1, "before_sort");
         // }
 
         hipEvent_t t_sort_start, t_sort_stop;
@@ -1909,7 +1909,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
         // if(sim.my_id == 0) {
         //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
-        //     write_i_elm_snapshot(part->i_elm, num_particles, k/N_SORTING+1, "after_sort");
+        //     write_i_elm_snapshot(part->i_elm, num_particles, k/STEPS_PER_BATCH+1, "after_sort");
         // }
 
         // Fused batch kernel: runs batch steps, reads+writes d_x/d_p/d_st/d_i_elm in-place.
@@ -1944,8 +1944,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
         if(sim.my_id == 0)
             printf("[launch_evolve_REs rank %d] Finished batch %d / %d (particle steps %d to %d): %.3f ms (sort: %.3f ms)\n",
-               sim.my_id, sort_call_count, (nstep_particles + N_SORTING - 1) / N_SORTING,
-               k, std::min(k + N_SORTING, nstep_particles), elapsed_ms, sort_ms);
+               sim.my_id, sort_call_count, (nstep_particles + STEPS_PER_BATCH - 1) / STEPS_PER_BATCH,
+               k, std::min(k + STEPS_PER_BATCH, nstep_particles), elapsed_ms, sort_ms);
     }
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
@@ -1976,7 +1976,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_st_orig));
     HIP_CHECK(hipFree(d_i_elm_orig));
     HIP_CHECK(hipFree(d_weight_orig));
-#if N_SORTING > 0
+#if STEPS_PER_BATCH > 0
     HIP_CHECK(hipFree(d_x_sorted_orig));
     HIP_CHECK(hipFree(d_p_sorted_orig));
     HIP_CHECK(hipFree(d_st_sorted_orig));

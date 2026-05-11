@@ -448,8 +448,8 @@ contains
 #else
       write(*,*) 'INFO: particle ordering: none'
 #endif
-#if N_SORTING > 0
-      write(*,*) 'INFO: Batch execution, with batch_size = ', N_SORTING
+#if STEPS_PER_BATCH > 0
+      write(*,*) 'INFO: Batch execution, with batch_size = ', STEPS_PER_BATCH
 #endif
 #if LUT_VALUES_DELTAS == 1
       write(*,*) 'INFO: LUT values/deltas: enabled'

@@ -4,7 +4,7 @@
 
 #define ORDERING_TYPE 0
 
-#define N_SORTING 30
+#define STEPS_PER_BATCH 30
 
 #define LUT_VALUES_DELTAS 0
 #define LUT_DEBUG            0
