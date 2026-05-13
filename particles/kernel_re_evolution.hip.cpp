@@ -17,6 +17,8 @@
 // ---------------------------------------------------------------------------
 // Compile-time parameters, taken and renamed from models/mod_settings.h
 // ---------------------------------------------------------------------------
+// Note: optimization_defines.h is already included above and provides
+// NODES_FIRST, ELEMENTS_FIRST, FB_ELEMENTS_FIRST.
 
 #define TO_KB(bytes) ((double)(bytes) / 1024.0)
 
@@ -70,31 +72,110 @@ static constexpr double SPEED_OF_LIGHT   = 2.997924580105029e+8;
 // ---------------------------------------------------------------------------
 // Fortran column-major indexing helpers (0-based indices)
 // ---------------------------------------------------------------------------
-__device__ __forceinline__
+__device__ __host__ __forceinline__
 int idx2(int i0, int i1, int d0)
 { return i0 + d0 * i1; }
 
-__device__ __forceinline__
+__device__ __host__ __forceinline__
 int idx3(int i0, int i1, int i2, int d0, int d1)
 { return i0 + d0 * (i1 + d1 * i2); }
 
-__device__ __forceinline__
+__device__ __host__ __forceinline__
 int idx4(int i0, int i1, int i2, int i3, int d0, int d1, int d2)
 { return i0 + d0 * (i1 + d1 * (i2 + d2 * i3)); }
 
-int idx4_host(int i0, int i1, int i2, int i3, int d0, int d1, int d2)
-{ return i0 + d0 * (i1 + d1 * (i2 + d2 * i3)); }
-
-
-__device__ __forceinline__
+__device__ __host__ __forceinline__
 int idx5(int i0, int i1, int i2, int i3, int i4,
          int d0, int d1, int d2, int d3)
 { return i0 + d0 * (i1 + d1 * (i2 + d2 * (i3 + d3 * i4))); }
 
+// ---------------------------------------------------------------------------
+// Layout-aware index helpers (controlled by optimization_defines.h)
+//
+// nl_x   : (NDIM, NDEG, N_COORD_TOR, n_nodes)  if NODES_FIRST=0  [n_nodes slowest]
+//         : (n_nodes, NDIM, NDEG, N_COORD_TOR)  if NODES_FIRST=1  [n_nodes fastest]
+//
+// nl_values / nl_deltas:
+//         : (N_FIELD_VARS, NDEG, N_TOR, n_nodes) if NODES_FIRST=0
+//         : (n_nodes, N_FIELD_VARS, NDEG, N_TOR)  if NODES_FIRST=1
+//
+// el_vertex / el_neighbours:
+//         : (NV, n_elements)          if ELEMENTS_FIRST=0  [NV fastest]
+//         : (n_elements, NV)          if ELEMENTS_FIRST=1  [n_elements fastest]
+//
+// el_size : (NDEG, NV, n_elements)   if ELEMENTS_FIRST=0
+//         : (n_elements, NDEG, NV)   if ELEMENTS_FIRST=1
+//
+// feedback_rhs:
+//         : (NDEG, NV, n_elements, N_TOR, NVAR) if FB_ELEMENTS_FIRST=0  [Fortran column-major]
+//         : (n_elements, NDEG, NV, N_TOR, NVAR) if FB_ELEMENTS_FIRST=1  [n_elements fastest]
+// ---------------------------------------------------------------------------
 
-int idx5_host(int i0, int i1, int i2, int i3, int i4,
-         int d0, int d1, int d2, int d3)
-{ return i0 + d0 * (i1 + d1 * (i2 + d2 * (i3 + d3 * i4))); }
+// nl_x index: logical signature (idim, kf, it, iv) — all 0-based
+// NODES_FIRST=0: layout (NDIM, NDEG, N_COORD_TOR, n_nodes) — idim fastest, iv slowest
+// NODES_FIRST=1: layout (n_nodes, NDIM, NDEG, N_COORD_TOR) — iv fastest, it slowest
+__device__ __host__ __forceinline__
+int nl_x_idx(int idim, int kf, int it, int iv, int n_nodes)
+{
+#if NODES_FIRST == 1
+    return idx4(iv, idim, kf, it, n_nodes, NDIM, NDEG);
+#else
+    return idx4(idim, kf, it, iv, NDIM, NDEG, N_COORD_TOR);
+#endif
+}
+
+// nl_values / nl_deltas index: logical signature (ivar, kf, it, iv) — all 0-based
+// NODES_FIRST=0: layout (N_FIELD_VARS, NDEG, N_TOR, n_nodes) — ivar fastest, iv slowest
+// NODES_FIRST=1: layout (n_nodes, N_FIELD_VARS, NDEG, N_TOR) — iv fastest, it slowest
+__device__ __host__ __forceinline__
+int nl_val_idx(int ivar, int kf, int it, int iv, int n_nodes)
+{
+#if NODES_FIRST == 1
+    return idx4(iv, ivar, kf, it, n_nodes, N_FIELD_VARS, NDEG);
+#else
+    return idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR);
+#endif
+}
+
+// el_vertex / el_neighbours index: logical signature (kv, ie) — all 0-based
+// ELEMENTS_FIRST=0: layout (NV, n_elements) — kv fastest, ie slowest
+// ELEMENTS_FIRST=1: layout (n_elements, NV) — ie fastest, kv slowest
+__device__ __host__ __forceinline__
+int el_vert_idx(int kv, int ie, int n_elements)
+{
+#if ELEMENTS_FIRST == 1
+    return idx2(ie, kv, n_elements);
+#else
+    return idx2(kv, ie, NV);
+#endif
+}
+
+// el_size index: logical signature (kf, kv, ie) — all 0-based
+// ELEMENTS_FIRST=0: layout (NDEG, NV, n_elements) — kf fastest, ie slowest
+// ELEMENTS_FIRST=1: layout (n_elements, NDEG, NV) — ie fastest, kv slowest
+__device__ __host__ __forceinline__
+int el_size_idx(int kf, int kv, int ie, int n_elements)
+{
+#if ELEMENTS_FIRST == 1
+    return idx3(ie, kf, kv, n_elements, NDEG);
+#else
+    return idx3(kf, kv, ie, NDEG, NV);
+#endif
+}
+
+// feedback_rhs index: logical signature (ie, n, m, it, var) — all 0-based
+// FB_ELEMENTS_FIRST=0: layout (NDEG, NV, n_elements, N_TOR, NVAR) — n fastest [Fortran column-major]
+// FB_ELEMENTS_FIRST=1: layout (n_elements, NDEG, NV, N_TOR, NVAR) — ie fastest
+__device__ __host__ __forceinline__
+int fb_idx(int ie, int n, int m, int it, int var, int n_elements)
+{
+#if FB_ELEMENTS_FIRST == 1
+    return idx5(ie, n, m, it, var, n_elements, NDEG, NV, N_TOR);
+#else
+    return idx5(n, m, ie, it, var, NDEG, NV, n_elements, N_TOR);
+#endif
+}
+
 
 // ---------------------------------------------------------------------------
 // Sorting helpers: map i_elm to a histogram bin
@@ -606,16 +687,15 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
     int ie = i_elm_f - 1;       // Element idx, 0-based
 
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(kv, ie, NV)] - 1;       // Node number, 0-based
+        int iv = el_vertex[el_vert_idx(kv, ie, n_elements)] - 1;  // Node number, 0-based
         for (int kf = 0; kf < NDEG; ++kf) {
-            double ss = el_size[idx3(kf, kv, ie, NDEG, NV)];
+            double ss = el_size[el_size_idx(kf, kv, ie, n_elements)];
             double g, gs, gt;
             bf2D_1_scalar(s, t, kf, kv, g, gs, gt);
 
             for (int it = 0; it < N_COORD_TOR; ++it) {
-                // nl_x layout: (NDIM, NDEG, N_COORD_TOR, n_nodes)
-                double xx1 = nl_x[idx4(0, kf, it, iv, NDIM, NDEG, N_COORD_TOR)];
-                double xx2 = nl_x[idx4(1, kf, it, iv, NDIM, NDEG, N_COORD_TOR)];
+                double xx1 = nl_x[nl_x_idx(0, kf, it, iv, n_nodes)];
+                double xx2 = nl_x[nl_x_idx(1, kf, it, iv, n_nodes)];
                 double hz  = HZ_coord[it];
                 double dhz = HZ_coord_p[it];
 
@@ -680,7 +760,7 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
     // Find the side in elm2 pointing to elm1
     // If elm2 has no neighbour -> elm1 use the last one that is 0 (i.e. the one on the axis itself)
     for (int i = 0; i < NV; ++i) {
-        if (el_neighbours[idx2(i, ie2, NV)] == elm1) {
+        if (el_neighbours[el_vert_idx(i, ie2, n_elements)] == elm1) {
             side2 = i + 1;
             break;
         }
@@ -689,10 +769,10 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
         is_nb = true;
         // Determine node numbers of the sides
         // Node numbers are related to sides as node1=(side-1)%4+1, node2=side%4+1
-        int n1a = el_vertex[idx2((side1 - 1) % 4, ie1, NV)];
-        int n1b = el_vertex[idx2( side1      % 4, ie1, NV)];
-        int n2a = el_vertex[idx2((side2 - 1) % 4, ie2, NV)];
-        int n2b = el_vertex[idx2( side2      % 4, ie2, NV)];
+        int n1a = el_vertex[el_vert_idx((side1 - 1) % 4, ie1, n_elements)];
+        int n1b = el_vertex[el_vert_idx( side1      % 4, ie1, n_elements)];
+        int n2a = el_vertex[el_vert_idx((side2 - 1) % 4, ie2, n_elements)];
+        int n2b = el_vertex[el_vert_idx( side2      % 4, ie2, n_elements)];
         co = (n1a == n2b) || (n1b == n2a);
     }
 }
@@ -715,7 +795,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
         q_from = (1.0 - st[0] <= st[1]) ? 3 : 4;
     }
 
-    i_to = el_neighbours[idx2(q_from - 1, i_from - 1, NV)];
+    i_to = el_neighbours[el_vert_idx(q_from - 1, i_from - 1, n_elements)];
     if (i_to <= 0) return;
 
     // Check once more that they are neighbours and determine the orientation
@@ -1028,9 +1108,9 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     // Fused loop: nl_values and nl_deltas processed together, sharing
     // bf2D_1_scalar and element lookups (halves instruction count vs two passes).
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[idx2(kv, ie, NV)] - 1;
+        int iv = el_vertex[el_vert_idx(kv, ie, n_elements)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
-            double sz = el_size[idx3(kf, kv, ie, NDEG, NV)];
+            double sz = el_size[el_size_idx(kf, kv, ie, n_elements)];
             double h, hs, ht;
             bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
@@ -1052,15 +1132,15 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #if LUT_VALUES_DELTAS == 1
                     double raw_v = (lut_cache_slot >= 0)
                         ? sh_cache_v_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
+                        : nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)];
                     double val_v = raw_v * sz;
                     double raw_d = (lut_cache_slot >= 0)
                         ? sh_cache_d_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)];
+                        : nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)];
                     double val_d = raw_d * sz;
 #else
-                    double val_v = nl_values[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
-                    double val_d = nl_deltas[idx4(ivar, kf, it, iv, N_FIELD_VARS, NDEG, N_TOR)] * sz;
+                    double val_v = nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)] * sz;
+                    double val_d = nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)] * sz;
 #endif
                     v   += val_v * hz_it;
                     vp  += val_v * dhz_it;
@@ -1073,8 +1153,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 Pd_t[ivar]   += vd  * ht;   Pd_phi[ivar]+= vpd * h;
             }
 
-            double xR = nl_x[idx4(0, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
-            double xZ = nl_x[idx4(1, kf, 0, iv, NDIM, NDEG, N_COORD_TOR)] * sz;
+            double xR = nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)] * sz;
+            double xZ = nl_x[nl_x_idx(1, kf, 0, iv, n_nodes)] * sz;
             R   += xR * h;
             R_s += xR * hs;
             R_t += xR * ht;
@@ -1342,7 +1422,7 @@ void lut_build_cooperative(int i_elm_thread,
         for (int s = 0; s < LUT_N_SLOTS; ++s) {
             int elm = sh_lut_keys[s];
             for (int kv = 0; kv < NV; ++kv)
-                ivs[s][kv] = (elm > 0) ? (el_vertex[idx2(kv, elm - 1, NV)] - 1) : -1;
+                ivs[s][kv] = (elm > 0) ? (el_vertex[el_vert_idx(kv, elm - 1, n_elements)] - 1) : -1;
         }
 
         int total = LUT_SLOT_SIZE * LUT_N_SLOTS;
@@ -1359,8 +1439,7 @@ void lut_build_cooperative(int i_elm_thread,
             int kf_l   = tmp % NDEG;  tmp /= NDEG;
             int ivar_l = tmp;
             int node   = ivs[s][kv_l];
-            // nl_values/nl_deltas layout: (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes)
-            int gi     = idx4(ivar_l, kf_l, it_l, node, N_FIELD_VARS, NDEG, N_TOR);
+            int gi     = nl_val_idx(ivar_l, kf_l, it_l, node, n_nodes);
             sh_cache_v[f] = nl_values[gi];
             sh_cache_d[f] = nl_deltas[gi];
         }
@@ -1524,18 +1603,15 @@ void evolve_batch_kernel(
             for (int n = 0; n < NDEG; ++n) {
                 for (int m = 0; m < NV; ++m) {
                     double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
-                                       * el_size[idx3(n, m, ie, NDEG, NV)]
+                                       * el_size[el_size_idx(n, m, ie, n_elements)]
                                        * w;
 
                     for (int it = 0; it < N_TOR; ++it) {
                         double hz = HZ_proj[it];
 
-                        atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PAR_IDX, n_elements, NDEG, NV, N_TOR)],
-                                  hz * v_Ppar * proj_factor);
-                        atomicAdd(&feedback_rhs[idx5(ie, n, m, it, P_PERP_IDX, n_elements, NDEG, NV, N_TOR)],
-                                  hz * v_Pperp * proj_factor);
-                        atomicAdd(&feedback_rhs[idx5(ie, n, m, it, J_PHI_IDX, n_elements, NDEG, NV, N_TOR)],
-                                  hz * v_jPhi * proj_factor);
+                        atomicAdd(&feedback_rhs[fb_idx(ie, n, m, it, P_PAR_IDX,  n_elements)], hz * v_Ppar  * proj_factor);
+                        atomicAdd(&feedback_rhs[fb_idx(ie, n, m, it, P_PERP_IDX, n_elements)], hz * v_Pperp * proj_factor);
+                        atomicAdd(&feedback_rhs[fb_idx(ie, n, m, it, J_PHI_IDX,  n_elements)], hz * v_jPhi  * proj_factor);
                     }
                 }
             }
@@ -1744,6 +1820,21 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         printf("[Array Dimensions] el_neigh: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_neigh), (size_t)n_elements, NV, sizeof(int));
         printf("[Array Dimensions] el_size: %.2f KB (%zu * %d * %d * %zu)\n", TO_KB(sz_el_size), (size_t)n_elements, NV, NDEG, sizeof(double));
         printf("[Array Dimensions] feedback: %.2f KB (%d * %d * %zu * %d * %d * %zu)\n", TO_KB(sz_feedback), NDEG, NV, (size_t)n_elements, N_TOR, NVAR, sizeof(double));
+#if NODES_FIRST == 1
+        printf("[Layout] NODES_FIRST=1   : nl_x/values/deltas have n_nodes as fastest dim\n");
+#else
+        printf("[Layout] NODES_FIRST=0   : nl_x/values/deltas have n_nodes as slowest dim\n");
+#endif
+#if ELEMENTS_FIRST == 1
+        printf("[Layout] ELEMENTS_FIRST=1: el_vertex/neigh/size have n_elements as fastest dim\n");
+#else
+        printf("[Layout] ELEMENTS_FIRST=0: el_vertex/neigh/size have n_elements as slowest dim\n");
+#endif
+#if FB_ELEMENTS_FIRST == 1
+        printf("[Layout] FB_ELEMENTS_FIRST=1: feedback_rhs has n_elements as fastest dim\n");
+#else
+        printf("[Layout] FB_ELEMENTS_FIRST=0: feedback_rhs has n_elements as slowest dim (Fortran column-major)\n");
+#endif
         printf("[Array Dimensions] mode_coord: %.2f KB (%d * %zu)\n", TO_KB(sz_mode_coord), N_COORD_TOR, sizeof(int));
     }
 

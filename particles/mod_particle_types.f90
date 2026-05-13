@@ -1277,21 +1277,53 @@ end subroutine deallocate_particle_arrays
     integer :: idx, kc, kf, kd, kt
 
     nn = node_list%n_nodes
-
     nl_soa%n_nodes = int(nn, c_int)
 
-    ! Allocate flat arrays in the order the C kernel expects (new optimal layout):
-    !   x:      (n_dim, n_degrees, n_coord_tor, n_nodes)         — n_nodes slowest
-    !   values: (2,     n_degrees, n_tor,       n_nodes)         — n_nodes slowest
-    !   deltas: (2,     n_degrees, n_tor,       n_nodes)         — n_nodes slowest
+    ! Flat array sizes are the same regardless of layout.
     ! Only 2 field vars (P_par, P_perp) are stored; j_Phi is never read on GPU.
     allocate(x_flat(n_coord_tor * n_degrees * n_dim * nn))
     allocate(val_flat(n_tor * n_degrees * 2 * nn))
     allocate(del_flat(n_tor * n_degrees * 2 * nn))
 
-    ! Copy node coordinates: node(i)%x(kc, kf, kd)
-    ! C layout (new optimal): x_flat[ (kd-1) + n_dim*((kf-1) + n_degrees*((kc-1) + n_coord_tor*(i-1))) ]
-    ! i.e. (n_dim, n_degrees, n_coord_tor, n_nodes) — n_nodes is the slowest dimension.
+#include "optimization_defines.h"
+#if NODES_FIRST == 1
+    ! NODES_FIRST: n_nodes is the FIRST (fastest) dimension.
+    !   x_flat layout:       (n_nodes, n_dim, n_degrees, n_coord_tor)
+    !     idx = i + nn*((kd-1) + n_dim*((kf-1) + n_degrees*(kc-1)))
+    !   val/del_flat layout: (n_nodes, 2, n_degrees, n_tor)
+    !     idx = i + nn*((kd-1) + 2*((kf-1) + n_degrees*(kt-1)))
+    !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
+    do i = 1, nn
+      do kd = 1, n_dim
+        do kf = 1, n_degrees
+          do kc = 1, n_coord_tor
+            idx = i + nn * ((kd-1) + n_dim * ((kf-1) + n_degrees * (kc-1)))
+            x_flat(idx) = node_list%node(i)%x(kc, kf, kd)
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+
+    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
+    do i = 1, nn
+      do kd = 1, 2
+        do kf = 1, n_degrees
+          do kt = 1, n_tor
+            idx = i + nn * ((kd-1) + 2 * ((kf-1) + n_degrees * (kt-1)))
+            val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
+            del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
+          end do
+        end do
+      end do
+    end do
+    !$omp end parallel do
+#else
+    ! NODES_FIRST=0: n_nodes is the LAST (slowest) dimension.
+    !   x_flat layout:       (n_dim, n_degrees, n_coord_tor, n_nodes)
+    !     idx = (kd-1) + n_dim*((kf-1) + n_degrees*((kc-1) + n_coord_tor*(i-1)))
+    !   val/del_flat layout: (2, n_degrees, n_tor, n_nodes)
+    !     idx = (kd-1) + 2*((kf-1) + n_degrees*((kt-1) + n_tor*(i-1)))
     !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, n_dim
@@ -1305,9 +1337,6 @@ end subroutine deallocate_particle_arrays
     end do
     !$omp end parallel do
 
-    ! Copy values/deltas: node(i)%values(kt, kf, kd), but only kd=1,2 (P_par, P_perp).
-    ! C layout (new optimal): val_flat[ (kd-1) + 2*((kf-1) + n_degrees*((kt-1) + n_tor*(i-1))) ]
-    ! i.e. (2, n_degrees, n_tor, n_nodes) — n_nodes is the slowest dimension.
     !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, 2
@@ -1321,6 +1350,7 @@ end subroutine deallocate_particle_arrays
       end do
     end do
     !$omp end parallel do
+#endif
 
     nl_soa%x      = c_loc(x_flat(1))
     nl_soa%values = c_loc(val_flat(1))
@@ -1355,19 +1385,36 @@ end subroutine deallocate_particle_arrays
     ne = element_list%n_elements
     el_soa%n_elements = int(ne, c_int)
 
-    ! C layout (new optimal):
-    !   vertex/neighbours: (n_vertex_max, n_elements)       — kv fastest, then i
-    !   size:              (n_degrees, n_vertex_max, n_elements) — kf fastest, then kv, then i
-    ! Warp threads on consecutive elements stride by n_vertex_max (or n_degrees*n_vertex_max)
-    ! which is small and fits in a single cache line broadcast.
+    ! Flat array sizes are the same regardless of layout.
     allocate(vert_flat(n_vertex_max * ne))
     allocate(neigh_flat(n_vertex_max * ne))
     allocate(size_flat(n_degrees * n_vertex_max * ne))
 
-    ! Fortran 1-based index formulas derived from C idx2(kv,ie,NV)=kv+NV*ie
-    ! and idx3(kf,kv,ie,NDEG,NV)=kf+NDEG*(kv+NV*ie):
-    !   vert/neigh:  idx = kv + n_vertex_max*(i-1)
-    !   size:        idx = kf + n_degrees*((kv-1) + n_vertex_max*(i-1))
+#include "optimization_defines.h"
+#if ELEMENTS_FIRST == 1
+    ! ELEMENTS_FIRST: n_elements is the FIRST (fastest) dimension.
+    !   vert/neigh layout: (n_elements, n_vertex_max)
+    !     idx = i + ne*(kv-1)
+    !   size layout:       (n_elements, n_degrees, n_vertex_max)
+    !     idx = i + ne*((kf-1) + n_degrees*(kv-1))
+    !$omp parallel do default(none) shared(element_list, vert_flat, neigh_flat, size_flat, ne) private(i, kv, kf, idx) collapse(2)
+    do i = 1, ne
+      do kv = 1, n_vertex_max
+        idx = i + ne*(kv-1)
+        vert_flat(idx)  = int(element_list%element(i)%vertex(kv), c_int)
+        neigh_flat(idx) = int(element_list%element(i)%neighbours(kv), c_int)
+        do kf = 1, n_degrees
+          size_flat(i + ne*((kf-1) + n_degrees*(kv-1))) = element_list%element(i)%size(kv, kf)
+        end do
+      end do
+    end do
+    !$omp end parallel do
+#else
+    ! ELEMENTS_FIRST=0: n_elements is the LAST (slowest) dimension.
+    !   vert/neigh layout: (n_vertex_max, n_elements)
+    !     idx = kv + n_vertex_max*(i-1)
+    !   size layout:       (n_degrees, n_vertex_max, n_elements)
+    !     idx = kf + n_degrees*((kv-1) + n_vertex_max*(i-1))
     !$omp parallel do default(none) shared(element_list, vert_flat, neigh_flat, size_flat, ne) private(i, kv, kf, idx) collapse(2)
     do i = 1, ne
       do kv = 1, n_vertex_max
@@ -1380,6 +1427,7 @@ end subroutine deallocate_particle_arrays
       end do
     end do
     !$omp end parallel do
+#endif
 
     el_soa%vertex     = c_loc(vert_flat(1))
     el_soa%neighbours = c_loc(neigh_flat(1))

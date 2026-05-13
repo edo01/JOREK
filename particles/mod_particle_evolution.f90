@@ -425,9 +425,18 @@ contains
     sim_c%my_id    = int(sim%my_id, c_int)
     sim_c%n_mpi    = int(sim%n_mpi, c_int)
 
-    ! --- Allocate feedback buffer matching Fortran column-major layout ---
-    ! feedback_rhs starts at zero for 'rep', so initialising fb_c to zero is correct.
-    allocate(fb_c(n_elements, n_degrees, n_vertex_max, n_tor, size(feedback_rhs, 5)))
+    ! --- Allocate compact 3-variable feedback buffer for GPU (P_par, P_perp, j_Phi only) ---
+    ! GPU kernel uses 3 compact variables (0=P_par, 1=P_perp, 2=j_Phi); the full
+    ! feedback_rhs has more variables that are not needed on the GPU side.
+    ! Layout matches FB_ELEMENTS_FIRST define:
+    !   FB_ELEMENTS_FIRST=1: (n_elements, n_degrees, n_vertex_max, n_tor, 3)
+    !   FB_ELEMENTS_FIRST=0: (n_degrees, n_vertex_max, n_elements, n_tor, 3)
+#include "optimization_defines.h"
+#if FB_ELEMENTS_FIRST == 1
+    allocate(fb_c(n_elements, n_degrees, n_vertex_max, n_tor, 3))
+#else
+    allocate(fb_c(n_degrees, n_vertex_max, n_elements, n_tor, 3))
+#endif
     fb_c = 0.0_c_double
 
     tstep_part_adj_c = real(tstep_part_adj, c_double)
@@ -494,25 +503,37 @@ contains
     end do
 #endif
 
+    ! GPU slot mapping: 1=P_par, 2=P_perp, 3=j_Phi (1-based Fortran indexing into compact fb_c)
 #if GPU_DEBUG
     if (sim%my_id == 0) then
-      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(:,:,:,:,P_par_idx_kin)))
-      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(:,:,:,:,P_perp_idx_kin)))
-      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c j_Phi|_max  = ', maxval(abs(fb_c(:,:,:,:,j_Phi_idx_kin)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(:,:,:,:,1)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(:,:,:,:,2)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c j_Phi|_max  = ', maxval(abs(fb_c(:,:,:,:,3)))
     end if
 #endif
 
     ! --- Accumulate GPU result into feedback_rhs ---
-    ! fb_c has shape (n_elements, n_degrees, n_vertex_max, n_tor, n_var): n_elements first for GPU coalescing.
-    ! feedback_rhs has shape (n_degrees, n_vertex_max, n_elements_total, n_tor, n_var).
-    ! Loop over the small (n_degrees, n_vertex_max) dims; use array slices over (n_elements, n_tor).
+    ! fb_c has 3 compact GPU variables: slot 1=P_par, 2=P_perp, 3=j_Phi (1-based).
+    ! Layout depends on FB_ELEMENTS_FIRST:
+    !   FB_ELEMENTS_FIRST=1: fb_c(n_elements, n_degrees, n_vertex_max, n_tor, 3)
+    !   FB_ELEMENTS_FIRST=0: fb_c(n_degrees, n_vertex_max, n_elements, n_tor, 3)
+    ! feedback_rhs always has Fortran column-major layout: (n_degrees, n_vertex_max, n_elements_total, n_tor, n_var).
+#include "optimization_defines.h"
+#if FB_ELEMENTS_FIRST == 1
+    ! fb_c(ie, kf, kv, it, var) -> feedback_rhs(kf, kv, ie, it, var)
     do kvb = 1, n_vertex_max
       do kfb = 1, n_degrees
-        feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, kfb, kvb, :, P_par_idx_kin)
-        feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, kfb, kvb, :, P_perp_idx_kin)
-        feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, kfb, kvb, :, j_Phi_idx_kin)
+        feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, kfb, kvb, :, 1)
+        feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, kfb, kvb, :, 2)
+        feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, kfb, kvb, :, 3)
       end do
     end do
+#else
+    ! fb_c(kf, kv, ie, it, var) -> feedback_rhs(kf, kv, ie, it, var) — same layout, direct slice accumulation
+    feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, :, :, :, 1)
+    feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, :, :, :, 2)
+    feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, :, :, :, 3)
+#endif
 
     ! --- Copy updated particle data back to AoS ---
     select type (p => sim%groups(group_num)%particles)

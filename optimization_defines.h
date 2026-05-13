@@ -11,3 +11,7 @@
 #define LUT_N_SLOTS          4
 #define LUT_MIN_OCCUPANCY    2
 #define LUT_REFRESH_INTERVAL 30
+
+#define NODES_FIRST       0
+#define ELEMENTS_FIRST    0
+#define FB_ELEMENTS_FIRST 1

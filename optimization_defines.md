@@ -59,7 +59,33 @@ Minimum number of particles that must map to a LUT slot before it is considered
 worth caching. Slots with fewer hits fall back to direct interpolation.
 Only meaningful when LUT_VALUES_DELTAS = 1.
 
+## LUT_DEBUG
+
+0 = disabled, 1 = instrument the LUT with hit/miss counters printed per batch.
+Only meaningful when LUT_VALUES_DELTAS = 1.
+
 ## LUT_REFRESH_INTERVAL
 
 Number of kinetic steps between LUT refreshes within a batch.
 Only meaningful when LUT_VALUES_DELTAS = 1 and STEPS_PER_BATCH > 0.
+
+## NODES_FIRST
+
+Controls the memory layout of node-list arrays (`nl_x`, `nl_values`, `nl_deltas`) passed to the GPU.
+
+- 0 — `n_nodes` is the **last** (slowest-changing) dimension: `(…, n_nodes)`. Matches Fortran column-major convention.
+- 1 — `n_nodes` is the **first** (fastest-changing) dimension: `(n_nodes, …)`. Fortran packs accordingly.
+
+## ELEMENTS_FIRST
+
+Controls the memory layout of element-list arrays (`el_vertex`, `el_neighbours`, `el_size`) passed to the GPU.
+
+- 0 — `n_elements` is the **last** (slowest-changing) dimension: `(…, n_elements)`.
+- 1 — `n_elements` is the **first** (fastest-changing) dimension: `(n_elements, …)`.
+
+## FB_ELEMENTS_FIRST
+
+Controls the memory layout of the `feedback_rhs` buffer exchanged between Fortran and the GPU kernel.
+
+- 0 — `n_elements` is the **last** (slowest-changing) dimension: `(NDEG, NV, n_elements, N_TOR, NVAR)`. Matches Fortran column-major convention.
+- 1 — `n_elements` is the **first** (fastest-changing) dimension: `(n_elements, NDEG, NV, N_TOR, NVAR)`. Improves GPU warp coalescing.
