@@ -1105,141 +1105,56 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
 
-    // T4: Hoist all NV vertex gathers before the kv loop so NV independent
-    // loads are in-flight simultaneously (ELEMENTS_FIRST=0: el_vertex layout
-    // is (NV, n_elements), stride-1 over kv — all NV values in one cache line).
-    int iv_arr[NV];
-    #pragma unroll
-    for (int kv = 0; kv < NV; ++kv)
-        iv_arr[kv] = el_vertex[el_vert_idx(kv, ie, n_elements)] - 1;
-
-    // T1+T2+T3+T6: ivar loop fused into it loop; software-pipelined loads;
-    // nl_x loads hoisted before the it loop to hide their L2 latency.
+    // Fused loop: nl_values and nl_deltas processed together, sharing
+    // bf2D_1_scalar and element lookups (halves instruction count vs two passes).
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = iv_arr[kv];
-
-        // T4: Hoist all NDEG el_size gathers for this kv before the kf loop
-        // (ELEMENTS_FIRST=0: el_size layout is (NDEG, NV, n_elements), stride-1
-        // over kf — all NDEG values for a fixed kv land in one cache line).
-        double sz_arr[NDEG];
-        #pragma unroll
-        for (int kf = 0; kf < NDEG; ++kf)
-            sz_arr[kf] = el_size[el_size_idx(kf, kv, ie, n_elements)];
-
+        int iv = el_vertex[el_vert_idx(kv, ie, n_elements)] - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
-            double sz = sz_arr[kf];
+            double sz = el_size[el_size_idx(kf, kv, ie, n_elements)];
             double h, hs, ht;
             bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
-            // T6: Issue nl_x loads before the it loop.  With NODES_FIRST=0 the
-            // layout is (NDIM, NDEG, N_COORD_TOR, n_nodes): idim=0 and idim=1
-            // are stride-1 — both land in one cache line.  Their L2 latency is
-            // fully hidden by the N_TOR iterations of the it loop below.
-            double raw_xR = nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)];
-            double raw_xZ = nl_x[nl_x_idx(1, kf, 0, iv, n_nodes)];
-
-            // T1: ivar loop fused into it loop — both ivar=0 and ivar=1 data
-            // are loaded per it step, giving 4 independent in-flight loads
-            // (vs 2 serialised).  With NODES_FIRST=0 the layout is
-            // (N_FIELD_VARS=2, NDEG, N_TOR, n_nodes): ivar=0 and ivar=1 at
-            // fixed (kf, it, iv) are adjacent (stride-1), so they share a
-            // cache line; consecutive it values stride by N_FIELD_VARS*NDEG.
-            double v0 = 0.0, vp0 = 0.0, vd0 = 0.0, vpd0 = 0.0;
-            double v1 = 0.0, vp1 = 0.0, vd1 = 0.0, vpd1 = 0.0;
-
-            // T2: Prologue — issue loads for it=0 before the loop body
-            // consumes them, decoupling address generation from use by one
-            // full loop-body worth of compute (~8 FMAs + hz/dhz arithmetic).
+            for (int ivar = 0; ivar < 2; ++ivar) {
+                double v = 0.0, vp = 0.0, vd = 0.0, vpd = 0.0;
+                for (int it = 0; it < N_TOR; ++it) {
+                    // Reconstruct hz/dhz from compact mode pairs.
+                    // For it=2i-1 (odd):  hz=cmode[i], dhz=-N_PERIOD*i*smode[i]
+                    // For it=2i   (even): hz=smode[i], dhz= N_PERIOD*i*cmode[i]
+                    double hz_it, dhz_it;
+                    if (it == 0) {
+                        hz_it = 1.0; dhz_it = 0.0;
+                    } else {
+                        int i = (it + 1) / 2;
+                        double ni = double(N_PERIOD * i);
+                        if (it & 1) { hz_it = cmode[i]; dhz_it = -ni * smode[i]; }
+                        else        { hz_it = smode[i]; dhz_it =  ni * cmode[i]; }
+                    }
 #if LUT_VALUES_DELTAS == 1
-            double nxt_v0 = (lut_cache_slot >= 0)
-                ? sh_cache_v_flat[(kv + NV*(0 + N_TOR*(kf + NDEG*0))) * LUT_N_SLOTS + lut_cache_slot]
-                : nl_values[nl_val_idx(0, kf, 0, iv, n_nodes)];
-            double nxt_d0 = (lut_cache_slot >= 0)
-                ? sh_cache_d_flat[(kv + NV*(0 + N_TOR*(kf + NDEG*0))) * LUT_N_SLOTS + lut_cache_slot]
-                : nl_deltas[nl_val_idx(0, kf, 0, iv, n_nodes)];
-            double nxt_v1 = (lut_cache_slot >= 0)
-                ? sh_cache_v_flat[(kv + NV*(0 + N_TOR*(kf + NDEG*1))) * LUT_N_SLOTS + lut_cache_slot]
-                : nl_values[nl_val_idx(1, kf, 0, iv, n_nodes)];
-            double nxt_d1 = (lut_cache_slot >= 0)
-                ? sh_cache_d_flat[(kv + NV*(0 + N_TOR*(kf + NDEG*1))) * LUT_N_SLOTS + lut_cache_slot]
-                : nl_deltas[nl_val_idx(1, kf, 0, iv, n_nodes)];
+                    double raw_v = (lut_cache_slot >= 0)
+                        ? sh_cache_v_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
+                        : nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)];
+                    double val_v = raw_v * sz;
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
+                        : nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)];
+                    double val_d = raw_d * sz;
 #else
-            double nxt_v0 = nl_values[nl_val_idx(0, kf, 0, iv, n_nodes)];
-            double nxt_d0 = nl_deltas[nl_val_idx(0, kf, 0, iv, n_nodes)];
-            double nxt_v1 = nl_values[nl_val_idx(1, kf, 0, iv, n_nodes)];
-            double nxt_d1 = nl_deltas[nl_val_idx(1, kf, 0, iv, n_nodes)];
+                    double val_v = nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)] * sz;
+                    double val_d = nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)] * sz;
 #endif
-
-            for (int it = 0; it < N_TOR; ++it) {
-                // Bring the prefetched registers into the consumption pipeline.
-                double cur_v0 = nxt_v0 * sz;
-                double cur_d0 = nxt_d0 * sz;
-                double cur_v1 = nxt_v1 * sz;
-                double cur_d1 = nxt_d1 * sz;
-
-                // T2: Issue next-iteration loads BEFORE consuming cur_* so
-                // the scheduler can overlap the L2 round-trip with the 8 FMAs
-                // and hz/dhz arithmetic below (~8–12 cycles of compute).
-                if (it + 1 < N_TOR) {
-                    int itn = it + 1;
-#if LUT_VALUES_DELTAS == 1
-                    nxt_v0 = (lut_cache_slot >= 0)
-                        ? sh_cache_v_flat[(kv + NV*(itn + N_TOR*(kf + NDEG*0))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_values[nl_val_idx(0, kf, itn, iv, n_nodes)];
-                    nxt_d0 = (lut_cache_slot >= 0)
-                        ? sh_cache_d_flat[(kv + NV*(itn + N_TOR*(kf + NDEG*0))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_deltas[nl_val_idx(0, kf, itn, iv, n_nodes)];
-                    nxt_v1 = (lut_cache_slot >= 0)
-                        ? sh_cache_v_flat[(kv + NV*(itn + N_TOR*(kf + NDEG*1))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_values[nl_val_idx(1, kf, itn, iv, n_nodes)];
-                    nxt_d1 = (lut_cache_slot >= 0)
-                        ? sh_cache_d_flat[(kv + NV*(itn + N_TOR*(kf + NDEG*1))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_deltas[nl_val_idx(1, kf, itn, iv, n_nodes)];
-#else
-                    nxt_v0 = nl_values[nl_val_idx(0, kf, itn, iv, n_nodes)];
-                    nxt_d0 = nl_deltas[nl_val_idx(0, kf, itn, iv, n_nodes)];
-                    nxt_v1 = nl_values[nl_val_idx(1, kf, itn, iv, n_nodes)];
-                    nxt_d1 = nl_deltas[nl_val_idx(1, kf, itn, iv, n_nodes)];
-#endif
+                    v   += val_v * hz_it;
+                    vp  += val_v * dhz_it;
+                    vd  += val_d * hz_it;
+                    vpd += val_d * dhz_it;
                 }
-
-                // hz/dhz: pure register arithmetic, no memory pressure.
-                // For it=2i-1 (odd):  hz=cmode[i], dhz=-N_PERIOD*i*smode[i]
-                // For it=2i   (even): hz=smode[i], dhz= N_PERIOD*i*cmode[i]
-                double hz_it, dhz_it;
-                if (it == 0) {
-                    hz_it = 1.0; dhz_it = 0.0;
-                } else {
-                    int i = (it + 1) / 2;
-                    double ni = double(N_PERIOD * i);
-                    if (it & 1) { hz_it = cmode[i]; dhz_it = -ni * smode[i]; }
-                    else        { hz_it = smode[i]; dhz_it =  ni * cmode[i]; }
-                }
-
-                // T1: 8 FMAs across both ivars — all independent of the
-                // nxt_* loads issued above, giving the scheduler maximum
-                // freedom to overlap compute with the next L2 round-trip.
-                v0   += cur_v0 * hz_it;   vp0  += cur_v0 * dhz_it;
-                vd0  += cur_d0 * hz_it;   vpd0 += cur_d0 * dhz_it;
-                v1   += cur_v1 * hz_it;   vp1  += cur_v1 * dhz_it;
-                vd1  += cur_d1 * hz_it;   vpd1 += cur_d1 * dhz_it;
+                P[ivar]      += v   * h;    P_s[ivar]   += v   * hs;
+                P_t[ivar]    += v   * ht;   P_phi[ivar] += vp  * h;
+                Pd[ivar]     += vd  * h;    Pd_s[ivar]  += vd  * hs;
+                Pd_t[ivar]   += vd  * ht;   Pd_phi[ivar]+= vpd * h;
             }
 
-            // Scatter both ivars into outer accumulators.
-            P[0]      += v0   * h;    P_s[0]   += v0   * hs;
-            P_t[0]    += v0   * ht;   P_phi[0] += vp0  * h;
-            Pd[0]     += vd0  * h;    Pd_s[0]  += vd0  * hs;
-            Pd_t[0]   += vd0  * ht;   Pd_phi[0]+= vpd0 * h;
-
-            P[1]      += v1   * h;    P_s[1]   += v1   * hs;
-            P_t[1]    += v1   * ht;   P_phi[1] += vp1  * h;
-            Pd[1]     += vd1  * h;    Pd_s[1]  += vd1  * hs;
-            Pd_t[1]   += vd1  * ht;   Pd_phi[1]+= vpd1 * h;
-
-            // T6: nl_x loads were issued before the it loop; their L2 latency
-            // is now fully hidden.  Multiply and accumulate as before.
-            double xR = raw_xR * sz;
-            double xZ = raw_xZ * sz;
+            double xR = nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)] * sz;
+            double xZ = nl_x[nl_x_idx(1, kf, 0, iv, n_nodes)] * sz;
             R   += xR * h;
             R_s += xR * hs;
             R_t += xR * ht;
