@@ -687,15 +687,15 @@ void interp_RZP_1_gpu(const double* __restrict__ nl_x,
     int ie = i_elm_f - 1;       // Element idx, 0-based
 
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[el_vert_idx(kv, ie, n_elements)] - 1;  // Node number, 0-based
+        int iv = __ldg(&el_vertex[el_vert_idx(kv, ie, n_elements)]) - 1;  // Node number, 0-based
         for (int kf = 0; kf < NDEG; ++kf) {
-            double ss = el_size[el_size_idx(kf, kv, ie, n_elements)];
+            double ss = __ldg(&el_size[el_size_idx(kf, kv, ie, n_elements)]);
             double g, gs, gt;
             bf2D_1_scalar(s, t, kf, kv, g, gs, gt);
 
             for (int it = 0; it < N_COORD_TOR; ++it) {
-                double xx1 = nl_x[nl_x_idx(0, kf, it, iv, n_nodes)];
-                double xx2 = nl_x[nl_x_idx(1, kf, it, iv, n_nodes)];
+                double xx1 = __ldg(&nl_x[nl_x_idx(0, kf, it, iv, n_nodes)]);
+                double xx2 = __ldg(&nl_x[nl_x_idx(1, kf, it, iv, n_nodes)]);
                 double hz  = HZ_coord[it];
                 double dhz = HZ_coord_p[it];
 
@@ -760,7 +760,7 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
     // Find the side in elm2 pointing to elm1
     // If elm2 has no neighbour -> elm1 use the last one that is 0 (i.e. the one on the axis itself)
     for (int i = 0; i < NV; ++i) {
-        if (el_neighbours[el_vert_idx(i, ie2, n_elements)] == elm1) {
+        if (__ldg(&el_neighbours[el_vert_idx(i, ie2, n_elements)]) == elm1) {
             side2 = i + 1;
             break;
         }
@@ -769,10 +769,10 @@ void neighbours_side_co_counter_gpu(const int* __restrict__ el_vertex,
         is_nb = true;
         // Determine node numbers of the sides
         // Node numbers are related to sides as node1=(side-1)%4+1, node2=side%4+1
-        int n1a = el_vertex[el_vert_idx((side1 - 1) % 4, ie1, n_elements)];
-        int n1b = el_vertex[el_vert_idx( side1      % 4, ie1, n_elements)];
-        int n2a = el_vertex[el_vert_idx((side2 - 1) % 4, ie2, n_elements)];
-        int n2b = el_vertex[el_vert_idx( side2      % 4, ie2, n_elements)];
+        int n1a = __ldg(&el_vertex[el_vert_idx((side1 - 1) % 4, ie1, n_elements)]);
+        int n1b = __ldg(&el_vertex[el_vert_idx( side1      % 4, ie1, n_elements)]);
+        int n2a = __ldg(&el_vertex[el_vert_idx((side2 - 1) % 4, ie2, n_elements)]);
+        int n2b = __ldg(&el_vertex[el_vert_idx( side2      % 4, ie2, n_elements)]);
         co = (n1a == n2b) || (n1b == n2a);
     }
 }
@@ -795,7 +795,7 @@ void coord_in_neighbour_gpu(const int* __restrict__ el_vertex,
         q_from = (1.0 - st[0] <= st[1]) ? 3 : 4;
     }
 
-    i_to = el_neighbours[el_vert_idx(q_from - 1, i_from - 1, n_elements)];
+    i_to = __ldg(&el_neighbours[el_vert_idx(q_from - 1, i_from - 1, n_elements)]);
     if (i_to <= 0) return;
 
     // Check once more that they are neighbours and determine the orientation
@@ -1108,9 +1108,9 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     // Fused loop: nl_values and nl_deltas processed together, sharing
     // bf2D_1_scalar and element lookups (halves instruction count vs two passes).
     for (int kv = 0; kv < NV; ++kv) {
-        int iv = el_vertex[el_vert_idx(kv, ie, n_elements)] - 1;
+        int iv = __ldg(&el_vertex[el_vert_idx(kv, ie, n_elements)]) - 1;
         for (int kf = 0; kf < NDEG; ++kf) {
-            double sz = el_size[el_size_idx(kf, kv, ie, n_elements)];
+            double sz = __ldg(&el_size[el_size_idx(kf, kv, ie, n_elements)]);
             double h, hs, ht;
             bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
@@ -1132,15 +1132,15 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 #if LUT_VALUES_DELTAS == 1
                     double raw_v = (lut_cache_slot >= 0)
                         ? sh_cache_v_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)];
+                        : __ldg(&nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)]);
                     double val_v = raw_v * sz;
                     double raw_d = (lut_cache_slot >= 0)
                         ? sh_cache_d_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
-                        : nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)];
+                        : __ldg(&nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)]);
                     double val_d = raw_d * sz;
 #else
-                    double val_v = nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)] * sz;
-                    double val_d = nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)] * sz;
+                    double val_v = __ldg(&nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)]) * sz;
+                    double val_d = __ldg(&nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)]) * sz;
 #endif
                     v   += val_v * hz_it;
                     vp  += val_v * dhz_it;
@@ -1153,8 +1153,8 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                 Pd_t[ivar]   += vd  * ht;   Pd_phi[ivar]+= vpd * h;
             }
 
-            double xR = nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)] * sz;
-            double xZ = nl_x[nl_x_idx(1, kf, 0, iv, n_nodes)] * sz;
+            double xR = __ldg(&nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)]) * sz;
+            double xZ = __ldg(&nl_x[nl_x_idx(1, kf, 0, iv, n_nodes)]) * sz;
             R   += xR * h;
             R_s += xR * hs;
             R_t += xR * ht;
@@ -1208,6 +1208,93 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     E[0] -= E[0] * B[0] * Bnorm_inv;
     E[1] -= E[1] * B[1] * Bnorm_inv;
     E[2] -= E[2] * B[2] * Bnorm_inv;
+}
+
+// ---------------------------------------------------------------------------
+// calc_B_only: reduced version of calc_EBpsiU that computes only the magnetic
+// field B at a point. Used by the PROJ phase where E is not needed.
+//
+// Strips compared to calc_EBpsiU:
+//   - nl_deltas (time-interpolation correction to psi)
+//   - ivar=1 accumulators (P[1], P_s[1], P_t[1], P_phi[1] -> U field for E)
+//   - P[0], P_phi[0] (only psi spatial derivatives P_s[0], P_t[0] are used)
+//   - Pd*, P_time, t_norm, time_now/time_prev, flag_static, flag_zero_dpsidt
+//   - dhz_it (only hz_it is needed; no toroidal derivative of psi for B)
+//   - E-field computation and projection
+//   - LUT path (LUT is disabled in the best-performing configuration)
+// ---------------------------------------------------------------------------
+__device__ __noinline__
+void calc_B_only(const double* __restrict__ nl_values,
+                 const double* __restrict__ nl_x,
+                 const int*    __restrict__ el_vertex,
+                 const double* __restrict__ el_size,
+                 int n_elements, int n_nodes,
+                 double F0,
+                 int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
+                 double B[3])
+{
+    // Compact trig: only cmode/smode pairs, no dhz (no toroidal derivative needed).
+    double cmode[NMODE + 1], smode[NMODE + 1];
+    cmode[0] = 1.0; smode[0] = 0.0;
+    sincos(double(N_PERIOD) * phi, &smode[1], &cmode[1]);
+    for (int i = 2; i <= NMODE; ++i) {
+        cmode[i] = cmode[i-1] * cmode[1] - smode[i-1] * smode[1];
+        smode[i] = smode[i-1] * cmode[1] + cmode[i-1] * smode[1];
+    }
+
+    int ie = i_elm_f - 1;
+
+    // Only psi spatial derivatives needed for B.
+    double P_s_0 = 0.0;
+    double P_t_0 = 0.0;
+
+    // Geometry accumulators (R needed for R_inv; R_s, R_t, Z_s, Z_t for jacobian).
+    double R = 0.0, R_s = 0.0, R_t = 0.0;
+    double Z_s = 0.0, Z_t = 0.0;
+
+    for (int kv = 0; kv < NV; ++kv) {
+        int iv = __ldg(&el_vertex[el_vert_idx(kv, ie, n_elements)]) - 1;
+        for (int kf = 0; kf < NDEG; ++kf) {
+            double sz = __ldg(&el_size[el_size_idx(kf, kv, ie, n_elements)]);
+            double h, hs, ht;
+            bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
+
+            // psi field (ivar = 0 only); only v accumulator (no vp since P_phi not needed).
+            double v = 0.0;
+            for (int it = 0; it < N_TOR; ++it) {
+                double hz_it;
+                if (it == 0) {
+                    hz_it = 1.0;
+                } else {
+                    int i = (it + 1) / 2;
+                    hz_it = (it & 1) ? cmode[i] : smode[i];
+                }
+                double val_v = __ldg(&nl_values[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
+                v += val_v * hz_it;
+            }
+            P_s_0 += v * hs;
+            P_t_0 += v * ht;
+
+            // Geometry: R uses h, R_s/R_t use hs/ht; Z only needs Z_s, Z_t.
+            double xR = __ldg(&nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)]) * sz;
+            double xZ = __ldg(&nl_x[nl_x_idx(1, kf, 0, iv, n_nodes)]) * sz;
+            R   += xR * h;
+            R_s += xR * hs;
+            R_t += xR * ht;
+            Z_s += xZ * hs;
+            Z_t += xZ * ht;
+        }
+    }
+
+    double R_inv      = 1.0 / R;
+    double st_jac_inv = 1.0 / (R_s * Z_t - R_t * Z_s);
+
+    double psi_R = ( P_s_0 * Z_t - P_t_0 * Z_s) * st_jac_inv;
+    double psi_Z = (-P_s_0 * R_t + P_t_0 * R_s) * st_jac_inv;
+
+    B[0] =  psi_Z * R_inv;
+    B[1] = -psi_R * R_inv;
+    B[2] =  F0    * R_inv;
 }
 
 // ---------------------------------------------------------------------------
@@ -1422,7 +1509,7 @@ void lut_build_cooperative(int i_elm_thread,
         for (int s = 0; s < LUT_N_SLOTS; ++s) {
             int elm = sh_lut_keys[s];
             for (int kv = 0; kv < NV; ++kv)
-                ivs[s][kv] = (elm > 0) ? (el_vertex[el_vert_idx(kv, elm - 1, n_elements)] - 1) : -1;
+                ivs[s][kv] = (elm > 0) ? (__ldg(&el_vertex[el_vert_idx(kv, elm - 1, n_elements)]) - 1) : -1;
         }
 
         int total = LUT_SLOT_SIZE * LUT_N_SLOTS;
@@ -1440,8 +1527,8 @@ void lut_build_cooperative(int i_elm_thread,
             int ivar_l = tmp;
             int node   = ivs[s][kv_l];
             int gi     = nl_val_idx(ivar_l, kf_l, it_l, node, n_nodes);
-            sh_cache_v[f] = nl_values[gi];
-            sh_cache_d[f] = nl_deltas[gi];
+            sh_cache_v[f] = __ldg(&nl_values[gi]);
+            sh_cache_d[f] = __ldg(&nl_deltas[gi]);
         }
     }
     __syncthreads();
@@ -1567,20 +1654,12 @@ void evolve_batch_kernel(
             double inv_denom_v = rsqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
             double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
 
-            double E_loc[3], B_loc[3];
-            calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
+            double B_loc[3];
+            calc_B_only(nl_values, nl_x, el_vertex, el_size,
                         n_elements, n_nodes,
-                        time_now, time_prev, flag_static, flag_zero_dpsidt,
-                        F0, t_norm,
-                        i_elm, st, x[2], sim_time,
-                        E_loc, B_loc
-#if LUT_VALUES_DELTAS == 1
-                        , sh_lut_keys, sh_cache_v, sh_cache_d
-#endif
-#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
-                        , &sh_hits, &sh_misses
-#endif
-                        );
+                        F0,
+                        i_elm, st, x[2],
+                        B_loc);
 
             double Bnorm_inv = rsqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
             double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
@@ -1603,7 +1682,7 @@ void evolve_batch_kernel(
             for (int n = 0; n < NDEG; ++n) {
                 for (int m = 0; m < NV; ++m) {
                     double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
-                                       * el_size[el_size_idx(n, m, ie, n_elements)]
+                                       * __ldg(&el_size[el_size_idx(n, m, ie, n_elements)])
                                        * w;
 
                     for (int it = 0; it < N_TOR; ++it) {
