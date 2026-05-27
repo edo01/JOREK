@@ -108,8 +108,8 @@ int idx5(int i0, int i1, int i2, int i3, int i4,
 //         : (n_elements, NDEG, NV)   if ELEMENTS_FIRST=1
 //
 // feedback_rhs:
-//         : (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR) if FB_ELEMENTS_FIRST=0  [lane fastest]
-//         : (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR) if FB_ELEMENTS_FIRST=1  [n_elements fastest, lane second]
+//         : (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements) if FB_ELEMENTS_FIRST=0  [lane fastest, n_elements slowest]
+//         : (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG) if FB_ELEMENTS_FIRST=1  [n_elements fastest, lane second]
 // When FB_LANE_FANOUT==1, the lane axis vanishes and the layout matches the original 5-D shape.
 // After the batch loop, reduce_feedback_lanes sums the FB_LANE_FANOUT replicas into a compact
 // (lane-free) output buffer that matches the host-side shape, so the Fortran caller is unchanged.
@@ -172,41 +172,42 @@ static_assert(FB_LANE_FANOUT >= 1 && (FB_LANE_FANOUT & (FB_LANE_FANOUT - 1)) == 
 static_assert(32 % FB_LANE_FANOUT == 0, "FB_LANE_FANOUT must divide warp size 32");
 
 // feedback_rhs index (atomic-target layout, lane fan-out): signature (lane, ie, n, m, it, var)
-// FB_ELEMENTS_FIRST=0: layout (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR) — lane fastest
-// FB_ELEMENTS_FIRST=1: layout (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR) — n_elements fastest, lane second
+// FB_ELEMENTS_FIRST=0: layout (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements) — lane fastest, n_elements slowest
+// FB_ELEMENTS_FIRST=1: layout (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG) — n_elements fastest, lane second
 __device__ __host__ __forceinline__
 int fb_idx(int lane, int ie, int n, int m, int it, int var, int n_elements)
 {
 #if FB_ELEMENTS_FIRST == 1
-    // (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR) — flatten manually
+    // (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG) — flatten manually
     int s = ie;
     s += n_elements * (lane
-       + FB_LANE_FANOUT * (n
-       + NDEG * (m
-       + NV * (it
-       + N_TOR * var))));
+       + FB_LANE_FANOUT * (var
+       + NVAR * (it
+       + N_TOR * (m
+       + NV * n))));
     return s;
 #else
-    // (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR)
+    // (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements)
     int s = lane;
-    s += FB_LANE_FANOUT * (n
-       + NDEG * (m
-       + NV * (ie
-       + n_elements * (it
-       + N_TOR * var))));
+    s += FB_LANE_FANOUT * (var
+       + NVAR * (it
+       + N_TOR * (m
+       + NV * (n
+       + NDEG * ie))));
     return s;
 #endif
 }
 
 // Compact (lane-reduced) feedback_rhs index, signature (ie, n, m, it, var).
-// This matches the original pre-fanout layout and is what we copy back to the host.
+// FB_ELEMENTS_FIRST=0: layout (NVAR, N_TOR, NV, NDEG, n_elements) — var fastest, ie slowest
+// FB_ELEMENTS_FIRST=1: layout (n_elements, NVAR, N_TOR, NV, NDEG) — ie fastest, n slowest
 __device__ __host__ __forceinline__
 int fb_idx_compact(int ie, int n, int m, int it, int var, int n_elements)
 {
 #if FB_ELEMENTS_FIRST == 1
-    return idx5(ie, n, m, it, var, n_elements, NDEG, NV, N_TOR);
+    return idx5(ie, var, it, m, n, n_elements, NVAR, N_TOR, NV);
 #else
-    return idx5(n, m, ie, it, var, NDEG, NV, n_elements, N_TOR);
+    return idx5(var, it, m, n, ie, NVAR, N_TOR, NV, NDEG);
 #endif
 }
 
@@ -1577,7 +1578,7 @@ void lut_build_cooperative(int i_elm_thread,
 // One thread per output cell. The thread linear id `tid` is decoded so that
 // consecutive `tid` maps to consecutive *output* memory:
 //   FB_ELEMENTS_FIRST=1: ie varies fastest -> 32-wide coalesced stores.
-//   FB_ELEMENTS_FIRST=0: n (NDEG) varies fastest -> matches host column-major.
+//   FB_ELEMENTS_FIRST=0: var (NVAR) varies fastest -> matches host column-major.
 // The inner loop over `lane` reads FB_LANE_FANOUT contiguous doubles per
 // thread (lane is the fastest axis on the fat input side), so input traffic
 // is also tight.
@@ -1593,21 +1594,21 @@ void reduce_feedback_lanes(const double* __restrict__ fb_fat,
 
     int ie, n, m, it, var;
 #if FB_ELEMENTS_FIRST == 1
-    // Output: (n_elements, NDEG, NV, N_TOR, NVAR), ie fastest.
+    // Output: (n_elements, NVAR, N_TOR, NV, NDEG), ie fastest.
     long long t = tid;
-    ie = (int)(t % n_elements);  t /= n_elements;
-    n  = (int)(t % NDEG);         t /= NDEG;
-    m  = (int)(t % NV);           t /= NV;
-    it = (int)(t % N_TOR);        t /= N_TOR;
-    var = (int)t;
+    ie  = (int)(t % n_elements);  t /= n_elements;
+    var = (int)(t % NVAR);        t /= NVAR;
+    it  = (int)(t % N_TOR);       t /= N_TOR;
+    m   = (int)(t % NV);          t /= NV;
+    n   = (int)t;
 #else
-    // Output: (NDEG, NV, n_elements, N_TOR, NVAR), n fastest.
+    // Output: (NVAR, N_TOR, NV, NDEG, n_elements), var fastest.
     long long t = tid;
-    n  = (int)(t % NDEG);         t /= NDEG;
-    m  = (int)(t % NV);           t /= NV;
-    ie = (int)(t % n_elements);   t /= n_elements;
-    it = (int)(t % N_TOR);        t /= N_TOR;
-    var = (int)t;
+    var = (int)(t % NVAR);        t /= NVAR;
+    it  = (int)(t % N_TOR);       t /= N_TOR;
+    m   = (int)(t % NV);          t /= NV;
+    n   = (int)(t % NDEG);        t /= NDEG;
+    ie  = (int)t;
 #endif
 
     double sum = 0.0;
@@ -1627,8 +1628,8 @@ void reduce_feedback_lanes(const double* __restrict__ fb_fat,
 //   p_i_elm[j], p_weight[j], p_q[j]
 //
 // feedback_rhs layout (column-major, 0-based) — see fb_idx() for the lane-fanout aware form:
-//   FB_ELEMENTS_FIRST=1: (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR)
-//   FB_ELEMENTS_FIRST=0: (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR)
+//   FB_ELEMENTS_FIRST=1: (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG)
+//   FB_ELEMENTS_FIRST=0: (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements)
 // The host-visible (compact) layout drops the lane axis and is restored by reduce_feedback_lanes.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------

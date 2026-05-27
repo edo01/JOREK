@@ -331,10 +331,10 @@ contains
     real(c_double) :: tstep_part_adj_c
     integer(c_int) :: nstep_part_adj_c
 
-    ! Feedback buffer with n_elements first for GPU warp coalescing:
-    !   fb_c(n_elements, n_degrees, n_vertex_max, n_tor, 3)     (3 vars for P_par, P_perp, j_Phi)
+    ! Feedback buffer; layout chosen for GPU coalescing (see allocation below).
+    ! 3 vars for P_par, P_perp, j_Phi.
     integer :: n_elements
-    integer :: kfb, kvb                  ! loop indices for fb_c copy-back
+    integer :: kfb, kvb, itb, ieb        ! loop indices for fb_c copy-back
     real(c_double), allocatable, target :: fb_c(:,:,:,:,:)
   
   #if GPU_DEBUG
@@ -428,14 +428,14 @@ contains
     ! --- Allocate compact 3-variable feedback buffer for GPU (P_par, P_perp, j_Phi only) ---
     ! GPU kernel uses 3 compact variables (0=P_par, 1=P_perp, 2=j_Phi); the full
     ! feedback_rhs has more variables that are not needed on the GPU side.
-    ! Layout matches FB_ELEMENTS_FIRST define:
-    !   FB_ELEMENTS_FIRST=1: (n_elements, n_degrees, n_vertex_max, n_tor, 3)
-    !   FB_ELEMENTS_FIRST=0: (n_degrees, n_vertex_max, n_elements, n_tor, 3)
+    ! Layout matches FB_ELEMENTS_FIRST define (Fortran shape lists axes fastest -> slowest):
+    !   FB_ELEMENTS_FIRST=1: (n_elements, 3, n_tor, n_vertex_max, n_degrees)
+    !   FB_ELEMENTS_FIRST=0: (3, n_tor, n_vertex_max, n_degrees, n_elements)
 #include "optimization_defines.h"
 #if FB_ELEMENTS_FIRST == 1
-    allocate(fb_c(n_elements, n_degrees, n_vertex_max, n_tor, 3))
+    allocate(fb_c(n_elements, 3, n_tor, n_vertex_max, n_degrees))
 #else
-    allocate(fb_c(n_degrees, n_vertex_max, n_elements, n_tor, 3))
+    allocate(fb_c(3, n_tor, n_vertex_max, n_degrees, n_elements))
 #endif
     fb_c = 0.0_c_double
 
@@ -506,33 +506,49 @@ contains
     ! GPU slot mapping: 1=P_par, 2=P_perp, 3=j_Phi (1-based Fortran indexing into compact fb_c)
 #if GPU_DEBUG
     if (sim%my_id == 0) then
-      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(:,:,:,:,1)))
-      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(:,:,:,:,2)))
-      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c j_Phi|_max  = ', maxval(abs(fb_c(:,:,:,:,3)))
+#if FB_ELEMENTS_FIRST == 1
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(:,1,:,:,:)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(:,2,:,:,:)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c j_Phi|_max  = ', maxval(abs(fb_c(:,3,:,:,:)))
+#else
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_par|_max  = ', maxval(abs(fb_c(1,:,:,:,:)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c P_perp|_max = ', maxval(abs(fb_c(2,:,:,:,:)))
+      write(*,'(A,ES14.6)') '[GPU_DEBUG Fortran] |fb_c j_Phi|_max  = ', maxval(abs(fb_c(3,:,:,:,:)))
+#endif
     end if
 #endif
 
     ! --- Accumulate GPU result into feedback_rhs ---
     ! fb_c has 3 compact GPU variables: slot 1=P_par, 2=P_perp, 3=j_Phi (1-based).
-    ! Layout depends on FB_ELEMENTS_FIRST:
-    !   FB_ELEMENTS_FIRST=1: fb_c(n_elements, n_degrees, n_vertex_max, n_tor, 3)
-    !   FB_ELEMENTS_FIRST=0: fb_c(n_degrees, n_vertex_max, n_elements, n_tor, 3)
+    ! Layout depends on FB_ELEMENTS_FIRST (Fortran shape, fastest -> slowest):
+    !   FB_ELEMENTS_FIRST=1: fb_c(n_elements, 3, n_tor, n_vertex_max, n_degrees)
+    !   FB_ELEMENTS_FIRST=0: fb_c(3, n_tor, n_vertex_max, n_degrees, n_elements)
     ! feedback_rhs always has Fortran column-major layout: (n_degrees, n_vertex_max, n_elements_total, n_tor, n_var).
 #include "optimization_defines.h"
 #if FB_ELEMENTS_FIRST == 1
-    ! fb_c(ie, kf, kv, it, var) -> feedback_rhs(kf, kv, ie, it, var)
-    do kvb = 1, n_vertex_max
-      do kfb = 1, n_degrees
-        feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, kfb, kvb, :, 1)
-        feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(kfb, kvb, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, kfb, kvb, :, 2)
-        feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, kfb, kvb, :, 3)
+    ! fb_c(ie, var, it, kv, kf) -> feedback_rhs(kf, kv, ie, it, var_idx)
+    do kfb = 1, n_degrees
+      do kvb = 1, n_vertex_max
+        do itb = 1, n_tor
+          feedback_rhs(kfb, kvb, 1:n_elements, itb, P_par_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, itb, P_par_idx_kin)  + fb_c(:, 1, itb, kvb, kfb)
+          feedback_rhs(kfb, kvb, 1:n_elements, itb, P_perp_idx_kin) = feedback_rhs(kfb, kvb, 1:n_elements, itb, P_perp_idx_kin) + fb_c(:, 2, itb, kvb, kfb)
+          feedback_rhs(kfb, kvb, 1:n_elements, itb, j_Phi_idx_kin)  = feedback_rhs(kfb, kvb, 1:n_elements, itb, j_Phi_idx_kin)  + fb_c(:, 3, itb, kvb, kfb)
+        end do
       end do
     end do
 #else
-    ! fb_c(kf, kv, ie, it, var) -> feedback_rhs(kf, kv, ie, it, var) — same layout, direct slice accumulation
-    feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, P_par_idx_kin)  + fb_c(:, :, :, :, 1)
-    feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) = feedback_rhs(:, :, 1:n_elements, :, P_perp_idx_kin) + fb_c(:, :, :, :, 2)
-    feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  = feedback_rhs(:, :, 1:n_elements, :, j_Phi_idx_kin)  + fb_c(:, :, :, :, 3)
+    ! fb_c(var, it, kv, kf, ie) -> feedback_rhs(kf, kv, ie, it, var_idx)
+    do ieb = 1, n_elements
+      do kfb = 1, n_degrees
+        do kvb = 1, n_vertex_max
+          do itb = 1, n_tor
+            feedback_rhs(kfb, kvb, ieb, itb, P_par_idx_kin)  = feedback_rhs(kfb, kvb, ieb, itb, P_par_idx_kin)  + fb_c(1, itb, kvb, kfb, ieb)
+            feedback_rhs(kfb, kvb, ieb, itb, P_perp_idx_kin) = feedback_rhs(kfb, kvb, ieb, itb, P_perp_idx_kin) + fb_c(2, itb, kvb, kfb, ieb)
+            feedback_rhs(kfb, kvb, ieb, itb, j_Phi_idx_kin)  = feedback_rhs(kfb, kvb, ieb, itb, j_Phi_idx_kin)  + fb_c(3, itb, kvb, kfb, ieb)
+          end do
+        end do
+      end do
+    end do
 #endif
 
     ! --- Copy updated particle data back to AoS ---
