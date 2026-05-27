@@ -15,3 +15,5 @@
 #define NODES_FIRST       0
 #define ELEMENTS_FIRST    0
 #define FB_ELEMENTS_FIRST 1
+
+#define FB_LANE_FANOUT 4

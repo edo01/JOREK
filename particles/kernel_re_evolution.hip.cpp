@@ -7,6 +7,7 @@
 // =============================================================================
 #include <hip/hip_runtime.h>
 #include <algorithm>
+#include <climits>
 #include <cstdint>
 #include <cmath>
 #include "models/mod_settings.h"
@@ -107,8 +108,11 @@ int idx5(int i0, int i1, int i2, int i3, int i4,
 //         : (n_elements, NDEG, NV)   if ELEMENTS_FIRST=1
 //
 // feedback_rhs:
-//         : (NDEG, NV, n_elements, N_TOR, NVAR) if FB_ELEMENTS_FIRST=0  [Fortran column-major]
-//         : (n_elements, NDEG, NV, N_TOR, NVAR) if FB_ELEMENTS_FIRST=1  [n_elements fastest]
+//         : (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR) if FB_ELEMENTS_FIRST=0  [lane fastest]
+//         : (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR) if FB_ELEMENTS_FIRST=1  [n_elements fastest, lane second]
+// When FB_LANE_FANOUT==1, the lane axis vanishes and the layout matches the original 5-D shape.
+// After the batch loop, reduce_feedback_lanes sums the FB_LANE_FANOUT replicas into a compact
+// (lane-free) output buffer that matches the host-side shape, so the Fortran caller is unchanged.
 // ---------------------------------------------------------------------------
 
 // nl_x index: logical signature (idim, kf, it, iv) — all 0-based
@@ -163,11 +167,41 @@ int el_size_idx(int kf, int kv, int ie, int n_elements)
 #endif
 }
 
-// feedback_rhs index: logical signature (ie, n, m, it, var) — all 0-based
-// FB_ELEMENTS_FIRST=0: layout (NDEG, NV, n_elements, N_TOR, NVAR) — n fastest [Fortran column-major]
-// FB_ELEMENTS_FIRST=1: layout (n_elements, NDEG, NV, N_TOR, NVAR) — ie fastest
+static_assert(FB_LANE_FANOUT >= 1 && (FB_LANE_FANOUT & (FB_LANE_FANOUT - 1)) == 0,
+              "FB_LANE_FANOUT must be a power of two");
+static_assert(32 % FB_LANE_FANOUT == 0, "FB_LANE_FANOUT must divide warp size 32");
+
+// feedback_rhs index (atomic-target layout, lane fan-out): signature (lane, ie, n, m, it, var)
+// FB_ELEMENTS_FIRST=0: layout (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR) — lane fastest
+// FB_ELEMENTS_FIRST=1: layout (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR) — n_elements fastest, lane second
 __device__ __host__ __forceinline__
-int fb_idx(int ie, int n, int m, int it, int var, int n_elements)
+int fb_idx(int lane, int ie, int n, int m, int it, int var, int n_elements)
+{
+#if FB_ELEMENTS_FIRST == 1
+    // (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR) — flatten manually
+    int s = ie;
+    s += n_elements * (lane
+       + FB_LANE_FANOUT * (n
+       + NDEG * (m
+       + NV * (it
+       + N_TOR * var))));
+    return s;
+#else
+    // (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR)
+    int s = lane;
+    s += FB_LANE_FANOUT * (n
+       + NDEG * (m
+       + NV * (ie
+       + n_elements * (it
+       + N_TOR * var))));
+    return s;
+#endif
+}
+
+// Compact (lane-reduced) feedback_rhs index, signature (ie, n, m, it, var).
+// This matches the original pre-fanout layout and is what we copy back to the host.
+__device__ __host__ __forceinline__
+int fb_idx_compact(int ie, int n, int m, int it, int var, int n_elements)
 {
 #if FB_ELEMENTS_FIRST == 1
     return idx5(ie, n, m, it, var, n_elements, NDEG, NV, N_TOR);
@@ -1536,6 +1570,55 @@ void lut_build_cooperative(int i_elm_thread,
 #endif
 
 // ---------------------------------------------------------------------------
+// reduce_feedback_lanes: sum the FB_LANE_FANOUT replicas of each
+// (ie, n, m, it, var) cell into a single value, writing to the compact
+// (lane-free) output buffer that the host expects.
+//
+// One thread per output cell. The thread linear id `tid` is decoded so that
+// consecutive `tid` maps to consecutive *output* memory:
+//   FB_ELEMENTS_FIRST=1: ie varies fastest -> 32-wide coalesced stores.
+//   FB_ELEMENTS_FIRST=0: n (NDEG) varies fastest -> matches host column-major.
+// The inner loop over `lane` reads FB_LANE_FANOUT contiguous doubles per
+// thread (lane is the fastest axis on the fat input side), so input traffic
+// is also tight.
+// ---------------------------------------------------------------------------
+__global__
+void reduce_feedback_lanes(const double* __restrict__ fb_fat,
+                           double* __restrict__ fb_out,
+                           int n_elements)
+{
+    long long tid = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long total = (long long)n_elements * NDEG * NV * N_TOR * NVAR;
+    if (tid >= total) return;
+
+    int ie, n, m, it, var;
+#if FB_ELEMENTS_FIRST == 1
+    // Output: (n_elements, NDEG, NV, N_TOR, NVAR), ie fastest.
+    long long t = tid;
+    ie = (int)(t % n_elements);  t /= n_elements;
+    n  = (int)(t % NDEG);         t /= NDEG;
+    m  = (int)(t % NV);           t /= NV;
+    it = (int)(t % N_TOR);        t /= N_TOR;
+    var = (int)t;
+#else
+    // Output: (NDEG, NV, n_elements, N_TOR, NVAR), n fastest.
+    long long t = tid;
+    n  = (int)(t % NDEG);         t /= NDEG;
+    m  = (int)(t % NV);           t /= NV;
+    ie = (int)(t % n_elements);   t /= n_elements;
+    it = (int)(t % N_TOR);        t /= N_TOR;
+    var = (int)t;
+#endif
+
+    double sum = 0.0;
+    #pragma unroll
+    for (int lane = 0; lane < FB_LANE_FANOUT; ++lane) {
+        sum += fb_fat[fb_idx(lane, ie, n, m, it, var, n_elements)];
+    }
+    fb_out[fb_idx_compact(ie, n, m, it, var, n_elements)] = sum;
+}
+
+// ---------------------------------------------------------------------------
 // evolve_REs_kernel: each thread evolves one particle through all time steps.
 // feedback_rhs accumulation uses atomicAdd.
 //
@@ -1543,9 +1626,10 @@ void lut_build_cooperative(int i_elm_thread,
 //   p_x[j + num_particles*dim], p_p[j + num_particles*dim], p_st[j + num_particles*dim]  (0-based j, dim)
 //   p_i_elm[j], p_weight[j], p_q[j]
 //
-// feedback_rhs layout (column-major, 0-based):
-//   (n_elements, NDEG, NV, N_TOR, NVAR)  -- n_elements first for GPU coalescing
-//   feedback_rhs[ie + n_elements*(n + NDEG*(m + NV*(it + N_TOR*var)))]
+// feedback_rhs layout (column-major, 0-based) — see fb_idx() for the lane-fanout aware form:
+//   FB_ELEMENTS_FIRST=1: (n_elements, FB_LANE_FANOUT, NDEG, NV, N_TOR, NVAR)
+//   FB_ELEMENTS_FIRST=0: (FB_LANE_FANOUT, NDEG, NV, n_elements, N_TOR, NVAR)
+// The host-visible (compact) layout drops the lane axis and is restored by reduce_feedback_lanes.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // evolve_batch_kernel: fused proj+push kernel that runs nsteps kinetic steps
@@ -1679,6 +1763,10 @@ void evolve_batch_kernel(
             double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
 
             int ie = i_elm - 1;
+            // Lane-fanout: spread the FB_LANE_FANOUT replicas of each (ie,n,m,it,var)
+            // across warp lanes so warps that share an `ie` (very common at step 0 of
+            // each batch, where particles are freshly sorted) hit distinct addresses.
+            const int fb_lane = threadIdx.x & (FB_LANE_FANOUT - 1);
             for (int n = 0; n < NDEG; ++n) {
                 for (int m = 0; m < NV; ++m) {
                     double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
@@ -1688,9 +1776,9 @@ void evolve_batch_kernel(
                     for (int it = 0; it < N_TOR; ++it) {
                         double hz = HZ_proj[it];
 
-                        atomicAdd(&feedback_rhs[fb_idx(ie, n, m, it, P_PAR_IDX,  n_elements)], hz * v_Ppar  * proj_factor);
-                        atomicAdd(&feedback_rhs[fb_idx(ie, n, m, it, P_PERP_IDX, n_elements)], hz * v_Pperp * proj_factor);
-                        atomicAdd(&feedback_rhs[fb_idx(ie, n, m, it, J_PHI_IDX,  n_elements)], hz * v_jPhi  * proj_factor);
+                        atomicAdd(&feedback_rhs[fb_idx(fb_lane, ie, n, m, it, P_PAR_IDX,  n_elements)], hz * v_Ppar  * proj_factor);
+                        atomicAdd(&feedback_rhs[fb_idx(fb_lane, ie, n, m, it, P_PERP_IDX, n_elements)], hz * v_Pperp * proj_factor);
+                        atomicAdd(&feedback_rhs[fb_idx(fb_lane, ie, n, m, it, J_PHI_IDX,  n_elements)], hz * v_jPhi  * proj_factor);
                     }
                 }
             }
@@ -1883,7 +1971,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_el_neigh  = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_size   = (size_t)n_elements * NV   * NDEG * sizeof(double);
 
-    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
+    const size_t sz_feedback_compact = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
+    const size_t sz_feedback   = sz_feedback_compact * FB_LANE_FANOUT;
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
 
     if(sim.my_id == 0) {
@@ -1898,7 +1987,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         printf("[Array Dimensions] el_vertex: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_vertex), (size_t)n_elements, NV, sizeof(int));
         printf("[Array Dimensions] el_neigh: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_neigh), (size_t)n_elements, NV, sizeof(int));
         printf("[Array Dimensions] el_size: %.2f KB (%zu * %d * %d * %zu)\n", TO_KB(sz_el_size), (size_t)n_elements, NV, NDEG, sizeof(double));
-        printf("[Array Dimensions] feedback: %.2f KB (%d * %d * %zu * %d * %d * %zu)\n", TO_KB(sz_feedback), NDEG, NV, (size_t)n_elements, N_TOR, NVAR, sizeof(double));
+        printf("[Array Dimensions] feedback (fat, x FB_LANE_FANOUT=%d): %.2f KB ; compact: %.2f KB\n",
+               FB_LANE_FANOUT, TO_KB(sz_feedback), TO_KB(sz_feedback_compact));
 #if NODES_FIRST == 1
         printf("[Layout] NODES_FIRST=1   : nl_x/values/deltas have n_nodes as fastest dim\n");
 #else
@@ -1923,7 +2013,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     double *d_nl_x, *d_nl_values, *d_nl_deltas;
     int    *d_el_vertex, *d_el_neighbours;
     double *d_el_size;
-    double *d_feedback_rhs;
+    double *d_feedback_rhs;       // fat accumulation buffer (with FB_LANE_FANOUT replicas)
+    double *d_feedback_rhs_out;   // compact buffer returned to host
     int    *d_mode_coord;
 
     
@@ -1968,8 +2059,9 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_el_neighbours, sz_el_neigh));
     HIP_CHECK(hipMalloc(&d_el_size,       sz_el_size));
 
-    HIP_CHECK(hipMalloc(&d_feedback_rhs, sz_feedback));
-    HIP_CHECK(hipMalloc(&d_mode_coord,   sz_mode_coord));
+    HIP_CHECK(hipMalloc(&d_feedback_rhs,     sz_feedback));
+    HIP_CHECK(hipMalloc(&d_feedback_rhs_out, sz_feedback_compact));
+    HIP_CHECK(hipMalloc(&d_mode_coord,       sz_mode_coord));
 
 
     // --- Allocate sorting buffers ---
@@ -2023,7 +2115,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(d_el_neighbours, el.neighbours, sz_el_neigh,  hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_el_size,       el.size,       sz_el_size,   hipMemcpyHostToDevice));
 
-    HIP_CHECK(hipMemcpy(d_feedback_rhs, h_feedback_rhs,       sz_feedback,   hipMemcpyHostToDevice));
+    // Fortran caller (mod_particle_evolution.f90) always zero-inits fb_c before this call,
+    // so the fat accumulation buffer just gets zeroed; we never have to fan the host data
+    // out into per-lane replicas.
+    HIP_CHECK(hipMemset(d_feedback_rhs, 0, sz_feedback));
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
@@ -2123,6 +2218,32 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps, %d sorts): %.3f ms\n",
            sim.my_id, nstep_particles, sort_call_count, elapsed_ms);
 
+    // --- Reduce the FB_LANE_FANOUT replicas into the compact output buffer ---
+    {
+        hipEvent_t r_start, r_stop;
+        HIP_CHECK(hipEventCreate(&r_start));
+        HIP_CHECK(hipEventCreate(&r_stop));
+        HIP_CHECK(hipEventRecord(r_start, 0));
+
+        long long total = (long long)n_elements * NDEG * NV * N_TOR * NVAR;
+        int reduce_block = 256;
+        long long reduce_grid_ll = (total + reduce_block - 1) / reduce_block;
+        // Guard against oversize grid (very unlikely given typical sizes).
+        int reduce_grid = (reduce_grid_ll > (long long)INT_MAX) ? INT_MAX : (int)reduce_grid_ll;
+        hipLaunchKernelGGL(reduce_feedback_lanes,
+                           dim3(reduce_grid), dim3(reduce_block), 0, 0,
+                           d_feedback_rhs, d_feedback_rhs_out, n_elements);
+        HIP_CHECK(hipEventRecord(r_stop, 0));
+        HIP_CHECK(hipEventSynchronize(r_stop));
+        float reduce_ms = 0.0f;
+        HIP_CHECK(hipEventElapsedTime(&reduce_ms, r_start, r_stop));
+        if (sim.my_id == 0)
+            printf("[launch_evolve_REs rank %d] reduce_feedback_lanes (FB_LANE_FANOUT=%d): %.3f ms\n",
+                   sim.my_id, FB_LANE_FANOUT, reduce_ms);
+        HIP_CHECK(hipEventDestroy(r_start));
+        HIP_CHECK(hipEventDestroy(r_stop));
+    }
+
     // --- Copy results back: device -> host ---
     HIP_CHECK(hipEventRecord(t_start, 0));
     HIP_CHECK(hipMemcpy(part->x,       d_x,            sz_x,        hipMemcpyDeviceToHost));
@@ -2130,7 +2251,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(part->st,      d_st,           sz_st,       hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm,        sz_i_elm,    hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->weight,  d_weight,       sz_weight,   hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs, sz_feedback, hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs_out, sz_feedback_compact, hipMemcpyDeviceToHost));
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
@@ -2165,6 +2286,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_el_neighbours));
     HIP_CHECK(hipFree(d_el_size));
     HIP_CHECK(hipFree(d_feedback_rhs));
+    HIP_CHECK(hipFree(d_feedback_rhs_out));
     HIP_CHECK(hipFree(d_mode_coord));
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     HIP_CHECK(hipFree(d_lut_hits));
