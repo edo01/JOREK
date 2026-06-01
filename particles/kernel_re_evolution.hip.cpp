@@ -2124,7 +2124,11 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
-    // printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, elapsed_ms);
+    const float h2d_ms = elapsed_ms;
+#if GPU_DEBUG == 1
+    if (sim.my_id == 0)
+        printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, h2d_ms);
+#endif
 
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     unsigned long long *d_lut_hits = nullptr, *d_lut_misses = nullptr;
@@ -2143,6 +2147,17 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int sort_call_count = 0;
 
+#if GPU_DEBUG == 1
+    // --- Phase-breakdown accumulators (summed over all batches) ---
+    // Each batch is: sort -> evolve_batch_kernel.  We time both with dedicated
+    // events so the per-phase totals are clean (no stale carry-over).
+    float total_sort_ms   = 0.0f;
+    float total_evolve_ms = 0.0f;
+    hipEvent_t t_evolve_start, t_evolve_stop;
+    HIP_CHECK(hipEventCreate(&t_evolve_start));
+    HIP_CHECK(hipEventCreate(&t_evolve_stop));
+#endif
+
     HIP_CHECK(hipEventRecord(t_start, 0));
     for (int k = 0; k < nstep_particles; k += STEPS_PER_BATCH) {
         if(sim.my_id == 0)
@@ -2156,22 +2171,27 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         //     write_i_elm_snapshot(part->i_elm, num_particles, k/STEPS_PER_BATCH+1, "before_sort");
         // }
 
+#if GPU_DEBUG == 1
         hipEvent_t t_sort_start, t_sort_stop;
         HIP_CHECK(hipEventCreate(&t_sort_start));
         HIP_CHECK(hipEventCreate(&t_sort_stop));
         HIP_CHECK(hipEventRecord(t_sort_start, 0));
+#endif
         sort_particles_by_i_elm_gpu(
             d_x, d_p, d_st, d_i_elm, d_weight,
             d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
             num_particles, d_hist, d_offsets, d_cursors,
             d_block_sums, d_block_offsets);
+        ++sort_call_count;
+#if GPU_DEBUG == 1
         HIP_CHECK(hipEventRecord(t_sort_stop, 0));
         HIP_CHECK(hipEventSynchronize(t_sort_stop));
         float sort_ms = 0.0f;
         HIP_CHECK(hipEventElapsedTime(&sort_ms, t_sort_start, t_sort_stop));
-        ++sort_call_count;
+        total_sort_ms += sort_ms;
         HIP_CHECK(hipEventDestroy(t_sort_start));
         HIP_CHECK(hipEventDestroy(t_sort_stop));
+#endif
 
         // if(sim.my_id == 0) {
         //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
@@ -2179,6 +2199,9 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         // }
 
         // Fused batch kernel: runs batch steps, reads+writes d_x/d_p/d_st/d_i_elm in-place.
+#if GPU_DEBUG == 1
+        HIP_CHECK(hipEventRecord(t_evolve_start, 0));
+#endif
         hipLaunchKernelGGL(evolve_batch_kernel,
             dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
             d_x, d_p, d_st, d_i_elm, d_weight, charge,
@@ -2191,7 +2214,16 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             , d_lut_hits, d_lut_misses
 #endif
             );
+        HIP_CHECK(hipGetLastError());
+#if GPU_DEBUG == 1
+        HIP_CHECK(hipEventRecord(t_evolve_stop, 0));
+        HIP_CHECK(hipEventSynchronize(t_evolve_stop));
+        float evolve_ms = 0.0f;
+        HIP_CHECK(hipEventElapsedTime(&evolve_ms, t_evolve_start, t_evolve_stop));
+        total_evolve_ms += evolve_ms;
+#else
         HIP_CHECK(hipDeviceSynchronize());
+#endif
 
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
         {
@@ -2208,23 +2240,43 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         }
 #endif
 
+#if GPU_DEBUG == 1
         if(sim.my_id == 0)
-            printf("[launch_evolve_REs rank %d] Finished batch %d / %d (particle steps %d to %d): %.3f ms (sort: %.3f ms)\n",
+            printf("[launch_evolve_REs rank %d] Finished batch %d / %d (particle steps %d to %d): evolve %.3f ms, sort %.3f ms\n",
                sim.my_id, sort_call_count, (nstep_particles + STEPS_PER_BATCH - 1) / STEPS_PER_BATCH,
-               k, std::min(k + STEPS_PER_BATCH, nstep_particles), elapsed_ms, sort_ms);
+               k, std::min(k + STEPS_PER_BATCH, nstep_particles), evolve_ms, sort_ms);
+#endif
     }
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
-    printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps, %d sorts): %.3f ms\n",
-           sim.my_id, nstep_particles, sort_call_count, elapsed_ms);
+#if GPU_DEBUG == 1
+    HIP_CHECK(hipEventDestroy(t_evolve_start));
+    HIP_CHECK(hipEventDestroy(t_evolve_stop));
+    if (sim.my_id == 0) {
+        const float loop_ms  = elapsed_ms;
+        const float other_ms = loop_ms - total_sort_ms - total_evolve_ms;
+        printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps, %d sorts): %.3f ms\n",
+               sim.my_id, nstep_particles, sort_call_count, loop_ms);
+        printf("[launch_evolve_REs rank %d] === PHASE BREAKDOWN (batch loop) ===\n", sim.my_id);
+        printf("[launch_evolve_REs rank %d]   evolve_batch_kernel : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, total_evolve_ms, 100.0 * total_evolve_ms / loop_ms);
+        printf("[launch_evolve_REs rank %d]   sort_particles      : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, total_sort_ms,   100.0 * total_sort_ms   / loop_ms);
+        printf("[launch_evolve_REs rank %d]   launch/sync overhead : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, other_ms,        100.0 * other_ms        / loop_ms);
+    }
+#endif
 
     // --- Reduce the FB_LANE_FANOUT replicas into the compact output buffer ---
+    float reduce_ms = 0.0f;
     {
+#if GPU_DEBUG == 1
         hipEvent_t r_start, r_stop;
         HIP_CHECK(hipEventCreate(&r_start));
         HIP_CHECK(hipEventCreate(&r_stop));
         HIP_CHECK(hipEventRecord(r_start, 0));
+#endif
 
         long long total = (long long)n_elements * NDEG * NV * N_TOR * NVAR;
         int reduce_block = 256;
@@ -2234,32 +2286,59 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         hipLaunchKernelGGL(reduce_feedback_lanes,
                            dim3(reduce_grid), dim3(reduce_block), 0, 0,
                            d_feedback_rhs, d_feedback_rhs_out, n_elements);
+#if GPU_DEBUG == 1
         HIP_CHECK(hipEventRecord(r_stop, 0));
         HIP_CHECK(hipEventSynchronize(r_stop));
-        float reduce_ms = 0.0f;
         HIP_CHECK(hipEventElapsedTime(&reduce_ms, r_start, r_stop));
         if (sim.my_id == 0)
             printf("[launch_evolve_REs rank %d] reduce_feedback_lanes (FB_LANE_FANOUT=%d): %.3f ms\n",
                    sim.my_id, FB_LANE_FANOUT, reduce_ms);
         HIP_CHECK(hipEventDestroy(r_start));
         HIP_CHECK(hipEventDestroy(r_stop));
+#endif
     }
 
     // --- Copy results back: device -> host ---
+#if GPU_DEBUG == 1
     HIP_CHECK(hipEventRecord(t_start, 0));
+#endif
     HIP_CHECK(hipMemcpy(part->x,       d_x,            sz_x,        hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->p,       d_p,            sz_p,        hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->st,      d_st,           sz_st,       hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm,        sz_i_elm,    hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->weight,  d_weight,       sz_weight,   hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs_out, sz_feedback_compact, hipMemcpyDeviceToHost));
+#if GPU_DEBUG == 1
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
-    printf("[launch_evolve_REs rank %d] D2H transfers: %.3f ms\n", sim.my_id, elapsed_ms);
+    const float d2h_ms = elapsed_ms;
+    if (sim.my_id == 0)
+        printf("[launch_evolve_REs rank %d] D2H transfers: %.3f ms\n", sim.my_id, d2h_ms);
+#endif
 
     HIP_CHECK(hipEventDestroy(t_start));
     HIP_CHECK(hipEventDestroy(t_stop));
+
+#if GPU_DEBUG == 1
+    // --- Consolidated whole-call phase breakdown ---
+    if (sim.my_id == 0) {
+        const float total_ms = h2d_ms + total_evolve_ms + total_sort_ms + reduce_ms + d2h_ms;
+        printf("[launch_evolve_REs rank %d] ===== WHOLE-CALL PHASE BREAKDOWN =====\n", sim.my_id);
+        printf("[launch_evolve_REs rank %d]   H2D transfers       : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, h2d_ms,          100.0 * h2d_ms          / total_ms);
+        printf("[launch_evolve_REs rank %d]   evolve_batch_kernel : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, total_evolve_ms, 100.0 * total_evolve_ms / total_ms);
+        printf("[launch_evolve_REs rank %d]   sort_particles      : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, total_sort_ms,   100.0 * total_sort_ms   / total_ms);
+        printf("[launch_evolve_REs rank %d]   reduce_feedback     : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, reduce_ms,       100.0 * reduce_ms       / total_ms);
+        printf("[launch_evolve_REs rank %d]   D2H transfers       : %9.3f ms  (%.1f%%)\n",
+               sim.my_id, d2h_ms,          100.0 * d2h_ms          / total_ms);
+        printf("[launch_evolve_REs rank %d]   ---------------------------------------\n", sim.my_id);
+        printf("[launch_evolve_REs rank %d]   TOTAL (timed phases): %9.3f ms\n", sim.my_id, total_ms);
+    }
+#endif
 
 
     // --- Free device memory ---
