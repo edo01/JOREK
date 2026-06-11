@@ -139,7 +139,7 @@ contains
           call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, num_gpu_particles+1)
         endif
 #else
-        call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, 0)
+        call evolve_REs(sim, group_num, feedback_rhs, rng, tstep_part_adj, nstep_part_adj, 1)
 #endif
       case default
         write(*,*) "ERROR: Unknown coupling scheme: '", part_group%coupling_scheme, "' found for group '", part_group%id, "'"
@@ -312,7 +312,7 @@ contains
   !> converts the results back to the Fortran AoS layout.
   subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj, num_gpu_particles)
     use mod_settings, only: n_tor, n_degrees, n_vertex_max, n_coord_tor
-    use phys_module, only: F0, mode_coord
+    use phys_module, only: F0, mode_coord, tstep
     use mod_fields_linear, only: jorek_fields_interp_linear
     implicit none
     class(particle_sim), target, intent(inout) :: sim
@@ -409,6 +409,9 @@ contains
     end if
     sim_c%fields%F0    = F0
     sim_c%fields%t_norm = sim%t_norm
+    ! JOREK fluid timestep in seconds: matches t_jorek = tstep*sqrt(mu0*AMU*m*n*1e20) used in do_interp_PRZ_1.
+    ! Needed for the static / time_now==time_prev branch of the field time-interpolation (P_time).
+    sim_c%fields%t_jorek = tstep * sim%t_norm
     sim_c%fields%mode_coord = c_loc(mode_coord_c(1))
 
     ! --- Build particle_group_c ---

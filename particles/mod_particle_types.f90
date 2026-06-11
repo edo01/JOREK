@@ -197,6 +197,7 @@ module mod_particle_types
     integer(c_int) :: flag_zero_dpsidt
     real(c_double) :: F0
     real(c_double) :: t_norm
+    real(c_double) :: t_jorek
     type(c_ptr)    :: mode_coord = c_null_ptr !< (n_coord_tor)
   end type jorek_fields_interp_linear_c
 

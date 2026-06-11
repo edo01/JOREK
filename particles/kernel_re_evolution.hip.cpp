@@ -410,6 +410,7 @@ struct jorek_fields_interp_linear {
     int     flag_zero_dpsidt;    // 1 = force dPsi/dt = 0 in E-field
     double  F0;                  // vacuum toroidal field function: F0 = R*B_phi
     double  t_norm;              // time normalisation sqrt(mu0*AMU*mass_ref*n_ref*1e20)
+    double  t_jorek;             // JOREK fluid timestep in seconds (tstep * t_norm); static time-interp branch
     int*    mode_coord;          // (N_COORD_TOR) toroidal mode numbers for grid harmonics
 };
 
@@ -1087,7 +1088,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  int n_elements, int n_nodes,
                  double time_now, double time_prev,
                  int flag_static, int flag_zero_dpsidt,
-                 double F0, double t_norm,
+                 double F0, double t_norm, double t_jorek,
                  int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
                  double time,
                  double E[3], double B[3]
@@ -1210,7 +1211,7 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
             P_phi[i] -= Pd_phi[i] * df;
         }
     } else {
-        dt = 1.0 / t_norm;
+        dt = 1.0 / t_jorek;
     }
     P_time[0] = Pd[0] * dt;
     P_time[1] = Pd[1] * dt;
@@ -1239,10 +1240,14 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     E[2] = (neg_F0_tnorm_inv * U_phi - P_time[0]) * R_inv;
 
     // Projection: E = E - E * B / |B| (element-wise, matching Fortran)
-    double Bnorm_inv = rsqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
-    E[0] -= E[0] * B[0] * Bnorm_inv;
-    E[1] -= E[1] * B[1] * Bnorm_inv;
-    E[2] -= E[2] * B[2] * Bnorm_inv;
+    // double Bnorm_inv = rsqrt(B[0]*B[0] + B[1]*B[1] + B[2]*B[2]);
+    // E[0] -= E[0] * B[0] * Bnorm_inv;
+    // E[1] -= E[1] * B[1] * Bnorm_inv;
+    // E[2] -= E[2] * B[2] * Bnorm_inv;
+    // NOTE: the full electric field (including E_parallel) is returned, matching the
+    // Fortran calc_EBpsiU in mod_fields.f90. The full-orbit VPA pusher integrates
+    // dp/dt = q(E + v x B); the parallel E is what accelerates the runaway electrons,
+    // so no perpendicular projection of E is applied here.
 }
 
 // ---------------------------------------------------------------------------
@@ -1349,7 +1354,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             const int*    __restrict__ mode_coord,
                             double time_now, double time_prev,
                             int flag_static, int flag_zero_dpsidt,
-                            double F0, double t_norm,
+                            double F0, double t_norm, double t_jorek,
                             double mass, double time, double timestep,
                             int &ifail
 #if LUT_VALUES_DELTAS == 1
@@ -1410,7 +1415,7 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     calc_EBpsiU(nl_values, nl_deltas, nl_x, el_vertex, el_size,
                 n_elements, n_nodes,
                 time_now, time_prev, flag_static, flag_zero_dpsidt,
-                F0, t_norm,
+                F0, t_norm, t_jorek,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
                 E, B_field
 #if LUT_VALUES_DELTAS == 1
@@ -1663,7 +1668,7 @@ void evolve_batch_kernel(
     double time_now, double time_prev,
     int flag_static, int flag_zero_dpsidt,
     // Physics parameters
-    double F0, double t_norm,
+    double F0, double t_norm, double t_jorek,
     // Simulation parameters
     double sim_time, double group_mass, double tstep_part_adj,
     int num_particles,
@@ -1794,7 +1799,7 @@ void evolve_batch_kernel(
                                    n_elements, n_nodes, mode_coord,
                                    time_now, time_prev,
                                    flag_static, flag_zero_dpsidt,
-                                   F0, t_norm,
+                                   F0, t_norm, t_jorek,
                                    group_mass, sim_time, tstep_part_adj,
                                    ifail
 #if LUT_VALUES_DELTAS == 1
@@ -1937,6 +1942,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const int    flag_zero_dp   = sim.fields.flag_zero_dpsidt;
     const double F0             = sim.fields.F0;
     const double t_norm         = sim.fields.t_norm;
+    const double t_jorek        = sim.fields.t_jorek;
 
     // Group
     const particle_group& grp   = sim.group;
@@ -2208,7 +2214,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_neighbours, d_el_size, n_elements,
             time_now, time_prev, flag_static, flag_zero_dp,
-            F0, t_norm, sim_time, group_mass, tstep_part_adj,
+            F0, t_norm, t_jorek, sim_time, group_mass, tstep_part_adj,
             num_particles, d_feedback_rhs, d_mode_coord, batch
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
             , d_lut_hits, d_lut_misses
