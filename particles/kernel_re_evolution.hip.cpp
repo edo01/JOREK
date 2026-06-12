@@ -1254,25 +1254,41 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
 // calc_B_only: reduced version of calc_EBpsiU that computes only the magnetic
 // field B at a point. Used by the PROJ phase where E is not needed.
 //
-// Strips compared to calc_EBpsiU:
-//   - nl_deltas (time-interpolation correction to psi)
-//   - ivar=1 accumulators (P[1], P_s[1], P_t[1], P_phi[1] -> U field for E)
-//   - P[0], P_phi[0] (only psi spatial derivatives P_s[0], P_t[0] are used)
-//   - Pd*, P_time, t_norm, time_now/time_prev, flag_static, flag_zero_dpsidt
-//   - dhz_it (only hz_it is needed; no toroidal derivative of psi for B)
-//   - E-field computation and projection
-//   - LUT path (LUT is disabled in the best-performing configuration)
+// Reproduces the CPU calc_EBpsiU / do_interp_PRZ_1 for B EXACTLY, including the
+// linear time-interpolation of psi: the s/t derivatives P_s,P_t are corrected by
+// the deltas (P_s = P_s_snapshot - Pd_s*df) in the dynamic branch, identical to
+// the Fortran. Only quantities that B does not depend on are stripped:
+//   - ivar=1 accumulators (U field -> only needed for E)
+//   - P[0], P_phi (psi value and toroidal derivative -> not used by B)
+//   - P_time, t_norm, flag_zero_dpsidt, E-field computation and projection
+//   - dhz_it (toroidal derivative of the harmonics -> not used by B)
+//   - LUT path (disabled in the best-performing configuration)
+//
+// The interpolation condition (t_jorek>0, non-static, |time_now-time_prev|>1e-10)
+// is the CPU's own branch condition, not a df-approximation. It is uniform across
+// the launch, so the guarded nl_deltas reads cost nothing when the field is static
+// or the restart interval is degenerate (the CPU applies no correction there
+// either, so the snapshot is exact).
 // ---------------------------------------------------------------------------
 __device__ __noinline__
 void calc_B_only(const double* __restrict__ nl_values,
+                 const double* __restrict__ nl_deltas,
                  const double* __restrict__ nl_x,
                  const int*    __restrict__ el_vertex,
                  const double* __restrict__ el_size,
                  int n_elements, int n_nodes,
                  double F0,
-                 int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
+                 double time_now, double time_prev, double t_jorek,
+                 int flag_static,
+                 int i_elm_f, const double st[2], double phi, double time,  // i_elm_f is 1-based
                  double B[3])
 {
+    // Linear time-interpolation of psi is active only in the dynamic branch,
+    // matching do_interp_PRZ_1. Uniform across the launch (no warp divergence).
+    const bool   do_interp = (t_jorek > 0.0) && (flag_static == 0)
+                           && (fabs(time_now - time_prev) > 1.0e-10);
+    const double df = do_interp ? (time_now - time) / (time_now - time_prev) : 0.0;
+
     // Compact trig: only cmode/smode pairs, no dhz (no toroidal derivative needed).
     double cmode[NMODE + 1], smode[NMODE + 1];
     cmode[0] = 1.0; smode[0] = 0.0;
@@ -1284,9 +1300,9 @@ void calc_B_only(const double* __restrict__ nl_values,
 
     int ie = i_elm_f - 1;
 
-    // Only psi spatial derivatives needed for B.
-    double P_s_0 = 0.0;
-    double P_t_0 = 0.0;
+    // Only psi spatial derivatives needed for B (snapshot + delta accumulators).
+    double P_s_0  = 0.0, P_t_0  = 0.0;
+    double Pd_s_0 = 0.0, Pd_t_0 = 0.0;
 
     // Geometry accumulators (R needed for R_inv; R_s, R_t, Z_s, Z_t for jacobian).
     double R = 0.0, R_s = 0.0, R_t = 0.0;
@@ -1299,8 +1315,8 @@ void calc_B_only(const double* __restrict__ nl_values,
             double h, hs, ht;
             bf2D_1_scalar(st[0], st[1], kf, kv, h, hs, ht);
 
-            // psi field (ivar = 0 only); only v accumulator (no vp since P_phi not needed).
-            double v = 0.0;
+            // psi field (ivar = 0 only); v = snapshot, vd = delta accumulator.
+            double v = 0.0, vd = 0.0;
             for (int it = 0; it < N_TOR; ++it) {
                 double hz_it;
                 if (it == 0) {
@@ -1311,9 +1327,17 @@ void calc_B_only(const double* __restrict__ nl_values,
                 }
                 double val_v = __ldg(&nl_values[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
                 v += val_v * hz_it;
+                if (do_interp) {
+                    double val_d = __ldg(&nl_deltas[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
+                    vd += val_d * hz_it;
+                }
             }
             P_s_0 += v * hs;
             P_t_0 += v * ht;
+            if (do_interp) {
+                Pd_s_0 += vd * hs;
+                Pd_t_0 += vd * ht;
+            }
 
             // Geometry: R uses h, R_s/R_t use hs/ht; Z only needs Z_s, Z_t.
             double xR = __ldg(&nl_x[nl_x_idx(0, kf, 0, iv, n_nodes)]) * sz;
@@ -1324,6 +1348,12 @@ void calc_B_only(const double* __restrict__ nl_values,
             Z_s += xZ * hs;
             Z_t += xZ * ht;
         }
+    }
+
+    // Linear time-interpolation: P_s = P_s_snapshot - Pd_s*df  (do_interp_PRZ_1).
+    if (do_interp) {
+        P_s_0 -= Pd_s_0 * df;
+        P_t_0 -= Pd_t_0 * df;
     }
 
     double R_inv      = 1.0 / R;
@@ -1745,10 +1775,11 @@ void evolve_batch_kernel(
             double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
 
             double B_loc[3];
-            calc_B_only(nl_values, nl_x, el_vertex, el_size,
+            calc_B_only(nl_values, nl_deltas, nl_x, el_vertex, el_size,
                         n_elements, n_nodes,
                         F0,
-                        i_elm, st, x[2],
+                        time_now, time_prev, t_jorek, flag_static,
+                        i_elm, st, x[2], sim_time,
                         B_loc);
 
             double Bnorm_inv = rsqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
@@ -1890,40 +1921,6 @@ static void sort_particles_by_i_elm_gpu(
 //                       HOST LAUNCH FUNCTION (Fortran-callable via bind(C))
 // ===========================================================================================
 
-// ---------------------------------------------------------------------------
-// Debug helpers: write p_i_elm and p_pol snapshots to binary files (rank-0 only).
-//
-// i_elm file  re_sort_debug_step<NNNNN>_<tag>_ielm.bin
-//   Format: int32 num_particles, then num_particles x int32 i_elm values
-//
-// p_pol file  re_sort_debug_step<NNNNN>_<tag>_ppol.bin
-//   Format: int32 num_particles, then num_particles x float64 p_pol values
-//
-// p_pol is the poloidal momentum magnitude: sqrt(p_R^2 + p_Z^2)
-//   where p_R, p_Z are obtained by converting the stored Cartesian momentum
-//   (p_x, p_y, p_z) to cylindrical using the particle's phi angle:
-//     p_R   =  p_x*cos(phi) - p_y*sin(phi)
-//     p_Z   =  p_z
-//     p_pol = sqrt(p_R^2 + p_Z^2)
-// ---------------------------------------------------------------------------
-static void write_i_elm_snapshot(const int* h_i_elm, int num_particles,
-                                 int fluid_step, const char* tag)
-{
-    char fname[256];
-    snprintf(fname, sizeof(fname), "re_sort_debug_step%05d_%s_ielm.bin", fluid_step, tag);
-    FILE* f = fopen(fname, "wb");
-    if (!f) {
-        fprintf(stderr, "[RE_SORT_DBG] Could not open %s for writing\n", fname);
-        return;
-    }
-    fwrite(&num_particles, sizeof(int), 1, f);
-    fwrite(h_i_elm, sizeof(int), num_particles, f);
-    fclose(f);
-    fprintf(stderr, "[RE_SORT_DBG] Wrote %s (%d particles)\n", fname, num_particles);
-}
-
-
-
 // Called from Fortran as:  call launch_evolve_REs(sim, feedback_rhs, tstep_part_adj, nstep_part_adj)
 // All fields of particle_sim are already filled on the host by Fortran.
 extern "C"
@@ -1982,6 +1979,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_feedback   = sz_feedback_compact * FB_LANE_FANOUT;
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
 
+#if GPU_DEBUG == 1
     if(sim.my_id == 0) {
         printf("[Array Dimensions] x: %.2f KB (3 * %zu * %zu)\n", TO_KB(sz_x), (size_t)num_particles, sizeof(double));
         printf("[Array Dimensions] p: %.2f KB (3 * %zu * %zu)\n", TO_KB(sz_p), (size_t)num_particles, sizeof(double));
@@ -2013,6 +2011,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #endif
         printf("[Array Dimensions] mode_coord: %.2f KB (%d * %zu)\n", TO_KB(sz_mode_coord), N_COORD_TOR, sizeof(int));
     }
+#endif
 
     // --- Allocate device memory ---
     double *d_x, *d_p, *d_st, *d_weight;
@@ -2166,16 +2165,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
     HIP_CHECK(hipEventRecord(t_start, 0));
     for (int k = 0; k < nstep_particles; k += STEPS_PER_BATCH) {
+#if GPU_DEBUG == 1
         if(sim.my_id == 0)
             printf("[launch_evolve_REs rank %d] Starting batch %d / %d (particle steps %d to %d)\n",
                sim.my_id, sort_call_count+1, (nstep_particles + STEPS_PER_BATCH - 1) / STEPS_PER_BATCH,
                k, std::min(k + STEPS_PER_BATCH, nstep_particles));
+#endif
         int batch = std::min(STEPS_PER_BATCH, nstep_particles - k);
-
-        // if(sim.my_id == 0) {
-        //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
-        //     write_i_elm_snapshot(part->i_elm, num_particles, k/STEPS_PER_BATCH+1, "before_sort");
-        // }
 
 #if GPU_DEBUG == 1
         hipEvent_t t_sort_start, t_sort_stop;
@@ -2198,11 +2194,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         HIP_CHECK(hipEventDestroy(t_sort_start));
         HIP_CHECK(hipEventDestroy(t_sort_stop));
 #endif
-
-        // if(sim.my_id == 0) {
-        //     HIP_CHECK(hipMemcpy(part->i_elm, d_i_elm, sz_i_elm, hipMemcpyDeviceToHost));
-        //     write_i_elm_snapshot(part->i_elm, num_particles, k/STEPS_PER_BATCH+1, "after_sort");
-        // }
 
         // Fused batch kernel: runs batch steps, reads+writes d_x/d_p/d_st/d_i_elm in-place.
 #if GPU_DEBUG == 1
