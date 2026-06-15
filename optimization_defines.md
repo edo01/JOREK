@@ -40,8 +40,19 @@ Only meaningful when USE_GPU = 1 and ORDERING_TYPE > 0.
 
 ## LUT_VALUES_DELTAS
 
-Enable a look-up table (LUT) that caches interpolated field values and deltas
-to avoid redundant memory reads for particles sharing the same element.
+Enable a look-up table (LUT) that caches the `nl_values` / `nl_deltas` field data of
+a small set of mesh elements in shared memory, so particles sharing those elements
+read from the on-chip cache instead of global memory. Both field evaluations per
+kinetic step use it: the PROJ phase (`calc_B_only`, psi only) and the PUSH phase
+(`calc_EBpsiU`, psi + U).
+
+The cache is built **once per kernel launch** (i.e. once per batch). Because particles
+are counting-sorted by element index before each batch, a block holds very few distinct
+elements at the first step; the build extracts those distinct "base" elements with a
+cheap parallel run-length scan of the sorted block (it depends on that sort — the LUT is
+only meaningful with batch sorting enabled). With `LUT_NEIGHBOR_PRELOAD`, any leftover
+slots are filled with the base elements' mesh neighbours, to capture the particles that
+drift into neighbouring elements by the second step of the batch.
 
 - 0 — disabled
 - 1 — enabled
@@ -50,24 +61,28 @@ Only meaningful when USE_GPU = 1.
 
 ## LUT_N_SLOTS
 
-Number of LUT cache slots (entries) available per GPU thread block.
-Only meaningful when LUT_VALUES_DELTAS = 1.
+Number of LUT cache slots (distinct elements cached) per GPU thread block. This is the
+single capacity knob: base (step-0) elements fill slots first, then neighbour preload
+uses any leftover slots. More slots cache more elements (more step-1 neighbour coverage)
+at the cost of shared memory; if the distinct elements exceed the slots, the overflow
+falls back to direct global-memory interpolation (still correct, just not cached).
+The shared-memory cost is `LUT_N_SLOTS * 512 * N_TOR` bytes; a compile-time
+`static_assert` keeps it within the 2-blocks-per-CU occupancy budget (reduce
+LUT_N_SLOTS or N_TOR if it fires). Only meaningful when LUT_VALUES_DELTAS = 1.
 
-## LUT_MIN_OCCUPANCY
+## LUT_NEIGHBOR_PRELOAD
 
-Minimum number of particles that must map to a LUT slot before it is considered
-worth caching. Slots with fewer hits fall back to direct interpolation.
+0 = cache only the distinct base (step-0) elements; 1 = additionally fill any leftover
+slots with the deduplicated mesh neighbours of the base elements. Preloading neighbours
+captures step-1 drift (particles move mostly into neighbouring elements) so the second
+batch step still hits the cache. Boundary edges (neighbour = 0) are skipped. Base
+elements are always inserted first and never evicted.
 Only meaningful when LUT_VALUES_DELTAS = 1.
 
 ## LUT_DEBUG
 
-0 = disabled, 1 = instrument the LUT with hit/miss counters printed per batch.
-Only meaningful when LUT_VALUES_DELTAS = 1.
-
-## LUT_REFRESH_INTERVAL
-
-Number of kinetic steps between LUT refreshes within a batch.
-Only meaningful when LUT_VALUES_DELTAS = 1 and STEPS_PER_BATCH > 0.
+0 = disabled, 1 = instrument the LUT with hit/miss counters printed per batch (counts
+both PROJ and PUSH lookups). Only meaningful when LUT_VALUES_DELTAS = 1.
 
 ## NODES_FIRST
 

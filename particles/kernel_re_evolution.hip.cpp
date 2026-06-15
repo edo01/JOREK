@@ -51,11 +51,23 @@ static constexpr int HIST_SCAN_THREADS = 256;
 #if LUT_VALUES_DELTAS == 1
 // Shared-memory LUT for nl_values / nl_deltas in calc_EBpsiU.
 // SLOT_SIZE: number of doubles cached per element (NV * NDEG * 2 * N_TOR).
-// Tuning knobs (LUT_N_SLOTS, LUT_REFRESH_INTERVAL, LUT_MIN_OCCUPANCY) come from optimization_defines.h.
+// Tuning knobs (LUT_N_SLOTS, LUT_NEIGHBOR_PRELOAD) come from optimization_defines.h.
 static constexpr int LUT_SLOT_SIZE = NV * NDEG * 2 * N_TOR;  // = 32 * N_TOR
 // Transposed layout: sh_cache[lid * LUT_N_SLOTS + slot] instead of sh_cache[slot * LUT_SLOT_SIZE + lid].
 // At the read site all threads in a warp share the same lid but have different slots,
 // so the transposed layout makes them access consecutive addresses → no bank conflicts.
+
+// Occupancy guard: the two caches (sh_cache_v + sh_cache_d) cost LUT_SLOT_SIZE*2*8 =
+// 512*N_TOR bytes per slot.  The kernel targets 2 blocks/CU (__launch_bounds__(,2)),
+// so per-block LDS must stay within ~half the CU's 64 KB.  Budget the cache at ~28 KB
+// to leave room for sh_scratch and compiler-reserved LDS.  If this fires, reduce
+// LUT_N_SLOTS or N_TOR (the caches scale linearly with both).
+// The "* 2" is the two separate caches (sh_cache_v for nl_values, sh_cache_d for
+// nl_deltas), each LUT_SLOT_SIZE doubles per slot — NOT the N_FIELD_VARS factor that
+// already lives inside LUT_SLOT_SIZE.
+static constexpr int LUT_CACHE_BYTES_PER_SLOT = 2 /*v+d caches*/ * LUT_SLOT_SIZE * (int)sizeof(double);
+static_assert(LUT_N_SLOTS * LUT_CACHE_BYTES_PER_SLOT <= 32 * 1024,
+              "LUT cache too large for 2 blocks/CU: reduce LUT_N_SLOTS or N_TOR");
 
 // LUT_DEBUG: set to 1 in optimization_defines.h to instrument hit/miss counters.
 #endif
@@ -1280,7 +1292,17 @@ void calc_B_only(const double* __restrict__ nl_values,
                  double time_now, double time_prev, double t_jorek,
                  int flag_static,
                  int i_elm_f, const double st[2], double phi, double time,  // i_elm_f is 1-based
-                 double B[3])
+                 double B[3]
+#if LUT_VALUES_DELTAS == 1
+                 , const int*    sh_lut_keys
+                 , const double* sh_cache_v_flat
+                 , const double* sh_cache_d_flat
+#endif
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
+                 , unsigned long long* sh_lut_hits
+                 , unsigned long long* sh_lut_misses
+#endif
+                 )
 {
     // Linear time-interpolation of psi is active only in the dynamic branch,
     // matching do_interp_PRZ_1. Uniform across the launch (no warp divergence).
@@ -1298,6 +1320,18 @@ void calc_B_only(const double* __restrict__ nl_values,
     }
 
     int ie = i_elm_f - 1;
+
+#if LUT_VALUES_DELTAS == 1
+    int lut_cache_slot = -1;
+    for (int s = 0; s < LUT_N_SLOTS; ++s)
+        if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
+#if LUT_DEBUG == 1
+    if (lut_cache_slot >= 0)
+        atomicAdd(sh_lut_hits,    1ULL);
+    else
+        atomicAdd(sh_lut_misses, 1ULL);
+#endif
+#endif
 
     // Only psi spatial derivatives needed for B (snapshot + delta accumulators).
     double P_s_0  = 0.0, P_t_0  = 0.0;
@@ -1324,10 +1358,25 @@ void calc_B_only(const double* __restrict__ nl_values,
                     int i = (it + 1) / 2;
                     hz_it = (it & 1) ? cmode[i] : smode[i];
                 }
+#if LUT_VALUES_DELTAS == 1
+                // ivar=0 slice of the transposed cache: lid = kv + NV*(it + N_TOR*kf).
+                double raw_v = (lut_cache_slot >= 0)
+                    ? sh_cache_v_flat[(kv + NV*(it + N_TOR*kf)) * LUT_N_SLOTS + lut_cache_slot]
+                    : __ldg(&nl_values[nl_val_idx(0, kf, it, iv, n_nodes)]);
+                double val_v = raw_v * sz;
+#else
                 double val_v = __ldg(&nl_values[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
+#endif
                 v += val_v * hz_it;
                 if (do_interp) {
+#if LUT_VALUES_DELTAS == 1
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[(kv + NV*(it + N_TOR*kf)) * LUT_N_SLOTS + lut_cache_slot]
+                        : __ldg(&nl_deltas[nl_val_idx(0, kf, it, iv, n_nodes)]);
+                    double val_d = raw_d * sz;
+#else
                     double val_d = __ldg(&nl_deltas[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
+#endif
                     vd += val_d * hz_it;
                 }
             }
@@ -1512,8 +1561,21 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // ---------------------------------------------------------------------------
 // lut_build_cooperative: cooperatively build the shared-memory LUT.
 // Called by all threads in a block; must NOT be called with divergent control flow.
-// Phase 1 (thread 0): finds the LUT_N_SLOTS most-populated elements.
+//
+// Phase 1 — find the elements to cache (the "keys"):
+//   1a) Each thread publishes its element; a parallel run-length scan of the
+//       i_elm-sorted block extracts the DISTINCT elements (the "base" set).  This
+//       relies on particles being counting-sorted by i_elm before each batch
+//       (always true in the batch loop) so equal elements are contiguous.  At step 0
+//       of a batch there are very few distinct elements per block (~1.75 measured),
+//       so the base set is small.
+//   1b) Thread 0 writes all base elements into sh_lut_keys (capped at LUT_N_SLOTS),
+//       then — if LUT_NEIGHBOR_PRELOAD — best-effort fills any LEFTOVER slots with
+//       the (deduped) mesh neighbours of the base elements, to capture step-1 drift
+//       (particles move mostly into neighbouring elements; ~5.82 distinct at step 1).
+//       Base is inserted first and never evicted.
 // Phase 2 (all threads): loads nl_values / nl_deltas fragments into shared memory.
+//
 // Two __syncthreads() barriers are embedded; the caller must not hold any
 // pending sync before calling and must not rely on per-thread state that crosses
 // those barriers (e.g., local variables captured in a lambda — use function params).
@@ -1522,39 +1584,63 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 __device__
 void lut_build_cooperative(int i_elm_thread,
                             const int*    __restrict__ el_vertex,
+                            const int*    __restrict__ el_neighbours,
                             int n_elements, int n_nodes,
                             const double* __restrict__ nl_values,
                             const double* __restrict__ nl_deltas,
                             int*    sh_lut_keys,
                             double* sh_cache_v,
                             double* sh_cache_d,
-                            int*    sh_scratch)
+                            int*    sh_scratch,
+                            int*    sh_base_elms,
+                            int*    sh_n_base)
 {
-    // Phase 1 — publish current element, thread 0 finds top-N_SLOTS.
+    // Phase 1a — publish current element; parallel run-length scan extracts the
+    // distinct (base) elements from the sorted block.
     sh_scratch[threadIdx.x] = (i_elm_thread > 0) ? i_elm_thread : -1;
+    if (threadIdx.x == 0) *sh_n_base = 0;
     __syncthreads();
 
-    if (threadIdx.x == 0) {
-        int top_elm[LUT_N_SLOTS], top_cnt[LUT_N_SLOTS];
-        for (int s = 0; s < LUT_N_SLOTS; ++s) { top_elm[s] = -1; top_cnt[s] = 0; }
+    {
+        // A thread is a run boundary iff its element is valid and differs from the
+        // element of the preceding thread (or it is thread 0).  Each boundary emits
+        // one distinct base element.  Because the block is i_elm-sorted, this yields
+        // exactly the set of distinct elements present.
+        int elm = sh_scratch[threadIdx.x];
+        bool boundary = (elm > 0) &&
+                        (threadIdx.x == 0 || sh_scratch[threadIdx.x - 1] != elm);
+        if (boundary) {
+            int pos = atomicAdd(sh_n_base, 1);
+            if (pos < LUT_N_SLOTS) sh_base_elms[pos] = elm;
+        }
+    }
+    __syncthreads();
 
-        for (int tid = 0; tid < BLOCK_SIZE; ++tid) {
-            int elm = sh_scratch[tid];
-            if (elm <= 0) continue;
-            int found = -1;
-            for (int s = 0; s < LUT_N_SLOTS; ++s)
-                if (top_elm[s] == elm) { found = s; break; }
-            if (found >= 0) {
-                top_cnt[found]++;
-            } else {
-                int ms = 0;
-                for (int s = 1; s < LUT_N_SLOTS; ++s)
-                    if (top_cnt[s] < top_cnt[ms]) ms = s;
-                if (top_cnt[ms] == 0) { top_elm[ms] = elm; top_cnt[ms] = 1; }
+    // Phase 1b — thread 0 assembles sh_lut_keys: all base elements first, then
+    // (optionally) best-effort neighbour preload into leftover slots, deduped.
+    if (threadIdx.x == 0) {
+        int n_base = *sh_n_base;
+        if (n_base > LUT_N_SLOTS) n_base = LUT_N_SLOTS;
+        int n = 0;
+        for (int b = 0; b < n_base; ++b)
+            sh_lut_keys[n++] = sh_base_elms[b];
+#if LUT_NEIGHBOR_PRELOAD == 1
+        // Fill remaining slots with the mesh neighbours of the base elements.
+        // 0 = boundary (no neighbour) → skip; dedup against already-chosen keys so
+        // each element occupies at most one slot.
+        for (int b = 0; b < n_base && n < LUT_N_SLOTS; ++b) {
+            int base = sh_base_elms[b];
+            for (int kv = 0; kv < NV && n < LUT_N_SLOTS; ++kv) {
+                int nb = __ldg(&el_neighbours[el_vert_idx(kv, base - 1, n_elements)]);
+                if (nb <= 0) continue;
+                bool dup = false;
+                for (int s = 0; s < n; ++s)
+                    if (sh_lut_keys[s] == nb) { dup = true; break; }
+                if (!dup) sh_lut_keys[n++] = nb;
             }
         }
-        for (int s = 0; s < LUT_N_SLOTS; ++s)
-            sh_lut_keys[s] = (top_cnt[s] >= LUT_MIN_OCCUPANCY) ? top_elm[s] : -1;
+#endif
+        for (int s = n; s < LUT_N_SLOTS; ++s) sh_lut_keys[s] = -1;
     }
     __syncthreads();
 
@@ -1718,25 +1804,35 @@ void evolve_batch_kernel(
     __shared__ double sh_cache_v[LUT_SLOT_SIZE * LUT_N_SLOTS];
     __shared__ double sh_cache_d[LUT_SLOT_SIZE * LUT_N_SLOTS];
     __shared__ int    sh_scratch[BLOCK_SIZE];
+    __shared__ int    sh_base_elms[LUT_N_SLOTS];   // distinct step-0 elements (base set)
+    __shared__ int    sh_n_base;                   // count of distinct elements found
 #if LUT_DEBUG == 1
-    __shared__ unsigned long long sh_hits;
-    __shared__ unsigned long long sh_misses;
-    if (threadIdx.x == 0) { sh_hits = 0ULL; sh_misses = 0ULL; }
+    // Per-step-class hit/miss counters, to validate neighbour preload:
+    //   *_s0    = first step of the batch (particles freshly i_elm-sorted; the base
+    //             elements are all cached, so this should be ~100% hit).
+    //   *_drift = later steps (particles have drifted, mostly into neighbours; this
+    //             rate measures whether LUT_NEIGHBOR_PRELOAD captured that drift).
+    __shared__ unsigned long long sh_hits_s0,    sh_misses_s0;
+    __shared__ unsigned long long sh_hits_drift, sh_misses_drift;
+    if (threadIdx.x == 0) {
+        sh_hits_s0 = 0ULL; sh_misses_s0 = 0ULL;
+        sh_hits_drift = 0ULL; sh_misses_drift = 0ULL;
+    }
     __syncthreads();
 #endif
 
     // lut_build_cooperative requires all threads in the block to participate,
     // including out-of-range threads (they contribute i_elm = 0 / -1).
     int i_elm_lut = (j < num_particles) ? p_i_elm[j] : 0;
-    lut_build_cooperative(i_elm_lut, el_vertex, n_elements, n_nodes,
+    lut_build_cooperative(i_elm_lut, el_vertex, el_neighbours, n_elements, n_nodes,
                           nl_values, nl_deltas,
-                          sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
+                          sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch,
+                          sh_base_elms, &sh_n_base);
 #endif
 
-    // Out-of-range threads must stay alive through the loop to participate in
-    // lut_build_cooperative's __syncthreads() at every LUT_REFRESH_INTERVAL.
-    // They do no work (i_elm = -1 keeps them in the skip branches) but must
-    // not return before all syncs have fired.
+    // Out-of-range threads must participate in lut_build_cooperative's
+    // __syncthreads() barriers (the LUT is built once, above, before this point).
+    // They do no work (i_elm = -1 keeps them in the skip branches).
     const bool active = (j < num_particles);
 
     double x[3]  = {0.0, 0.0, 0.0};
@@ -1754,13 +1850,10 @@ void evolve_batch_kernel(
     }
 
     for (int s = 0; s < nsteps; ++s) {
-#if LUT_VALUES_DELTAS == 1
-        if (s > 0 && (s % LUT_REFRESH_INTERVAL) == 0) {
-            if(j==0) printf("LUT refresh at step %d, particle %d, i_elm %d\n", s, j, i_elm);
-            lut_build_cooperative(i_elm, el_vertex, n_elements, n_nodes,
-                                  nl_values, nl_deltas,
-                                  sh_lut_keys, sh_cache_v, sh_cache_d, sh_scratch);
-        }
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
+        // Route this step's LUT hits/misses to the step-0 or drift counter pair.
+        unsigned long long* lut_hits_ptr   = (s == 0) ? &sh_hits_s0   : &sh_hits_drift;
+        unsigned long long* lut_misses_ptr = (s == 0) ? &sh_misses_s0 : &sh_misses_drift;
 #endif
         // --- PROJ phase: accumulate feedback_rhs from current register state ---
         if (i_elm > 0) {
@@ -1779,7 +1872,14 @@ void evolve_batch_kernel(
                         F0,
                         time_now, time_prev, t_jorek, flag_static,
                         i_elm, st, x[2], sim_time,
-                        B_loc);
+                        B_loc
+#if LUT_VALUES_DELTAS == 1
+                        , sh_lut_keys, sh_cache_v, sh_cache_d
+#endif
+#if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
+                        , lut_hits_ptr, lut_misses_ptr
+#endif
+                        );
 
             double Bnorm_inv = 1.0 / sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
             double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
@@ -1836,7 +1936,7 @@ void evolve_batch_kernel(
                                    , sh_lut_keys, sh_cache_v, sh_cache_d
 #endif
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
-                                   , &sh_hits, &sh_misses
+                                   , lut_hits_ptr, lut_misses_ptr
 #endif
                                    );
         }
@@ -1845,8 +1945,10 @@ void evolve_batch_kernel(
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
     __syncthreads();
     if (threadIdx.x == 0) {
-        atomicAdd(g_lut_hits,   sh_hits);
-        atomicAdd(g_lut_misses, sh_misses);
+        atomicAdd(&g_lut_hits[0],   sh_hits_s0);
+        atomicAdd(&g_lut_misses[0], sh_misses_s0);
+        atomicAdd(&g_lut_hits[1],   sh_hits_drift);
+        atomicAdd(&g_lut_misses[1], sh_misses_drift);
     }
 #endif
 
@@ -2135,11 +2237,12 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #endif
 
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
+    // [0] = first batch step, [1] = drift (later steps).
     unsigned long long *d_lut_hits = nullptr, *d_lut_misses = nullptr;
-    HIP_CHECK(hipMalloc(&d_lut_hits,   sizeof(unsigned long long)));
-    HIP_CHECK(hipMalloc(&d_lut_misses, sizeof(unsigned long long)));
-    HIP_CHECK(hipMemset(d_lut_hits,   0, sizeof(unsigned long long)));
-    HIP_CHECK(hipMemset(d_lut_misses, 0, sizeof(unsigned long long)));
+    HIP_CHECK(hipMalloc(&d_lut_hits,   2 * sizeof(unsigned long long)));
+    HIP_CHECK(hipMalloc(&d_lut_misses, 2 * sizeof(unsigned long long)));
+    HIP_CHECK(hipMemset(d_lut_hits,   0, 2 * sizeof(unsigned long long)));
+    HIP_CHECK(hipMemset(d_lut_misses, 0, 2 * sizeof(unsigned long long)));
 #endif
 
     // --- Batch loop: one kernel launch per sort interval ---
@@ -2223,16 +2326,24 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
 #if LUT_VALUES_DELTAS == 1 && LUT_DEBUG == 1
         {
-            unsigned long long h_hits = 0, h_misses = 0;
-            HIP_CHECK(hipMemcpy(&h_hits,   d_lut_hits,   sizeof(unsigned long long), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(&h_misses, d_lut_misses, sizeof(unsigned long long), hipMemcpyDeviceToHost));
-            unsigned long long total = h_hits + h_misses;
-            double hit_rate = (total > 0) ? 100.0 * (double)h_hits / (double)total : 0.0;
-            printf("[LUT_DEBUG rank %d] batch %d: hits=%llu misses=%llu total=%llu hit_rate=%.2f%%\n",
-                   sim.my_id, sort_call_count, h_hits, h_misses, total, hit_rate);
+            // [0] = first batch step, [1] = drift (later steps).
+            unsigned long long h_hits[2] = {0, 0}, h_misses[2] = {0, 0};
+            HIP_CHECK(hipMemcpy(h_hits,   d_lut_hits,   2 * sizeof(unsigned long long), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(h_misses, d_lut_misses, 2 * sizeof(unsigned long long), hipMemcpyDeviceToHost));
+            unsigned long long tot0 = h_hits[0] + h_misses[0];
+            unsigned long long tot1 = h_hits[1] + h_misses[1];
+            unsigned long long tot  = tot0 + tot1;
+            double rate0 = (tot0 > 0) ? 100.0 * (double)h_hits[0] / (double)tot0 : 0.0;
+            double rate1 = (tot1 > 0) ? 100.0 * (double)h_hits[1] / (double)tot1 : 0.0;
+            double rate  = (tot  > 0) ? 100.0 * (double)(h_hits[0] + h_hits[1]) / (double)tot : 0.0;
+            printf("[LUT_DEBUG rank %d] batch %d: step0 hits=%llu misses=%llu rate=%.2f%% | "
+                   "drift hits=%llu misses=%llu rate=%.2f%% | overall rate=%.2f%%\n",
+                   sim.my_id, sort_call_count,
+                   h_hits[0], h_misses[0], rate0,
+                   h_hits[1], h_misses[1], rate1, rate);
             // Reset for next batch
-            HIP_CHECK(hipMemset(d_lut_hits,   0, sizeof(unsigned long long)));
-            HIP_CHECK(hipMemset(d_lut_misses, 0, sizeof(unsigned long long)));
+            HIP_CHECK(hipMemset(d_lut_hits,   0, 2 * sizeof(unsigned long long)));
+            HIP_CHECK(hipMemset(d_lut_misses, 0, 2 * sizeof(unsigned long long)));
         }
 #endif
 

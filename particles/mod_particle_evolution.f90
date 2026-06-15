@@ -466,8 +466,7 @@ contains
 #if LUT_VALUES_DELTAS == 1
       write(*,*) 'INFO: LUT values/deltas: enabled'
       write(*,*) '      # slots = ', LUT_N_SLOTS
-      write(*,*) '      min occupancy = ', LUT_MIN_OCCUPANCY
-      write(*,*) '      refresh frequency (within batch) = ', LUT_REFRESH_INTERVAL
+      write(*,*) '      neighbor preload = ', LUT_NEIGHBOR_PRELOAD
 #endif
     endif
     
