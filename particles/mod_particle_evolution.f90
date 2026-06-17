@@ -460,13 +460,8 @@ contains
 #else
       write(*,*) 'INFO: particle ordering: none'
 #endif
-#if STEPS_PER_BATCH > 0
-      write(*,*) 'INFO: Batch execution, with batch_size = ', STEPS_PER_BATCH
-#endif
-#if LUT_VALUES_DELTAS == 1
-      write(*,*) 'INFO: LUT values/deltas: enabled'
-      write(*,*) '      # slots = ', LUT_N_SLOTS
-      write(*,*) '      neighbor preload = ', LUT_NEIGHBOR_PRELOAD
+#if N_SORTING > 0
+      write(*,*) 'INFO: Particle counting-sort every N_SORTING steps, N_SORTING = ', N_SORTING
 #endif
     endif
     
