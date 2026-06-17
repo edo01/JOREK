@@ -1511,8 +1511,8 @@ void reduce_feedback_lanes(const double* __restrict__ fb_fat,
 // evolve_proj_kernel: projection phase only, one kinetic step.
 // Reads particle state from the current buffers (const, never modified) and
 // accumulates feedback_rhs via atomicAdd, keeping the calc_B_only field path and
-// the FB_LANE_FANOUT atomic-contention reduction.  Launched on stream_proj so it
-// overlaps with the push kernel (both read the same input state).
+// the FB_LANE_FANOUT atomic-contention reduction.  Launched before
+// evolve_push_kernel on the same stream, so it always reads the pre-push state.
 // ---------------------------------------------------------------------------
 __global__ __launch_bounds__(BLOCK_SIZE, 2)
 void evolve_proj_kernel(
@@ -1613,24 +1613,21 @@ void evolve_proj_kernel(
 
 // ---------------------------------------------------------------------------
 // evolve_push_kernel: push phase only, one kinetic step.
-// Reads particle state from the _in (current) buffers and writes the advanced
-// state to the _out (alternate) buffers; does NOT touch feedback_rhs.  Writes
-// _out unconditionally so the alternate buffer is always a complete copy
-// (including lost particles).  Launched on stream_push so it overlaps with proj.
+// Reads particle state into registers, advances it, and writes it back to the
+// SAME buffers in place; does NOT touch feedback_rhs.  In-place is safe because
+// each thread only touches its own index j (read fully into registers first,
+// then write back).  Launched after evolve_proj_kernel on the same stream, so
+// the ordered launch guarantees proj reads the pre-push state — no double
+// buffering or cross-kernel event sync is needed.
 // ---------------------------------------------------------------------------
 __global__ __launch_bounds__(BLOCK_SIZE, 2)
 void evolve_push_kernel(
-    // Particle SoA — INPUT (current buffers, read-only)
-    const double* __restrict__ p_x_in,
-    const double* __restrict__ p_p_in,
-    const double* __restrict__ p_st_in,
-    const int*    __restrict__ p_i_elm_in,
+    // Particle SoA — in/out (read into registers, written back in place)
+    double* __restrict__ p_x,
+    double* __restrict__ p_p,
+    double* __restrict__ p_st,
+    int*    __restrict__ p_i_elm,
     double charge,
-    // Particle SoA — OUTPUT (alternate buffers, write-only)
-    double* __restrict__ p_x_out,
-    double* __restrict__ p_p_out,
-    double* __restrict__ p_st_out,
-    int*    __restrict__ p_i_elm_out,
     // Field node list SoA
     const double* __restrict__ nl_values,
     const double* __restrict__ nl_deltas,
@@ -1654,10 +1651,10 @@ void evolve_push_kernel(
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= num_particles) return;
 
-    double x[3]  = {p_x_in[idx2(j, 0, num_particles)],  p_x_in[idx2(j, 1, num_particles)],  p_x_in[idx2(j, 2, num_particles)]};
-    double pm[3] = {p_p_in[idx2(j, 0, num_particles)],  p_p_in[idx2(j, 1, num_particles)],  p_p_in[idx2(j, 2, num_particles)]};
-    double st[2] = {p_st_in[idx2(j, 0, num_particles)], p_st_in[idx2(j, 1, num_particles)]};
-    int    i_elm = p_i_elm_in[j];
+    double x[3]  = {p_x[idx2(j, 0, num_particles)],  p_x[idx2(j, 1, num_particles)],  p_x[idx2(j, 2, num_particles)]};
+    double pm[3] = {p_p[idx2(j, 0, num_particles)],  p_p[idx2(j, 1, num_particles)],  p_p[idx2(j, 2, num_particles)]};
+    double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
+    int    i_elm = p_i_elm[j];
 
     if (i_elm > 0) {
         int ifail = 0;
@@ -1672,11 +1669,11 @@ void evolve_push_kernel(
                                ifail);
     }
 
-    // Always write to output buffers (captures lost-particle state too).
-    p_x_out[idx2(j, 0, num_particles)]  = x[0];  p_x_out[idx2(j, 1, num_particles)]  = x[1];  p_x_out[idx2(j, 2, num_particles)]  = x[2];
-    p_p_out[idx2(j, 0, num_particles)]  = pm[0]; p_p_out[idx2(j, 1, num_particles)]  = pm[1]; p_p_out[idx2(j, 2, num_particles)]  = pm[2];
-    p_st_out[idx2(j, 0, num_particles)] = st[0]; p_st_out[idx2(j, 1, num_particles)] = st[1];
-    p_i_elm_out[j] = i_elm;
+    // Write the advanced state back in place (captures lost-particle state too).
+    p_x[idx2(j, 0, num_particles)]  = x[0];  p_x[idx2(j, 1, num_particles)]  = x[1];  p_x[idx2(j, 2, num_particles)]  = x[2];
+    p_p[idx2(j, 0, num_particles)]  = pm[0]; p_p[idx2(j, 1, num_particles)]  = pm[1]; p_p[idx2(j, 2, num_particles)]  = pm[2];
+    p_st[idx2(j, 0, num_particles)] = st[0]; p_st[idx2(j, 1, num_particles)] = st[1];
+    p_i_elm[j] = i_elm;
 }
 
 
@@ -1889,11 +1886,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 
 
     // --- Allocate the alternate ("sorted") particle buffer set ---
-    // This single alternate set is reused for two roles, never simultaneously:
-    //   1. the counting sort's scatter destination (sort then swaps it with curr), and
-    //   2. the push kernel's write-only _out double buffer (push then swaps with curr).
-    // Per the optimization plan we do NOT allocate a third particle-buffer set: the
-    // sort only runs while both streams are drained, so push and sort never contend.
+    // Used only as the counting sort's scatter destination: the sort scatters
+    // curr -> alt and swaps curr<->alt internally.  proj reads curr and push
+    // advances curr in place, both on the default stream in launch order, so no
+    // extra particle-buffer set or cross-kernel sync is needed for the steps.
     double *d_x_sorted = nullptr, *d_p_sorted = nullptr, *d_st_sorted = nullptr, *d_weight_sorted = nullptr;
     int    *d_i_elm_sorted = nullptr;
     int    *d_hist = nullptr, *d_offsets = nullptr, *d_cursors = nullptr;
@@ -1904,8 +1900,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_st_sorted,     sz_st));
     HIP_CHECK(hipMalloc(&d_weight_sorted, sz_weight));
     HIP_CHECK(hipMalloc(&d_i_elm_sorted,  sz_i_elm));
-    // Save original handles — sort and push both swap these pointers with d_x etc.,
-    // so free the originals at cleanup to avoid double-free regardless of swap state.
+    // Save original handles — the sort swaps these pointers with d_x etc., so free
+    // the originals at cleanup to avoid double-free regardless of swap state.
     double *const d_x_sorted_orig      = d_x_sorted;
     double *const d_p_sorted_orig      = d_p_sorted;
     double *const d_st_sorted_orig     = d_st_sorted;
@@ -1919,14 +1915,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int scan_blocks = (I_ELM_BINS + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
     HIP_CHECK(hipMalloc(&d_block_sums, scan_blocks * sizeof(int)));
     HIP_CHECK(hipMalloc(&d_block_offsets, scan_blocks * sizeof(int)));
-
-    // --- Two streams + fork/join events for concurrent proj/push ---
-    hipStream_t stream_proj, stream_push;
-    HIP_CHECK(hipStreamCreate(&stream_proj));
-    HIP_CHECK(hipStreamCreate(&stream_push));
-    hipEvent_t fork_event, join_event;
-    HIP_CHECK(hipEventCreateWithFlags(&fork_event, hipEventDisableTiming));
-    HIP_CHECK(hipEventCreateWithFlags(&join_event, hipEventDisableTiming));
 
     // --- Timing events ---
     hipEvent_t t_start, t_stop;
@@ -1964,26 +1952,22 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         printf("[launch_evolve_REs rank %d] H2D transfers: %.3f ms\n", sim.my_id, h2d_ms);
 #endif
 
-    // --- Step loop: one kinetic step per iteration, proj + push overlapped ---
-    // proj (stream_proj) reads `curr` and accumulates feedback_rhs via atomicAdd.
-    // push (stream_push) reads `curr` and writes the advanced state to `alt`.
-    // Both read the same input, so they run concurrently; the fork/join event pair
-    // serialises consecutive steps on the GPU without per-step host sync.  After each
-    // step `alt` becomes `curr` via a host-side pointer swap.
-    //
-    // The counting sort runs every N_SORTING steps; it scatters `curr` into `alt` and
-    // swaps, so afterwards `curr` is sorted and `alt` is free scratch — exactly what
-    // push needs as its write-only output.  The sort only runs while both streams are
-    // drained, so the sort-step and push-step never contend for `alt`.
+    // --- Step loop: one kinetic step per iteration, proj then push (serialized) ---
+    // Everything runs on the default stream in launch order, so each kernel is
+    // implicitly ordered after the previous one — no streams or events needed:
+    //   1. proj reads `curr` and accumulates feedback_rhs via atomicAdd.
+    //   2. push advances `curr` in place (launched after proj, so proj is guaranteed
+    //      to have already read the pre-push state).
+    // The counting sort runs every N_SORTING steps; it scatters `curr` into the spare
+    // set and swaps internally, so on return `curr` holds the sorted state.  Being on
+    // the same default stream, the sort is ordered after the previous step's push.
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int sort_call_count = 0;
 
-    // Running buffer pointers: `curr` holds the latest state, `alt` is the spare set
-    // (push output / sort scratch).  Both follow pointer swaps below.
+    // Running buffer pointers: `curr` holds the latest state; the sort swaps these with
+    // the spare ("sorted") set internally, so `curr` may drift to that allocation.
     double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
     int    *d_i_elm_curr = d_i_elm;
-    double *d_x_alt = d_x_sorted, *d_p_alt = d_p_sorted, *d_st_alt = d_st_sorted, *d_weight_alt = d_weight_sorted;
-    int    *d_i_elm_alt = d_i_elm_sorted;
 
 #if GPU_DEBUG == 1
     float total_sort_ms = 0.0f;
@@ -1993,21 +1977,17 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     for (int k = 0; k < nstep_particles; ++k) {
 #if N_SORTING > 0
         if ((k % N_SORTING) == 0) {
-            // Drain both streams so the sort sees the final push state from step k-1.
-            HIP_CHECK(hipStreamSynchronize(stream_push));
-            HIP_CHECK(hipStreamSynchronize(stream_proj));
-
 #if GPU_DEBUG == 1
             hipEvent_t t_sort_start, t_sort_stop;
             HIP_CHECK(hipEventCreate(&t_sort_start));
             HIP_CHECK(hipEventCreate(&t_sort_stop));
             HIP_CHECK(hipEventRecord(t_sort_start, 0));
 #endif
-            // Sort scatters curr -> alt, then swaps curr<->alt internally, so on return
-            // d_*_curr is sorted and d_*_alt is free scratch again.
+            // Sort scatters curr -> spare set, then swaps the pointers internally, so on
+            // return d_*_curr is sorted and the spare set is free scratch again.
             sort_particles_by_i_elm_gpu(
                 d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr,
-                d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt,
+                d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
                 num_particles, d_hist, d_offsets, d_cursors,
                 d_block_sums, d_block_offsets);
             ++sort_call_count;
@@ -2023,15 +2003,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         }
 #endif
 
-        // Fork: stream_push waits until stream_proj reaches this point.  stream_proj
-        // carries the join_event from step k-1, so stream_push cannot start step k
-        // until both kernels of step k-1 have finished.
-        HIP_CHECK(hipEventRecord(fork_event, stream_proj));
-        HIP_CHECK(hipStreamWaitEvent(stream_push, fork_event, 0));
-
-        // Proj kernel: reads curr, accumulates feedback_rhs (atomicAdd).
+        // Proj kernel: reads curr, accumulates feedback_rhs (atomicAdd).  Launched
+        // first on the default stream, so it reads the pre-push state.
         hipLaunchKernelGGL(evolve_proj_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_proj,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
             d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr, charge,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_size, n_elements,
@@ -2039,33 +2014,17 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             F0, t_jorek, sim_time, group_mass,
             num_particles, d_feedback_rhs, d_mode_coord);
 
-        // Push kernel: reads curr, writes advanced state to alt (concurrent with proj).
+        // Push kernel: advances curr in place.  Ordered after proj (same stream).
         hipLaunchKernelGGL(evolve_push_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, stream_push,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
             d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, charge,
-            d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_neighbours, d_el_size, n_elements,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, t_jorek, sim_time, group_mass, tstep_part_adj,
             num_particles, d_mode_coord);
         HIP_CHECK(hipGetLastError());
-
-        // Join: stream_proj waits for push to finish before the next step's fork.
-        HIP_CHECK(hipEventRecord(join_event, stream_push));
-        HIP_CHECK(hipStreamWaitEvent(stream_proj, join_event, 0));
-
-        // Swap: alt (the just-written push output) becomes curr for the next step.
-        // weight is read-only and not pushed, so it is NOT swapped here — it stays with
-        // curr and only moves when the sort permutes it.
-        std::swap(d_x_curr,     d_x_alt);
-        std::swap(d_p_curr,     d_p_alt);
-        std::swap(d_st_curr,    d_st_alt);
-        std::swap(d_i_elm_curr, d_i_elm_alt);
     }
-    // Drain both streams before the reduction / D2H copies.
-    HIP_CHECK(hipStreamSynchronize(stream_proj));
-    HIP_CHECK(hipStreamSynchronize(stream_push));
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
     HIP_CHECK(hipEventElapsedTime(&elapsed_ms, t_start, t_stop));
@@ -2075,7 +2034,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         printf("[launch_evolve_REs rank %d] nstep_particles loop (%d steps, %d sorts): %.3f ms\n",
                sim.my_id, nstep_particles, sort_call_count, loop_ms);
         printf("[launch_evolve_REs rank %d] === PHASE BREAKDOWN (step loop) ===\n", sim.my_id);
-        printf("[launch_evolve_REs rank %d]   proj+push (overlapped): %9.3f ms  (%.1f%%)\n",
+        printf("[launch_evolve_REs rank %d]   proj+push (serialized): %9.3f ms  (%.1f%%)\n",
                sim.my_id, loop_ms - total_sort_ms, 100.0 * (loop_ms - total_sort_ms) / loop_ms);
         printf("[launch_evolve_REs rank %d]   sort_particles        : %9.3f ms  (%.1f%%)\n",
                sim.my_id, total_sort_ms, 100.0 * total_sort_ms / loop_ms);
@@ -2138,13 +2097,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #if GPU_DEBUG == 1
     // --- Consolidated whole-call phase breakdown ---
     if (sim.my_id == 0) {
-        const float loop_ms     = elapsed_ms;  // whole step loop (overlapped proj+push + sort)
+        const float loop_ms     = elapsed_ms;  // whole step loop (serialized proj+push + sort)
         const float evolve_ms   = loop_ms - total_sort_ms;
         const float total_ms    = h2d_ms + loop_ms + reduce_ms + d2h_ms;
         printf("[launch_evolve_REs rank %d] ===== WHOLE-CALL PHASE BREAKDOWN =====\n", sim.my_id);
         printf("[launch_evolve_REs rank %d]   H2D transfers         : %9.3f ms  (%.1f%%)\n",
                sim.my_id, h2d_ms,        100.0 * h2d_ms        / total_ms);
-        printf("[launch_evolve_REs rank %d]   proj+push (overlapped): %9.3f ms  (%.1f%%)\n",
+        printf("[launch_evolve_REs rank %d]   proj+push (serialized): %9.3f ms  (%.1f%%)\n",
                sim.my_id, evolve_ms,     100.0 * evolve_ms     / total_ms);
         printf("[launch_evolve_REs rank %d]   sort_particles        : %9.3f ms  (%.1f%%)\n",
                sim.my_id, total_sort_ms, 100.0 * total_sort_ms / total_ms);
@@ -2157,12 +2116,6 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     }
 #endif
 
-
-    // --- Destroy streams / events ---
-    HIP_CHECK(hipStreamDestroy(stream_proj));
-    HIP_CHECK(hipStreamDestroy(stream_push));
-    HIP_CHECK(hipEventDestroy(fork_event));
-    HIP_CHECK(hipEventDestroy(join_event));
 
     // --- Free device memory ---
     // Free the original allocation handles, not the swapped curr/alt pointers.
