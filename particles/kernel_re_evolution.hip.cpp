@@ -1534,14 +1534,22 @@ void proj_stage_kernel(
     stg_w[j]      = w;
 }
 
-// proj_accumulate_kernel (PROJECTION PHASE 2, thread-per-(element,cell)):
-// each thread owns one feedback cell (ie, n, m, it, var) and sums the contributions
-// of every particle in element ie's contiguous run.  The run bounds come from the
-// counting sort: start = elm_offset[ie], count = elm_count[ie] (the d_offsets and
-// d_hist arrays).  Writes the cell exactly ONCE — no atomics anywhere.
+// Tile size for proj_accumulate_kernel: number of particles whose per-particle
+// factor vectors are cached in shared memory at once.  Shared cost per tile =
+// PROJ_TILE * (NDEG*NV + N_TOR + NVAR) doubles (e.g. 64 * 26 * 8 = 13 KB at N_TOR=7).
+static constexpr int PROJ_TILE = 64;
+
+// proj_accumulate_kernel (PROJECTION PHASE 2, BLOCK-PER-ELEMENT):
+// One block owns one element ie and computes all PROJ_CELLS_PER_ELM feedback cells
+// for it, atomic-free.  The projection factorizes per particle into an outer product
+//   F[n,m,it,var] = sz(n,m) * Σ_p  bf2D(s_p,t_p)[n,m] * hz(phi_p)[it] * (v_var(p) w_p)
+// so we precompute each particle's small factor vectors ONCE (bf2D: NDEG*NV, hz: N_TOR,
+// vw: NVAR) into shared memory, then each thread (owning a few cells) sums the cheap
+// FMA `bf[n,m]*hz[it]*vw[var]` over the run reading only shared memory — no bf2D/sincos
+// in the inner loop, no re-reading global per cell.  The run is tiled by PROJ_TILE.
 //
-// feedback_rhs is ACCUMULATED across kinetic steps, so we add this step's sum to the
-// existing value (the host zeroes it once before the step loop).
+// Each cell is written by exactly one thread => no atomics.  feedback_rhs is
+// accumulated across steps, so we add this step's contribution to the existing value.
 // ---------------------------------------------------------------------------
 __global__ __launch_bounds__(BLOCK_SIZE)
 void proj_accumulate_kernel(
@@ -1559,53 +1567,89 @@ void proj_accumulate_kernel(
     const double* __restrict__ stg_w,
     double* __restrict__ feedback_rhs)
 {
-    long long tid = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    long long total = (long long)n_elements * PROJ_CELLS_PER_ELM;
-    if (tid >= total) return;
+    const int ie = blockIdx.x;                 // one block per element
+    if (ie >= n_elements) return;
 
-    // Decode tid -> (ie, n, m, it, var).  ie is the slowest axis so each warp covers
-    // contiguous cells of one element (good output coalescing into fb_idx_compact).
-    long long t = tid;
-    int var = (int)(t % NVAR);   t /= NVAR;
-    int it  = (int)(t % N_TOR);  t /= N_TOR;
-    int m   = (int)(t % NV);     t /= NV;
-    int n   = (int)(t % NDEG);   t /= NDEG;
-    int ie  = (int)t;
+    const int start = elm_offset[ie];
+    const int cnt   = elm_count[ie];
 
-    int start = elm_offset[ie];
-    int cnt   = elm_count[ie];
-    if (cnt <= 0) return;  // no particles in this element this step
+    // Shared factor cache for the current particle tile.
+    __shared__ double sh_bf[PROJ_TILE][NDEG * NV];  // bf2D_0_scalar(s,t,n,m)
+    __shared__ double sh_hz[PROJ_TILE][N_TOR];      // toroidal harmonics hz(phi,it)
+    __shared__ double sh_vw[PROJ_TILE][NVAR];       // {vPpar,vPperp,vjPhi} * weight
 
-    double sz = __ldg(&el_size[el_size_idx(n, m, ie, n_elements)]);
+    // Each thread owns a fixed subset of the PROJ_CELLS_PER_ELM cells (grid-stride),
+    // carrying a register accumulator per owned cell across all tiles.
+    // PROJ_CELLS_PER_ELM (=336 at N_TOR=7) <= 2*BLOCK_SIZE, so at most 2 cells/thread.
+    constexpr int CELLS_PER_THREAD = (PROJ_CELLS_PER_ELM + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    double acc[CELLS_PER_THREAD];
+    #pragma unroll
+    for (int r = 0; r < CELLS_PER_THREAD; ++r) acc[r] = 0.0;
 
-    // Pick the velocity-moment for this var once (warp-uniform: all lanes of a warp
-    // share var within the contiguous decode only partially, but the branch is cheap).
-    double sum = 0.0;
-    for (int p = start; p < start + cnt; ++p) {
-        double w = stg_w[p];
-        if (w == 0.0) continue;  // lost particle staged with zero weight
-        double s   = stg_s[p];
-        double tt  = stg_t[p];
-        double phi = stg_phi[p];
-        double bf  = bf2D_0_scalar(s, tt, n, m);
-        // Toroidal harmonic hz for this it (mode_moivre reconstructed for a single it).
-        double hz;
-        if (it == 0) {
-            hz = 1.0;
-        } else {
-            int i = (it + 1) / 2;
-            double phase = double(N_PERIOD * i) * phi;
-            double c, sn; sincos(phase, &sn, &c);
-            hz = (it & 1) ? c : sn;
+    if (cnt > 0) {
+        for (int base = 0; base < cnt; base += PROJ_TILE) {
+            int tile = min(PROJ_TILE, cnt - base);
+
+            // Phase (a): cooperatively precompute the tile's per-particle factors.
+            // One thread per (tile particle) does the bf2D/sincos work ONCE.
+            for (int q = threadIdx.x; q < tile; q += blockDim.x) {
+                int p = start + base + q;
+                double w = stg_w[p];
+                double s = stg_s[p], tt = stg_t[p], phi = stg_phi[p];
+                // bf2D for all (n,m): layout index n*NV + m.
+                #pragma unroll
+                for (int n = 0; n < NDEG; ++n)
+                    #pragma unroll
+                    for (int m = 0; m < NV; ++m)
+                        sh_bf[q][n * NV + m] = bf2D_0_scalar(s, tt, n, m);
+                // hz for all it via mode_moivre recurrence.
+                sh_hz[q][0] = 1.0;
+                #pragma unroll
+                for (int i = 1; i <= NMODE; ++i) {
+                    double c, sn; sincos(double(N_PERIOD * i) * phi, &sn, &c);
+                    sh_hz[q][2*i - 1] = c;
+                    sh_hz[q][2*i]     = sn;
+                }
+                sh_vw[q][P_PAR_IDX]  = stg_vPpar[p]  * w;   // w==0 for lost -> contributes 0
+                sh_vw[q][P_PERP_IDX] = stg_vPperp[p] * w;
+                sh_vw[q][J_PHI_IDX]  = stg_vjPhi[p]  * w;
+            }
+            __syncthreads();
+
+            // Phase (b): each cell-thread sums this tile's contribution from shared.
+            #pragma unroll
+            for (int r = 0; r < CELLS_PER_THREAD; ++r) {
+                int c = threadIdx.x + r * BLOCK_SIZE;
+                if (c >= PROJ_CELLS_PER_ELM) break;
+                // Decode c = var + NVAR*(it + N_TOR*(m + NV*n)).
+                int t = c;
+                int var = t % NVAR;  t /= NVAR;
+                int it  = t % N_TOR; t /= N_TOR;
+                int m   = t % NV;    t /= NV;
+                int n   = t;
+                int nm  = n * NV + m;
+                double s = 0.0;
+                for (int q = 0; q < tile; ++q)
+                    s += sh_bf[q][nm] * sh_hz[q][it] * sh_vw[q][var];
+                acc[r] += s;
+            }
+            __syncthreads();  // tile factors consumed; safe to overwrite next tile
         }
-        double v = (var == P_PAR_IDX) ? stg_vPpar[p]
-                 : (var == P_PERP_IDX) ? stg_vPperp[p]
-                                       : stg_vjPhi[p];
-        sum += hz * v * bf * w;
     }
-    sum *= sz;  // el_size factor is per-(n,m,ie), common to all particles
 
-    feedback_rhs[fb_idx_compact(ie, n, m, it, var, n_elements)] += sum;
+    // Write each owned cell once, scaling by the per-(n,m,ie) el_size factor.
+    #pragma unroll
+    for (int r = 0; r < CELLS_PER_THREAD; ++r) {
+        int c = threadIdx.x + r * BLOCK_SIZE;
+        if (c >= PROJ_CELLS_PER_ELM) break;
+        int t = c;
+        int var = t % NVAR;  t /= NVAR;
+        int it  = t % N_TOR; t /= N_TOR;
+        int m   = t % NV;    t /= NV;
+        int n   = t;
+        double sz = __ldg(&el_size[el_size_idx(n, m, ie, n_elements)]);
+        feedback_rhs[fb_idx_compact(ie, n, m, it, var, n_elements)] += acc[r] * sz;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1978,9 +2022,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
     int    *d_i_elm_curr = d_i_elm;
 
-    // Phase-2 (accumulate) grid: one thread per (element, cell).
-    long long accum_cells = (long long)n_elements * PROJ_CELLS_PER_ELM;
-    int accum_grid = (int)((accum_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    // Phase-2 (accumulate) grid: one block (BLOCK_SIZE=256 threads) per element.
+    int accum_grid = n_elements;
 
 #if GPU_DEBUG == 1
     float total_sort_ms = 0.0f;
@@ -2029,8 +2072,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             num_particles,
             d_stg_vPpar, d_stg_vPperp, d_stg_vjPhi, d_stg_s, d_stg_t, d_stg_phi, d_stg_w);
 
-        // Projection phase 2 (thread-per-cell): sum each element's particle run into
-        // feedback_rhs, exactly once per cell — no atomics.  Uses the sort's run bounds.
+        // Projection phase 2 (block-per-element): precompute per-particle factors in
+        // shared, sum each element's run into feedback_rhs once per cell — no atomics.
         hipLaunchKernelGGL(proj_accumulate_kernel,
             dim3(accum_grid), dim3(BLOCK_SIZE), 0, 0,
             d_offsets, d_hist, d_el_size, n_elements, num_particles,
