@@ -460,9 +460,7 @@ contains
 #else
       write(*,*) 'INFO: particle ordering: none'
 #endif
-#if N_SORTING > 0
-      write(*,*) 'INFO: Particle counting-sort every N_SORTING steps, N_SORTING = ', N_SORTING
-#endif
+      write(*,*) 'INFO: Particle counting-sort every kinetic step'
     endif
     
 

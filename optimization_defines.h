@@ -6,5 +6,3 @@
 #define NODES_FIRST       0
 #define ELEMENTS_FIRST    0
 #define FB_ELEMENTS_FIRST 0
-
-#define N_SORTING 1
