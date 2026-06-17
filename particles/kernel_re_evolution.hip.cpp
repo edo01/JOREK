@@ -1574,9 +1574,23 @@ void proj_accumulate_kernel(
     const int cnt   = elm_count[ie];
 
     // Shared factor cache for the current particle tile.
-    __shared__ double sh_bf[PROJ_TILE][NDEG * NV];  // bf2D_0_scalar(s,t,n,m)
-    __shared__ double sh_hz[PROJ_TILE][N_TOR];      // toroidal harmonics hz(phi,it)
-    __shared__ double sh_vw[PROJ_TILE][NVAR];       // {vPpar,vPperp,vjPhi} * weight
+    //
+    // Bank-conflict avoidance (phase-a cooperative stores): in phase (a) each
+    // tile particle is owned by one lane (consecutive q across a warp) and that
+    // lane writes its whole row.  For a fixed column the per-lane address stride
+    // equals the row length, so a row length that shares a factor with the 32
+    // banks serializes the store (NDEG*NV = 16 → 16-way conflict on every bf
+    // store).  Padding each row's leading dimension to an *odd* width (coprime
+    // with 32) makes the store stride coprime to the bank count, so the 32 lanes
+    // hit 32 distinct banks → conflict-free.  The phase-(b) reads are at a fixed
+    // q (loop-uniform row) with the column varying per lane, which is a
+    // broadcast pattern and stays conflict-free under either width.
+    static constexpr int SH_BF_W = (NDEG * NV) | 1;  // 17: odd ⇒ coprime to 32
+    static constexpr int SH_HZ_W = (N_TOR) | 1;      // always odd
+    static constexpr int SH_VW_W = (NVAR) | 1;       // 3 already odd
+    __shared__ double sh_bf[PROJ_TILE][SH_BF_W];  // bf2D_0_scalar(s,t,n,m)
+    __shared__ double sh_hz[PROJ_TILE][SH_HZ_W];  // toroidal harmonics hz(phi,it)
+    __shared__ double sh_vw[PROJ_TILE][SH_VW_W];  // {vPpar,vPperp,vjPhi} * weight
 
     // Each thread owns a fixed subset of the PROJ_CELLS_PER_ELM cells (grid-stride),
     // carrying a register accumulator per owned cell across all tiles.
