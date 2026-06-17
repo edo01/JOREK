@@ -7,5 +7,4 @@
 #define ELEMENTS_FIRST    0
 #define FB_ELEMENTS_FIRST 0
 
-#define N_SORTING 2
-#define FB_LANE_FANOUT 8
+#define N_SORTING 1

@@ -41,6 +41,13 @@ static constexpr int P_PERP_IDX = 1;
 static constexpr int J_PHI_IDX = 2;
 
 // ---------------------------------------------------------------------------
+// Projection parameters (atomic-free thread-per-cell accumulation)
+// ---------------------------------------------------------------------------
+// Number of feedback cells per element: one (n, m, it, var) set.  Used to size
+// the phase-2 accumulation grid (one thread per (element, cell)).
+static constexpr int PROJ_CELLS_PER_ELM = NDEG * NV * N_TOR * NVAR;
+
+// ---------------------------------------------------------------------------
 // Particle sorting parameters
 // ---------------------------------------------------------------------------
 static constexpr int I_ELM_MAX = 11000;
@@ -95,12 +102,11 @@ int idx5(int i0, int i1, int i2, int i3, int i4,
 // el_size : (NDEG, NV, n_elements)   if ELEMENTS_FIRST=0
 //         : (n_elements, NDEG, NV)   if ELEMENTS_FIRST=1
 //
-// feedback_rhs:
-//         : (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements) if FB_ELEMENTS_FIRST=0  [lane fastest, n_elements slowest]
-//         : (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG) if FB_ELEMENTS_FIRST=1  [n_elements fastest, lane second]
-// When FB_LANE_FANOUT==1, the lane axis vanishes and the layout matches the original 5-D shape.
-// After the step loop, reduce_feedback_lanes sums the FB_LANE_FANOUT replicas into a compact
-// (lane-free) output buffer that matches the host-side shape, so the Fortran caller is unchanged.
+// feedback_rhs (single, non-replicated — see fb_idx_compact):
+//         : (NVAR, N_TOR, NV, NDEG, n_elements) if FB_ELEMENTS_FIRST=0  [var fastest, n_elements slowest]
+//         : (n_elements, NVAR, N_TOR, NV, NDEG) if FB_ELEMENTS_FIRST=1  [n_elements fastest]
+// The atomic-free thread-per-cell projection writes each cell exactly once, so no
+// lane replicas / reduction are needed; this matches the host-side shape directly.
 // ---------------------------------------------------------------------------
 
 // nl_x index: logical signature (idim, kf, it, iv) — all 0-based
@@ -155,38 +161,8 @@ int el_size_idx(int kf, int kv, int ie, int n_elements)
 #endif
 }
 
-static_assert(FB_LANE_FANOUT >= 1 && (FB_LANE_FANOUT & (FB_LANE_FANOUT - 1)) == 0,
-              "FB_LANE_FANOUT must be a power of two");
-static_assert(32 % FB_LANE_FANOUT == 0, "FB_LANE_FANOUT must divide warp size 32");
-
-// feedback_rhs index (atomic-target layout, lane fan-out): signature (lane, ie, n, m, it, var)
-// FB_ELEMENTS_FIRST=0: layout (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements) — lane fastest, n_elements slowest
-// FB_ELEMENTS_FIRST=1: layout (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG) — n_elements fastest, lane second
-__device__ __host__ __forceinline__
-int fb_idx(int lane, int ie, int n, int m, int it, int var, int n_elements)
-{
-#if FB_ELEMENTS_FIRST == 1
-    // (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG) — flatten manually
-    int s = ie;
-    s += n_elements * (lane
-       + FB_LANE_FANOUT * (var
-       + NVAR * (it
-       + N_TOR * (m
-       + NV * n))));
-    return s;
-#else
-    // (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements)
-    int s = lane;
-    s += FB_LANE_FANOUT * (var
-       + NVAR * (it
-       + N_TOR * (m
-       + NV * (n
-       + NDEG * ie))));
-    return s;
-#endif
-}
-
-// Compact (lane-reduced) feedback_rhs index, signature (ie, n, m, it, var).
+// feedback_rhs index, signature (ie, n, m, it, var).  Single (non-replicated)
+// layout: the atomic-free thread-per-cell proj accumulation writes each cell once.
 // FB_ELEMENTS_FIRST=0: layout (NVAR, N_TOR, NV, NDEG, n_elements) — var fastest, ie slowest
 // FB_ELEMENTS_FIRST=1: layout (n_elements, NVAR, N_TOR, NV, NDEG) — ie fastest, n slowest
 __device__ __host__ __forceinline__
@@ -1447,75 +1423,32 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 // ===========================================================================================
 
 // ---------------------------------------------------------------------------
-// reduce_feedback_lanes: sum the FB_LANE_FANOUT replicas of each
-// (ie, n, m, it, var) cell into a single value, writing to the compact
-// (lane-free) output buffer that the host expects.
+// Per-step particle evolution: projection (proj) + push, one kinetic step each.
 //
-// One thread per output cell. The thread linear id `tid` is decoded so that
-// consecutive `tid` maps to consecutive *output* memory:
-//   FB_ELEMENTS_FIRST=1: ie varies fastest -> 32-wide coalesced stores.
-//   FB_ELEMENTS_FIRST=0: var (NVAR) varies fastest -> matches host column-major.
-// The inner loop over `lane` reads FB_LANE_FANOUT contiguous doubles per
-// thread (lane is the fastest axis on the fat input side), so input traffic
-// is also tight.
-// ---------------------------------------------------------------------------
-__global__
-void reduce_feedback_lanes(const double* __restrict__ fb_fat,
-                           double* __restrict__ fb_out,
-                           int n_elements)
-{
-    long long tid = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    long long total = (long long)n_elements * NDEG * NV * N_TOR * NVAR;
-    if (tid >= total) return;
-
-    int ie, n, m, it, var;
-#if FB_ELEMENTS_FIRST == 1
-    // Output: (n_elements, NVAR, N_TOR, NV, NDEG), ie fastest.
-    long long t = tid;
-    ie  = (int)(t % n_elements);  t /= n_elements;
-    var = (int)(t % NVAR);        t /= NVAR;
-    it  = (int)(t % N_TOR);       t /= N_TOR;
-    m   = (int)(t % NV);          t /= NV;
-    n   = (int)t;
-#else
-    // Output: (NVAR, N_TOR, NV, NDEG, n_elements), var fastest.
-    long long t = tid;
-    var = (int)(t % NVAR);        t /= NVAR;
-    it  = (int)(t % N_TOR);       t /= N_TOR;
-    m   = (int)(t % NV);          t /= NV;
-    n   = (int)(t % NDEG);        t /= NDEG;
-    ie  = (int)t;
-#endif
-
-    double sum = 0.0;
-    #pragma unroll
-    for (int lane = 0; lane < FB_LANE_FANOUT; ++lane) {
-        sum += fb_fat[fb_idx(lane, ie, n, m, it, var, n_elements)];
-    }
-    fb_out[fb_idx_compact(ie, n, m, it, var, n_elements)] = sum;
-}
-
-// ---------------------------------------------------------------------------
-// Per-step particle evolution, split into two overlapping kernels (proj + push).
-// Each thread handles one particle and runs exactly one kinetic step per launch.
+// Projection is done atomic-free in two kernels:
+//   * proj_stage_kernel  (thread-per-particle): compute v_Ppar/v_Pperp/v_jPhi and
+//     keep st, phi, weight; write them to global staging arrays.  No feedback writes.
+//   * proj_accumulate_kernel (thread-per-(element,cell)): each thread owns one
+//     feedback cell and sums the contributions of all particles in that element's
+//     contiguous run (bounds from the sort's d_offsets/d_hist), writing the cell ONCE.
+// This eliminates every atomicAdd from the projection: there is exactly one writer
+// per output cell, and the per-particle contention is replaced by a parallel sum.
 //
 // Particle arrays layout (Fortran column-major):
-//   p_x[j + num_particles*dim], p_p[j + num_particles*dim], p_st[j + num_particles*dim]  (0-based j, dim)
-//   p_i_elm[j], p_weight[j], p_q[j]
-//
-// feedback_rhs layout (column-major, 0-based) — see fb_idx() for the lane-fanout aware form:
-//   FB_ELEMENTS_FIRST=1: (n_elements, FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG)
-//   FB_ELEMENTS_FIRST=0: (FB_LANE_FANOUT, NVAR, N_TOR, NV, NDEG, n_elements)
-// The host-visible (compact) layout drops the lane axis and is restored by reduce_feedback_lanes.
+//   p_x[j + num_particles*dim], p_p[j + num_particles*dim], p_st[j + num_particles*dim]
+//   p_i_elm[j], p_weight[j]
+// feedback_rhs is the single compact layout (see fb_idx_compact).
 // ---------------------------------------------------------------------------
-// evolve_proj_kernel: projection phase only, one kinetic step.
-// Reads particle state from the current buffers (const, never modified) and
-// accumulates feedback_rhs via atomicAdd, keeping the calc_B_only field path and
-// the FB_LANE_FANOUT atomic-contention reduction.  Launched before
-// evolve_push_kernel on the same stream, so it always reads the pre-push state.
+
+// proj_stage_kernel (PROJECTION PHASE 1, thread-per-particle): compute the
+// per-particle velocity-moment contributions v_Ppar/v_Pperp/v_jPhi (needs the
+// B-field interp) and stage them — plus st, phi, weight — to global scratch arrays
+// indexed by particle.  Writes NO feedback (that is phase 2).  Lost particles
+// (i_elm <= 0) write zero weight so phase 2 can sum them harmlessly.
+// Launched before evolve_push_kernel on the same stream, so it reads pre-push state.
 // ---------------------------------------------------------------------------
 __global__ __launch_bounds__(BLOCK_SIZE, 2)
-void evolve_proj_kernel(
+void proj_stage_kernel(
     // Particle SoA — read-only
     const double* __restrict__ p_x,
     const double* __restrict__ p_p,
@@ -1540,75 +1473,139 @@ void evolve_proj_kernel(
     // Simulation parameters
     double sim_time, double group_mass,
     int num_particles,
-    // Feedback RHS (atomically updated)
-    double* __restrict__ feedback_rhs,
-    const int* __restrict__ mode_coord)
+    // Per-particle staging output (each array length num_particles)
+    double* __restrict__ stg_vPpar,
+    double* __restrict__ stg_vPperp,
+    double* __restrict__ stg_vjPhi,
+    double* __restrict__ stg_s,
+    double* __restrict__ stg_t,
+    double* __restrict__ stg_phi,
+    double* __restrict__ stg_w)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= num_particles) return;
 
-    double x[3]  = {p_x[idx2(j, 0, num_particles)],  p_x[idx2(j, 1, num_particles)],  p_x[idx2(j, 2, num_particles)]};
+    int i_elm = p_i_elm[j];
+    if (i_elm <= 0) {
+        // Lost particle: zero weight so phase 2 adds nothing for it.
+        stg_w[j] = 0.0;
+        return;
+    }
+
+    double phi  = p_x[idx2(j, 2, num_particles)];
     double pm[3] = {p_p[idx2(j, 0, num_particles)],  p_p[idx2(j, 1, num_particles)],  p_p[idx2(j, 2, num_particles)]};
     double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
-    int    i_elm = p_i_elm[j];
+    double Rcyl  = p_x[idx2(j, 0, num_particles)];
     double w     = p_weight[j];
 
-    if (i_elm > 0) {
-        double HZ_proj[N_TOR];
-        mode_moivre(x[2], HZ_proj);
+    double cyl_mom[3];
+    vector_cartesian_to_cylindrical(phi, pm, cyl_mom);
+    double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
+    double inv_denom_v = 1.0 / sqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
+    double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
 
-        double cyl_mom[3];
-        vector_cartesian_to_cylindrical(x[2], pm, cyl_mom);
-        double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
-        double inv_denom_v = 1.0 / sqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
-        double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
+    double B_loc[3];
+    calc_B_only(nl_values, nl_deltas, nl_x, el_vertex, el_size,
+                n_elements, n_nodes,
+                F0,
+                time_now, time_prev, t_jorek, flag_static,
+                i_elm, st, phi, sim_time,
+                B_loc);
 
-        double B_loc[3];
-        calc_B_only(nl_values, nl_deltas, nl_x, el_vertex, el_size,
-                    n_elements, n_nodes,
-                    F0,
-                    time_now, time_prev, t_jorek, flag_static,
-                    i_elm, st, x[2], sim_time,
-                    B_loc);
+    double Bnorm_inv = 1.0 / sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
+    double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
 
-        double Bnorm_inv = 1.0 / sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
-        double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
+    double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
+    double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
+                             cyl_vel[1] - v_par*B_hat[1],
+                             cyl_vel[2] - v_par*B_hat[2]};
+    double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
 
-        double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
-        double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
-                                 cyl_vel[1] - v_par*B_hat[1],
-                                 cyl_vel[2] - v_par*B_hat[2]};
-        double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
+    double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
+                        + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
+                          / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
 
-        double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
-                            + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
-                              / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
+    stg_vPpar[j]  = gamma_m * v_par * v_par * MU_ZERO;
+    stg_vPperp[j] = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
+    stg_vjPhi[j]  = -double(charge) * EL_CHG * cyl_vel[2] * Rcyl * MU_ZERO;
+    stg_s[j]      = st[0];
+    stg_t[j]      = st[1];
+    stg_phi[j]    = phi;
+    stg_w[j]      = w;
+}
 
-        double v_Ppar  = gamma_m * v_par * v_par * MU_ZERO;
-        double v_Pperp = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
-        double v_jPhi  = -double(charge) * EL_CHG * cyl_vel[2] * x[0] * MU_ZERO;
+// proj_accumulate_kernel (PROJECTION PHASE 2, thread-per-(element,cell)):
+// each thread owns one feedback cell (ie, n, m, it, var) and sums the contributions
+// of every particle in element ie's contiguous run.  The run bounds come from the
+// counting sort: start = elm_offset[ie], count = elm_count[ie] (the d_offsets and
+// d_hist arrays).  Writes the cell exactly ONCE — no atomics anywhere.
+//
+// feedback_rhs is ACCUMULATED across kinetic steps, so we add this step's sum to the
+// existing value (the host zeroes it once before the step loop).
+// ---------------------------------------------------------------------------
+__global__ __launch_bounds__(BLOCK_SIZE)
+void proj_accumulate_kernel(
+    const int*    __restrict__ elm_offset,   // d_offsets: run start per element bin
+    const int*    __restrict__ elm_count,    // d_hist:    run length per element bin
+    const double* __restrict__ el_size,
+    int n_elements,
+    int num_particles,
+    const double* __restrict__ stg_vPpar,
+    const double* __restrict__ stg_vPperp,
+    const double* __restrict__ stg_vjPhi,
+    const double* __restrict__ stg_s,
+    const double* __restrict__ stg_t,
+    const double* __restrict__ stg_phi,
+    const double* __restrict__ stg_w,
+    double* __restrict__ feedback_rhs)
+{
+    long long tid = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long total = (long long)n_elements * PROJ_CELLS_PER_ELM;
+    if (tid >= total) return;
 
-        int ie = i_elm - 1;
-        // Lane-fanout: spread the FB_LANE_FANOUT replicas of each (ie,n,m,it,var)
-        // across warp lanes so warps that share an `ie` (very common right after a
-        // sort, where particles are freshly sorted) hit distinct addresses.
-        const int fb_lane = threadIdx.x & (FB_LANE_FANOUT - 1);
-        for (int n = 0; n < NDEG; ++n) {
-            for (int m = 0; m < NV; ++m) {
-                double proj_factor = bf2D_0_scalar(st[0], st[1], n, m)
-                                   * __ldg(&el_size[el_size_idx(n, m, ie, n_elements)])
-                                   * w;
+    // Decode tid -> (ie, n, m, it, var).  ie is the slowest axis so each warp covers
+    // contiguous cells of one element (good output coalescing into fb_idx_compact).
+    long long t = tid;
+    int var = (int)(t % NVAR);   t /= NVAR;
+    int it  = (int)(t % N_TOR);  t /= N_TOR;
+    int m   = (int)(t % NV);     t /= NV;
+    int n   = (int)(t % NDEG);   t /= NDEG;
+    int ie  = (int)t;
 
-                for (int it = 0; it < N_TOR; ++it) {
-                    double hz = HZ_proj[it];
+    int start = elm_offset[ie];
+    int cnt   = elm_count[ie];
+    if (cnt <= 0) return;  // no particles in this element this step
 
-                    atomicAdd(&feedback_rhs[fb_idx(fb_lane, ie, n, m, it, P_PAR_IDX,  n_elements)], hz * v_Ppar  * proj_factor);
-                    atomicAdd(&feedback_rhs[fb_idx(fb_lane, ie, n, m, it, P_PERP_IDX, n_elements)], hz * v_Pperp * proj_factor);
-                    atomicAdd(&feedback_rhs[fb_idx(fb_lane, ie, n, m, it, J_PHI_IDX,  n_elements)], hz * v_jPhi  * proj_factor);
-                }
-            }
+    double sz = __ldg(&el_size[el_size_idx(n, m, ie, n_elements)]);
+
+    // Pick the velocity-moment for this var once (warp-uniform: all lanes of a warp
+    // share var within the contiguous decode only partially, but the branch is cheap).
+    double sum = 0.0;
+    for (int p = start; p < start + cnt; ++p) {
+        double w = stg_w[p];
+        if (w == 0.0) continue;  // lost particle staged with zero weight
+        double s   = stg_s[p];
+        double tt  = stg_t[p];
+        double phi = stg_phi[p];
+        double bf  = bf2D_0_scalar(s, tt, n, m);
+        // Toroidal harmonic hz for this it (mode_moivre reconstructed for a single it).
+        double hz;
+        if (it == 0) {
+            hz = 1.0;
+        } else {
+            int i = (it + 1) / 2;
+            double phase = double(N_PERIOD * i) * phi;
+            double c, sn; sincos(phase, &sn, &c);
+            hz = (it & 1) ? c : sn;
         }
+        double v = (var == P_PAR_IDX) ? stg_vPpar[p]
+                 : (var == P_PERP_IDX) ? stg_vPperp[p]
+                                       : stg_vjPhi[p];
+        sum += hz * v * bf * w;
     }
+    sum *= sz;  // el_size factor is per-(n,m,ie), common to all particles
+
+    feedback_rhs[fb_idx_compact(ie, n, m, it, var, n_elements)] += sum;
 }
 
 // ---------------------------------------------------------------------------
@@ -1616,7 +1613,7 @@ void evolve_proj_kernel(
 // Reads particle state into registers, advances it, and writes it back to the
 // SAME buffers in place; does NOT touch feedback_rhs.  In-place is safe because
 // each thread only touches its own index j (read fully into registers first,
-// then write back).  Launched after evolve_proj_kernel on the same stream, so
+// then write back).  Launched after the projection kernels on the same stream, so
 // the ordered launch guarantees proj reads the pre-push state — no double
 // buffering or cross-kernel event sync is needed.
 // ---------------------------------------------------------------------------
@@ -1791,9 +1788,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_el_neigh  = (size_t)n_elements * NV   * sizeof(int);
     const size_t sz_el_size   = (size_t)n_elements * NV   * NDEG * sizeof(double);
 
-    const size_t sz_feedback_compact = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
-    const size_t sz_feedback   = sz_feedback_compact * FB_LANE_FANOUT;
+    // Single (non-replicated) feedback buffer; proj phase 2 writes each cell once.
+    const size_t sz_feedback   = (size_t)NDEG * NV * n_elements * N_TOR * NVAR * sizeof(double);
     const size_t sz_mode_coord = N_COORD_TOR * sizeof(int);
+
+    // Per-particle projection staging arrays (filled by proj_stage_kernel, summed by
+    // proj_accumulate_kernel): v_Ppar, v_Pperp, v_jPhi, s, t, phi, weight.
+    const size_t sz_stage = (size_t)num_particles * sizeof(double);
 
 #if GPU_DEBUG == 1
     if(sim.my_id == 0) {
@@ -1808,8 +1809,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         printf("[Array Dimensions] el_vertex: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_vertex), (size_t)n_elements, NV, sizeof(int));
         printf("[Array Dimensions] el_neigh: %.2f KB (%zu * %d * %zu)\n", TO_KB(sz_el_neigh), (size_t)n_elements, NV, sizeof(int));
         printf("[Array Dimensions] el_size: %.2f KB (%zu * %d * %d * %zu)\n", TO_KB(sz_el_size), (size_t)n_elements, NV, NDEG, sizeof(double));
-        printf("[Array Dimensions] feedback (fat, x FB_LANE_FANOUT=%d): %.2f KB ; compact: %.2f KB\n",
-               FB_LANE_FANOUT, TO_KB(sz_feedback), TO_KB(sz_feedback_compact));
+        printf("[Array Dimensions] feedback: %.2f KB ; proj staging (7x): %.2f KB\n",
+               TO_KB(sz_feedback), TO_KB(7 * sz_stage));
 #if NODES_FIRST == 1
         printf("[Layout] NODES_FIRST=1   : nl_x/values/deltas have n_nodes as fastest dim\n");
 #else
@@ -1835,9 +1836,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     double *d_nl_x, *d_nl_values, *d_nl_deltas;
     int    *d_el_vertex, *d_el_neighbours;
     double *d_el_size;
-    double *d_feedback_rhs;       // fat accumulation buffer (with FB_LANE_FANOUT replicas)
-    double *d_feedback_rhs_out;   // compact buffer returned to host
+    double *d_feedback_rhs;       // single accumulation buffer returned to host
     int    *d_mode_coord;
+    // Projection staging arrays (per particle)
+    double *d_stg_vPpar, *d_stg_vPperp, *d_stg_vjPhi, *d_stg_s, *d_stg_t, *d_stg_phi, *d_stg_w;
 
     
     int n_devices;
@@ -1854,7 +1856,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // count_i_elm_histogram and exclusive_scan_blocks use shared memory and are excluded.
     static bool cache_config_set = false;
     if (!cache_config_set) {
-        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_proj_kernel), hipFuncCachePreferL1));
+        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(proj_stage_kernel), hipFuncCachePreferL1));
+        HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(proj_accumulate_kernel), hipFuncCachePreferL1));
         HIP_CHECK(hipFuncSetCacheConfig(reinterpret_cast<const void*>(evolve_push_kernel), hipFuncCachePreferL1));
         cache_config_set = true;
     }
@@ -1881,8 +1884,15 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMalloc(&d_el_size,       sz_el_size));
 
     HIP_CHECK(hipMalloc(&d_feedback_rhs,     sz_feedback));
-    HIP_CHECK(hipMalloc(&d_feedback_rhs_out, sz_feedback_compact));
     HIP_CHECK(hipMalloc(&d_mode_coord,       sz_mode_coord));
+
+    HIP_CHECK(hipMalloc(&d_stg_vPpar,  sz_stage));
+    HIP_CHECK(hipMalloc(&d_stg_vPperp, sz_stage));
+    HIP_CHECK(hipMalloc(&d_stg_vjPhi,  sz_stage));
+    HIP_CHECK(hipMalloc(&d_stg_s,      sz_stage));
+    HIP_CHECK(hipMalloc(&d_stg_t,      sz_stage));
+    HIP_CHECK(hipMalloc(&d_stg_phi,    sz_stage));
+    HIP_CHECK(hipMalloc(&d_stg_w,      sz_stage));
 
 
     // --- Allocate the alternate ("sorted") particle buffer set ---
@@ -1938,9 +1948,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(d_el_neighbours, el.neighbours, sz_el_neigh,  hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_el_size,       el.size,       sz_el_size,   hipMemcpyHostToDevice));
 
-    // Fortran caller (mod_particle_evolution.f90) always zero-inits fb_c before this call,
-    // so the fat accumulation buffer just gets zeroed; we never have to fan the host data
-    // out into per-lane replicas.
+    // feedback_rhs is accumulated over the kinetic steps, so zero it once up front.
     HIP_CHECK(hipMemset(d_feedback_rhs, 0, sz_feedback));
     HIP_CHECK(hipMemcpy(d_mode_coord,   sim.fields.mode_coord, sz_mode_coord, hipMemcpyHostToDevice));
     HIP_CHECK(hipEventRecord(t_stop, 0));
@@ -1955,7 +1963,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // --- Step loop: one kinetic step per iteration, proj then push (serialized) ---
     // Everything runs on the default stream in launch order, so each kernel is
     // implicitly ordered after the previous one — no streams or events needed:
-    //   1. proj reads `curr` and accumulates feedback_rhs via atomicAdd.
+    //   1. proj phase 1 (stage) reads `curr` and writes the staging arrays;
+    //      proj phase 2 (accumulate) sums them into feedback_rhs (atomic-free).
     //   2. push advances `curr` in place (launched after proj, so proj is guaranteed
     //      to have already read the pre-push state).
     // The counting sort runs every N_SORTING steps; it scatters `curr` into the spare
@@ -1968,6 +1977,10 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // the spare ("sorted") set internally, so `curr` may drift to that allocation.
     double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
     int    *d_i_elm_curr = d_i_elm;
+
+    // Phase-2 (accumulate) grid: one thread per (element, cell).
+    long long accum_cells = (long long)n_elements * PROJ_CELLS_PER_ELM;
+    int accum_grid = (int)((accum_cells + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
 #if GPU_DEBUG == 1
     float total_sort_ms = 0.0f;
@@ -1984,7 +1997,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             HIP_CHECK(hipEventRecord(t_sort_start, 0));
 #endif
             // Sort scatters curr -> spare set, then swaps the pointers internally, so on
-            // return d_*_curr is sorted and the spare set is free scratch again.
+            // return d_*_curr is sorted and the spare set is free scratch again.  It also
+            // leaves d_offsets[ie] (run start) and d_hist[ie] (run length) for phase 2.
             sort_particles_by_i_elm_gpu(
                 d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr,
                 d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
@@ -2003,16 +2017,26 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         }
 #endif
 
-        // Proj kernel: reads curr, accumulates feedback_rhs (atomicAdd).  Launched
-        // first on the default stream, so it reads the pre-push state.
-        hipLaunchKernelGGL(evolve_proj_kernel,
+        // Projection phase 1 (thread-per-particle): compute v_* moments + stage st/phi/w.
+        // Reads curr (pre-push state); writes only the staging arrays.
+        hipLaunchKernelGGL(proj_stage_kernel,
             dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
             d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr, charge,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_size, n_elements,
             time_now, time_prev, flag_static,
             F0, t_jorek, sim_time, group_mass,
-            num_particles, d_feedback_rhs, d_mode_coord);
+            num_particles,
+            d_stg_vPpar, d_stg_vPperp, d_stg_vjPhi, d_stg_s, d_stg_t, d_stg_phi, d_stg_w);
+
+        // Projection phase 2 (thread-per-cell): sum each element's particle run into
+        // feedback_rhs, exactly once per cell — no atomics.  Uses the sort's run bounds.
+        hipLaunchKernelGGL(proj_accumulate_kernel,
+            dim3(accum_grid), dim3(BLOCK_SIZE), 0, 0,
+            d_offsets, d_hist, d_el_size, n_elements, num_particles,
+            d_stg_vPpar, d_stg_vPperp, d_stg_vjPhi, d_stg_s, d_stg_t, d_stg_phi, d_stg_w,
+            d_feedback_rhs);
+        HIP_CHECK(hipGetLastError());
 
         // Push kernel: advances curr in place.  Ordered after proj (same stream).
         hipLaunchKernelGGL(evolve_push_kernel,
@@ -2041,35 +2065,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     }
 #endif
 
-    // --- Reduce the FB_LANE_FANOUT replicas into the compact output buffer ---
-    float reduce_ms = 0.0f;
-    {
-#if GPU_DEBUG == 1
-        hipEvent_t r_start, r_stop;
-        HIP_CHECK(hipEventCreate(&r_start));
-        HIP_CHECK(hipEventCreate(&r_stop));
-        HIP_CHECK(hipEventRecord(r_start, 0));
-#endif
-
-        long long total = (long long)n_elements * NDEG * NV * N_TOR * NVAR;
-        int reduce_block = 256;
-        long long reduce_grid_ll = (total + reduce_block - 1) / reduce_block;
-        // Guard against oversize grid (very unlikely given typical sizes).
-        int reduce_grid = (reduce_grid_ll > (long long)INT_MAX) ? INT_MAX : (int)reduce_grid_ll;
-        hipLaunchKernelGGL(reduce_feedback_lanes,
-                           dim3(reduce_grid), dim3(reduce_block), 0, 0,
-                           d_feedback_rhs, d_feedback_rhs_out, n_elements);
-#if GPU_DEBUG == 1
-        HIP_CHECK(hipEventRecord(r_stop, 0));
-        HIP_CHECK(hipEventSynchronize(r_stop));
-        HIP_CHECK(hipEventElapsedTime(&reduce_ms, r_start, r_stop));
-        if (sim.my_id == 0)
-            printf("[launch_evolve_REs rank %d] reduce_feedback_lanes (FB_LANE_FANOUT=%d): %.3f ms\n",
-                   sim.my_id, FB_LANE_FANOUT, reduce_ms);
-        HIP_CHECK(hipEventDestroy(r_start));
-        HIP_CHECK(hipEventDestroy(r_stop));
-#endif
-    }
+    // (Projection writes feedback_rhs directly — no lane reduction needed.)
 
     // --- Copy results back: device -> host ---
 #if GPU_DEBUG == 1
@@ -2081,7 +2077,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(part->st,      d_st_curr,      sz_st,       hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->weight,  d_weight_curr,  sz_weight,   hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs_out, sz_feedback_compact, hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs,    sz_feedback, hipMemcpyDeviceToHost));
 #if GPU_DEBUG == 1
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
@@ -2097,18 +2093,16 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #if GPU_DEBUG == 1
     // --- Consolidated whole-call phase breakdown ---
     if (sim.my_id == 0) {
-        const float loop_ms     = elapsed_ms;  // whole step loop (serialized proj+push + sort)
+        const float loop_ms     = elapsed_ms;  // whole step loop (stage+accumulate+push + sort)
         const float evolve_ms   = loop_ms - total_sort_ms;
-        const float total_ms    = h2d_ms + loop_ms + reduce_ms + d2h_ms;
+        const float total_ms    = h2d_ms + loop_ms + d2h_ms;
         printf("[launch_evolve_REs rank %d] ===== WHOLE-CALL PHASE BREAKDOWN =====\n", sim.my_id);
         printf("[launch_evolve_REs rank %d]   H2D transfers         : %9.3f ms  (%.1f%%)\n",
                sim.my_id, h2d_ms,        100.0 * h2d_ms        / total_ms);
-        printf("[launch_evolve_REs rank %d]   proj+push (serialized): %9.3f ms  (%.1f%%)\n",
+        printf("[launch_evolve_REs rank %d]   proj+push             : %9.3f ms  (%.1f%%)\n",
                sim.my_id, evolve_ms,     100.0 * evolve_ms     / total_ms);
         printf("[launch_evolve_REs rank %d]   sort_particles        : %9.3f ms  (%.1f%%)\n",
                sim.my_id, total_sort_ms, 100.0 * total_sort_ms / total_ms);
-        printf("[launch_evolve_REs rank %d]   reduce_feedback       : %9.3f ms  (%.1f%%)\n",
-               sim.my_id, reduce_ms,     100.0 * reduce_ms     / total_ms);
         printf("[launch_evolve_REs rank %d]   D2H transfers         : %9.3f ms  (%.1f%%)\n",
                sim.my_id, d2h_ms,        100.0 * d2h_ms        / total_ms);
         printf("[launch_evolve_REs rank %d]   ---------------------------------------\n", sim.my_id);
@@ -2141,6 +2135,12 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_el_neighbours));
     HIP_CHECK(hipFree(d_el_size));
     HIP_CHECK(hipFree(d_feedback_rhs));
-    HIP_CHECK(hipFree(d_feedback_rhs_out));
     HIP_CHECK(hipFree(d_mode_coord));
+    HIP_CHECK(hipFree(d_stg_vPpar));
+    HIP_CHECK(hipFree(d_stg_vPperp));
+    HIP_CHECK(hipFree(d_stg_vjPhi));
+    HIP_CHECK(hipFree(d_stg_s));
+    HIP_CHECK(hipFree(d_stg_t));
+    HIP_CHECK(hipFree(d_stg_phi));
+    HIP_CHECK(hipFree(d_stg_w));
 }
