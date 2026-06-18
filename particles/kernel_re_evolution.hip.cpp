@@ -1537,7 +1537,16 @@ void proj_stage_kernel(
 // Tile size for proj_accumulate_kernel: number of particles whose per-particle
 // factor vectors are cached in shared memory at once.  Shared cost per tile =
 // PROJ_TILE * (NDEG*NV + N_TOR + NVAR) doubles (e.g. 64 * 26 * 8 = 13 KB at N_TOR=7).
-static constexpr int PROJ_TILE = 64;
+// PROJ_TILE, ACCUM_BLOCK_SIZE and ACCUM_MIN_BLOCKS_PER_SM are sweepable knobs
+// defined (with defaults) in optimization_defines.h.
+
+// __launch_bounds__ for proj_accumulate: include the min-blocks-per-SM hint only
+// when ACCUM_MIN_BLOCKS_PER_SM > 0 (0 = let ptxas choose registers freely).
+#if ACCUM_MIN_BLOCKS_PER_SM > 0
+#define ACCUM_LAUNCH_BOUNDS __launch_bounds__(ACCUM_BLOCK_SIZE, ACCUM_MIN_BLOCKS_PER_SM)
+#else
+#define ACCUM_LAUNCH_BOUNDS __launch_bounds__(ACCUM_BLOCK_SIZE)
+#endif
 
 // proj_accumulate_kernel (PROJECTION PHASE 2, BLOCK-PER-ELEMENT):
 // One block owns one element ie and computes all PROJ_CELLS_PER_ELM feedback cells
@@ -1551,7 +1560,7 @@ static constexpr int PROJ_TILE = 64;
 // Each cell is written by exactly one thread => no atomics.  feedback_rhs is
 // accumulated across steps, so we add this step's contribution to the existing value.
 // ---------------------------------------------------------------------------
-__global__ __launch_bounds__(BLOCK_SIZE)
+__global__ ACCUM_LAUNCH_BOUNDS
 void proj_accumulate_kernel(
     const int*    __restrict__ elm_offset,   // d_offsets: run start per element bin
     const int*    __restrict__ elm_count,    // d_hist:    run length per element bin
@@ -1594,8 +1603,8 @@ void proj_accumulate_kernel(
 
     // Each thread owns a fixed subset of the PROJ_CELLS_PER_ELM cells (grid-stride),
     // carrying a register accumulator per owned cell across all tiles.
-    // PROJ_CELLS_PER_ELM (=336 at N_TOR=7) <= 2*BLOCK_SIZE, so at most 2 cells/thread.
-    constexpr int CELLS_PER_THREAD = (PROJ_CELLS_PER_ELM + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    // PROJ_CELLS_PER_ELM (=336 at N_TOR=7); cells/thread = ceil(it / ACCUM_BLOCK_SIZE).
+    constexpr int CELLS_PER_THREAD = (PROJ_CELLS_PER_ELM + ACCUM_BLOCK_SIZE - 1) / ACCUM_BLOCK_SIZE;
     double acc[CELLS_PER_THREAD];
     #pragma unroll
     for (int r = 0; r < CELLS_PER_THREAD; ++r) acc[r] = 0.0;
@@ -1633,7 +1642,7 @@ void proj_accumulate_kernel(
             // Phase (b): each cell-thread sums this tile's contribution from shared.
             #pragma unroll
             for (int r = 0; r < CELLS_PER_THREAD; ++r) {
-                int c = threadIdx.x + r * BLOCK_SIZE;
+                int c = threadIdx.x + r * ACCUM_BLOCK_SIZE;
                 if (c >= PROJ_CELLS_PER_ELM) break;
                 // Decode c = var + NVAR*(it + N_TOR*(m + NV*n)).
                 int t = c;
@@ -1654,7 +1663,7 @@ void proj_accumulate_kernel(
     // Write each owned cell once, scaling by the per-(n,m,ie) el_size factor.
     #pragma unroll
     for (int r = 0; r < CELLS_PER_THREAD; ++r) {
-        int c = threadIdx.x + r * BLOCK_SIZE;
+        int c = threadIdx.x + r * ACCUM_BLOCK_SIZE;
         if (c >= PROJ_CELLS_PER_ELM) break;
         int t = c;
         int var = t % NVAR;  t /= NVAR;
@@ -2036,7 +2045,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
     int    *d_i_elm_curr = d_i_elm;
 
-    // Phase-2 (accumulate) grid: one block (BLOCK_SIZE=256 threads) per element.
+    // Phase-2 (accumulate) grid: one block (ACCUM_BLOCK_SIZE threads) per element.
     int accum_grid = n_elements;
 
 #if GPU_DEBUG == 1
@@ -2089,7 +2098,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         // Projection phase 2 (block-per-element): precompute per-particle factors in
         // shared, sum each element's run into feedback_rhs once per cell — no atomics.
         hipLaunchKernelGGL(proj_accumulate_kernel,
-            dim3(accum_grid), dim3(BLOCK_SIZE), 0, 0,
+            dim3(accum_grid), dim3(ACCUM_BLOCK_SIZE), 0, 0,
             d_offsets, d_hist, d_el_size, n_elements, num_particles,
             d_stg_vPpar, d_stg_vPperp, d_stg_vjPhi, d_stg_s, d_stg_t, d_stg_phi, d_stg_w,
             d_feedback_rhs);
