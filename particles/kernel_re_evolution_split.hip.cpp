@@ -1,9 +1,9 @@
 // Split-kernel strategy: proj_stage + proj_accumulate (atomic-free) + evolve_push,
 // overlapped on two HIP streams.  Shared device helpers are in
 // kernel_re_evolution_common.hip.hpp.
-// Active when USE_BATCH_KERNEL is NOT defined (default).
+// Active when USE_BATCH_KERNEL = 0 in optimization_defines.h.
 #include "optimization_defines.h"
-#ifndef USE_BATCH_KERNEL
+#if USE_BATCH_KERNEL == 0
 #include "particles/kernel_re_evolution_common.hip.hpp"
 
 // ===========================================================================================
@@ -800,4 +800,4 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_stg_w));
 }
 
-#endif /* !USE_BATCH_KERNEL */
+#endif /* USE_BATCH_KERNEL == 0 */

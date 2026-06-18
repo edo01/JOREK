@@ -2,9 +2,9 @@
 // particle state held in registers across steps; optional shared-memory LUT for
 // nl_values/nl_deltas.  Shared device helpers are in
 // kernel_re_evolution_common.hip.hpp.
-// Active when USE_BATCH_KERNEL is defined in optimization_defines.h.
+// Active when USE_BATCH_KERNEL = 1 in optimization_defines.h.
 #include "optimization_defines.h"
-#ifdef USE_BATCH_KERNEL
+#if USE_BATCH_KERNEL == 1
 #include "particles/kernel_re_evolution_common.hip.hpp"
 
 #if LUT_VALUES_DELTAS == 1
@@ -935,4 +935,4 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
 #endif
 }
 
-#endif /* USE_BATCH_KERNEL */
+#endif /* USE_BATCH_KERNEL == 1 */
