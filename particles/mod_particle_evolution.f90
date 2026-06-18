@@ -468,6 +468,7 @@ contains
       write(*,*) '      # slots = ', LUT_N_SLOTS
       write(*,*) '      neighbor preload = ', LUT_NEIGHBOR_PRELOAD
 #endif
+      write(*,*) 'INFO: Particle counting-sort every kinetic step'
     endif
     
 
