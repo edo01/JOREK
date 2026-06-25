@@ -55,8 +55,11 @@ static constexpr int PROJ_CELLS_PER_ELM = NDEG * NV * N_TOR * NVAR;
 // ---------------------------------------------------------------------------
 // Particle sorting parameters
 // ---------------------------------------------------------------------------
-static constexpr int I_ELM_MAX = 11000;
-static constexpr int I_ELM_BINS = I_ELM_MAX + 1; // extra bin for invalid i_elm
+// Histogram bin count is RUNTIME: n_bins = n_elements + 1, where element indices
+// are 1-based (valid bins 0..n_elements-1) and the last bin (n_elements) collects
+// invalid / lost particles (i_elm <= 0).  Sizing the histogram/shared memory to the
+// actual mesh size (instead of a hard 11000 cap) shrinks the LDS footprint and
+// removes the latent overflow when n_elements would exceed the old cap.
 static constexpr int HIST_SCAN_CHUNK = 1024;
 static constexpr int HIST_SCAN_THREADS = 256;
 
@@ -182,37 +185,74 @@ int fb_idx_compact(int ie, int n, int m, int it, int var, int n_elements)
 
 
 // ---------------------------------------------------------------------------
-// Sorting helpers: map i_elm to a histogram bin
+// Sorting helpers: map i_elm to a histogram bin (n_bins = n_elements + 1).
+// Valid 1-based element index i_elm in [1, n_elements] -> bin i_elm-1; anything
+// else (lost / invalid) -> the last bin (n_elements).
 // ---------------------------------------------------------------------------
 __device__ __forceinline__
-int i_elm_to_bin(int i_elm)
+int i_elm_to_bin(int i_elm, int n_bins)
 {
-    if (i_elm >= 1 && i_elm <= I_ELM_MAX) return i_elm - 1;
-    return I_ELM_MAX;
+    int n_elements = n_bins - 1;
+    if (i_elm >= 1 && i_elm <= n_elements) return i_elm - 1;
+    return n_elements;
 }
 
 // ---------------------------------------------------------------------------
 // Counting sort kernels for particle SoA
 // ---------------------------------------------------------------------------
+
+// Warp-aggregated increment of sh_hist[key]: lanes in a warp that share the same
+// key elect one leader to do a single atomicAdd of the group size, instead of
+// every lane racing on the same shared bin.  Correct for ANY key distribution
+// (all-distinct keys degenerate to one atomicAdd per lane); the win comes when
+// neighbouring lanes share a bin, which is the common case once the particle
+// array is (near-)sorted and each block reads a CONTIGUOUS particle segment.
+// The build compiles HIP as CUDA (-x cu) on sm_90, so we use __match_any_sync to
+// get, for each lane, the mask of warp lanes sharing its key in ONE instruction —
+// no divergent loop (which would be unsafe with the *_sync collectives).  The
+// lowest lane of each same-key group adds the group size once.
+__device__ __forceinline__
+void warp_aggregated_hist_add(int* sh_hist, int key)
+{
+    unsigned active = __activemask();
+    unsigned same   = __match_any_sync(active, key);   // lanes in this warp with my key
+    int lane   = threadIdx.x & (warpSize - 1);
+    int leader = __ffs((int)same) - 1;                  // lowest lane of the group
+    if (lane == leader)
+        atomicAdd(&sh_hist[key], __popc(same));
+}
+
+// count_i_elm_histogram (contiguous-segment, warp-aggregated): each block owns a
+// contiguous slice of the (near-)sorted i_elm array and accumulates a block-local
+// shared histogram, then flushes nonzero bins to the global histogram once.  The
+// contiguous slice keeps a warp's 32 lanes on the same / adjacent bins so warp
+// aggregation collapses the shared-atomic traffic.  Robust for arbitrary input.
 static __global__
 void count_i_elm_histogram(const int* __restrict__ i_elm,
                            int num_particles,
+                           int n_bins,
                            int* __restrict__ global_hist)
 {
     extern __shared__ int sh_hist[];
-    for (int idx = threadIdx.x; idx < I_ELM_BINS; idx += blockDim.x)
+    for (int idx = threadIdx.x; idx < n_bins; idx += blockDim.x)
         sh_hist[idx] = 0;
     __syncthreads();
 
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-    for (int j = tid; j < num_particles; j += stride) {
-        int key = i_elm_to_bin(i_elm[j]);
-        atomicAdd(&sh_hist[key], 1);
+    // Contiguous tile: block b owns [b*tile, (b+1)*tile).  Grid-strided over tiles
+    // so any grid size is correct; near-sorted input keeps each warp on few bins.
+    int tile = blockDim.x;
+    for (long long base = (long long)blockIdx.x * tile;
+         base < num_particles;
+         base += (long long)gridDim.x * tile) {
+        long long j = base + threadIdx.x;
+        if (j < num_particles) {
+            int key = i_elm_to_bin(i_elm[j], n_bins);
+            warp_aggregated_hist_add(sh_hist, key);
+        }
     }
     __syncthreads();
 
-    for (int idx = threadIdx.x; idx < I_ELM_BINS; idx += blockDim.x) {
+    for (int idx = threadIdx.x; idx < n_bins; idx += blockDim.x) {
         int val = sh_hist[idx];
         if (val > 0) atomicAdd(&global_hist[idx], val);
     }
@@ -278,6 +318,41 @@ void add_block_offsets(int* __restrict__ data,
     }
 }
 
+#if GPU_DEBUG == 1
+// Debug self-check: the post-scatter i_elm array must be fully element-contiguous,
+// i.e. its bin sequence is non-decreasing.  Each thread compares its bin with the
+// previous slot's; any inversion bumps a global error counter.  Used to validate
+// the block-local rank scatter preserves the exact-contiguity contract that
+// proj_accumulate depends on.
+static __global__
+void check_sorted_contiguous(const int* __restrict__ i_elm_sorted,
+                             int num_particles, int n_bins,
+                             int* __restrict__ d_err)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j <= 0 || j >= num_particles) return;
+    int prev = i_elm_to_bin(i_elm_sorted[j - 1], n_bins);
+    int cur  = i_elm_to_bin(i_elm_sorted[j],     n_bins);
+    if (cur < prev) atomicAdd(d_err, 1);
+}
+#endif
+
+// scatter_particles_by_i_elm (block-local rank): each block owns a CONTIGUOUS tile
+// of particles and assigns output slots in two cheap shared-memory passes instead of
+// one contended global atomicAdd(&cursors[key]) per particle.
+//   1) each thread takes a block-LOCAL rank within its bin via a shared-histogram
+//      atomicAdd (sh_cnt[key]); after the tile, sh_cnt[key] = #particles of that bin
+//      in this block.
+//   2) the first occurrence of each bin (local rank 0) reserves a contiguous global
+//      run base with ONE atomicAdd(&cursors[key], sh_cnt[key]) → sh_base[key].
+//   3) each thread writes its SoA payload to sh_base[key] + local_rank.
+// `cursors` is pre-seeded with d_offsets (run starts), so the per-block reservations
+// pack each element's run densely and contiguously — exact same global layout as the
+// old per-particle scatter, but the global-atomic count drops from one-per-particle
+// (which serialised on (near-)sorted input where adjacent threads share a bin) to a
+// handful per block.  Within-run ordering differs but proj_accumulate is order-
+// independent within a run, so contiguity + d_offsets/d_hist semantics are preserved.
+// LDS: 2 * n_bins ints (sh_cnt + sh_base), n_bins = n_elements + 1.
 static __global__
 void scatter_particles_by_i_elm(
     const double* __restrict__ x_in,
@@ -286,6 +361,7 @@ void scatter_particles_by_i_elm(
     const int*    __restrict__ i_elm_in,
     const double* __restrict__ weight_in,
     int num_particles,
+    int n_bins,
     int* __restrict__ cursors,
     double* __restrict__ x_out,
     double* __restrict__ p_out,
@@ -293,12 +369,34 @@ void scatter_particles_by_i_elm(
     int*    __restrict__ i_elm_out,
     double* __restrict__ weight_out)
 {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= num_particles) return;
+    extern __shared__ int sh_scatter[];
+    int* sh_cnt  = sh_scatter;              // [n_bins] local per-bin count
+    int* sh_base = sh_scatter + n_bins;     // [n_bins] reserved global base
 
-    int i_elm = i_elm_in[j];
-    int key = i_elm_to_bin(i_elm);
-    int pos = atomicAdd(&cursors[key], 1);
+    for (int idx = threadIdx.x; idx < n_bins; idx += blockDim.x)
+        sh_cnt[idx] = 0;
+    __syncthreads();
+
+    int tile = blockDim.x;
+    long long base_j = (long long)blockIdx.x * tile;
+    long long j      = base_j + threadIdx.x;
+
+    bool have = (j < num_particles);
+    int  i_elm = 0, key = 0, my_rank = 0;
+    if (have) {
+        i_elm   = i_elm_in[j];
+        key     = i_elm_to_bin(i_elm, n_bins);
+        my_rank = atomicAdd(&sh_cnt[key], 1);  // block-local rank within this bin
+    }
+    __syncthreads();
+
+    // First occurrence of each bin in this block reserves the contiguous global run.
+    if (have && my_rank == 0)
+        sh_base[key] = atomicAdd(&cursors[key], sh_cnt[key]);
+    __syncthreads();
+
+    if (!have) return;
+    int pos = sh_base[key] + my_rank;
 
     x_out[idx2(pos, 0, num_particles)] = x_in[idx2(j, 0, num_particles)];
     x_out[idx2(pos, 1, num_particles)] = x_in[idx2(j, 1, num_particles)];
@@ -1429,27 +1527,48 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
 static void sort_particles_by_i_elm_gpu(
     double*& d_x, double*& d_p, double*& d_st, int*& d_i_elm, double*& d_weight,
     double*& d_x_alt, double*& d_p_alt, double*& d_st_alt, int*& d_i_elm_alt, double*& d_weight_alt,
-    int num_particles,
+    int num_particles, int n_elements,
     int* d_hist, int* d_offsets, int* d_cursors,
     int* d_block_sums, int* d_block_offsets)
 {
     if (num_particles <= 0) return;
 
-    const size_t hist_bytes = I_ELM_BINS * sizeof(int);
+    // Runtime bin count: one bin per element + one for invalid/lost particles.
+    const int    n_bins     = n_elements + 1;
+    const size_t hist_bytes = (size_t)n_bins * sizeof(int);
     HIP_CHECK(hipMemset(d_hist, 0, hist_bytes));
 
     int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    size_t shared_bytes = I_ELM_BINS * sizeof(int);
+    size_t count_shared_bytes   = (size_t)n_bins * sizeof(int);      // sh_hist
+    size_t scatter_shared_bytes = 2 * (size_t)n_bins * sizeof(int);  // sh_cnt + sh_base
+
+    // n_elements is fixed by the mesh for the whole run, so the per-kernel dynamic
+    // shared sizes are constant across sort calls — opt in once.  Both the count
+    // (n_bins ints) and the block-local scatter (2*n_bins ints) can exceed the 48 KB
+    // default dynamic-shared cap on NVIDIA for large meshes; raise the cap so they
+    // are not silently clamped.
+    static bool smem_optin = false;
+    if (!smem_optin) {
+        HIP_CHECK(hipFuncSetAttribute(
+            reinterpret_cast<const void*>(count_i_elm_histogram),
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            (int)count_shared_bytes));
+        HIP_CHECK(hipFuncSetAttribute(
+            reinterpret_cast<const void*>(scatter_particles_by_i_elm),
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            (int)scatter_shared_bytes));
+        smem_optin = true;
+    }
 
     hipLaunchKernelGGL(count_i_elm_histogram,
-        dim3(grid_size), dim3(BLOCK_SIZE), shared_bytes, 0,
-        d_i_elm, num_particles, d_hist);
+        dim3(grid_size), dim3(BLOCK_SIZE), count_shared_bytes, 0,
+        d_i_elm, num_particles, n_bins, d_hist);
     HIP_CHECK(hipGetLastError());
 
-    int scan_blocks = (I_ELM_BINS + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
+    int scan_blocks = (n_bins + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
     hipLaunchKernelGGL(exclusive_scan_blocks,
         dim3(scan_blocks), dim3(HIST_SCAN_THREADS), 0, 0,
-        d_hist, d_offsets, d_block_sums, I_ELM_BINS);
+        d_hist, d_offsets, d_block_sums, n_bins);
     HIP_CHECK(hipGetLastError());
 
     hipLaunchKernelGGL(exclusive_scan_blocks,
@@ -1459,17 +1578,37 @@ static void sort_particles_by_i_elm_gpu(
 
     hipLaunchKernelGGL(add_block_offsets,
         dim3(scan_blocks), dim3(HIST_SCAN_THREADS), 0, 0,
-        d_offsets, d_block_offsets, I_ELM_BINS);
+        d_offsets, d_block_offsets, n_bins);
     HIP_CHECK(hipGetLastError());
 
     HIP_CHECK(hipMemcpy(d_cursors, d_offsets, hist_bytes, hipMemcpyDeviceToDevice));
 
     hipLaunchKernelGGL(scatter_particles_by_i_elm,
-        dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+        dim3(grid_size), dim3(BLOCK_SIZE), scatter_shared_bytes, 0,
         d_x, d_p, d_st, d_i_elm, d_weight,
-        num_particles, d_cursors,
+        num_particles, n_bins, d_cursors,
         d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt);
     HIP_CHECK(hipGetLastError());
+
+#if GPU_DEBUG == 1
+    // Validate the block-local scatter produced a fully element-contiguous array.
+    {
+        int* d_err = nullptr;
+        HIP_CHECK(hipMalloc(&d_err, sizeof(int)));
+        HIP_CHECK(hipMemset(d_err, 0, sizeof(int)));
+        hipLaunchKernelGGL(check_sorted_contiguous,
+            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+            d_i_elm_alt, num_particles, n_bins, d_err);
+        HIP_CHECK(hipGetLastError());
+        int h_err = 0;
+        HIP_CHECK(hipMemcpy(&h_err, d_err, sizeof(int), hipMemcpyDeviceToHost));
+        if (h_err != 0)
+            fprintf(stderr, "[sort_particles] CONTIGUITY CHECK FAILED: %d inversions "
+                            "in sorted i_elm (n_bins=%d, num_particles=%d)\n",
+                    h_err, n_bins, num_particles);
+        HIP_CHECK(hipFree(d_err));
+    }
+#endif
 
     std::swap(d_x, d_x_alt);
     std::swap(d_p, d_p_alt);

@@ -645,11 +645,13 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     double *const d_weight_sorted_orig = d_weight_sorted;
     int    *const d_i_elm_sorted_orig  = d_i_elm_sorted;
 
-    HIP_CHECK(hipMalloc(&d_hist,    I_ELM_BINS * sizeof(int)));
-    HIP_CHECK(hipMalloc(&d_offsets, I_ELM_BINS * sizeof(int)));
-    HIP_CHECK(hipMalloc(&d_cursors, I_ELM_BINS * sizeof(int)));
+    // Histogram bins are runtime-sized: one per element + one for invalid/lost.
+    const int n_bins = n_elements + 1;
+    HIP_CHECK(hipMalloc(&d_hist,    n_bins * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_offsets, n_bins * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_cursors, n_bins * sizeof(int)));
 
-    int scan_blocks = (I_ELM_BINS + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
+    int scan_blocks = (n_bins + HIST_SCAN_CHUNK - 1) / HIST_SCAN_CHUNK;
     HIP_CHECK(hipMalloc(&d_block_sums, scan_blocks * sizeof(int)));
     HIP_CHECK(hipMalloc(&d_block_offsets, scan_blocks * sizeof(int)));
 #endif
@@ -738,7 +740,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         sort_particles_by_i_elm_gpu(
             d_x, d_p, d_st, d_i_elm, d_weight,
             d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
-            num_particles, d_hist, d_offsets, d_cursors,
+            num_particles, n_elements, d_hist, d_offsets, d_cursors,
             d_block_sums, d_block_offsets);
         ++sort_call_count;
 #if GPU_DEBUG == 1
