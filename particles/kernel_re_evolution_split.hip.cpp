@@ -193,9 +193,18 @@ void proj_accumulate_kernel(
     // carrying a register accumulator per owned cell across all tiles.
     // PROJ_CELLS_PER_ELM (=336 at N_TOR=7); cells/thread = ceil(it / ACCUM_BLOCK_SIZE).
     constexpr int CELLS_PER_THREAD = (PROJ_CELLS_PER_ELM + ACCUM_BLOCK_SIZE - 1) / ACCUM_BLOCK_SIZE;
+    // Kahan compensated summation: `acc[r]` is the long-lived per-cell accumulator
+    // that spans EVERY particle tile of this element's run (cnt can be many thousands),
+    // so a plain `acc += s` loses low-order bits as the running sum grows relative to
+    // each tile's contribution.  `cmp[r]` carries the per-cell compensation (the bits
+    // dropped by the last add) across tiles, recovering near-extended precision at the
+    // cost of a few FLOPs per tile.  This matches the effective precision of the batch
+    // kernel's lane-fanout accumulators and removes the larger per-step error floor of
+    // the single sequential reduction.
     double acc[CELLS_PER_THREAD];
+    double cmp[CELLS_PER_THREAD];
     #pragma unroll
-    for (int r = 0; r < CELLS_PER_THREAD; ++r) acc[r] = 0.0;
+    for (int r = 0; r < CELLS_PER_THREAD; ++r) { acc[r] = 0.0; cmp[r] = 0.0; }
 
     if (cnt > 0) {
         for (int base = 0; base < cnt; base += PROJ_TILE) {
@@ -242,7 +251,11 @@ void proj_accumulate_kernel(
                 double s = 0.0;
                 for (int q = 0; q < tile; ++q)
                     s += sh_bf[q][nm] * sh_hz[q][it] * sh_vw[q][var];
-                acc[r] += s;
+                // Kahan-compensated add of this tile's partial `s` into acc[r].
+                double y = s - cmp[r];
+                double t_sum = acc[r] + y;
+                cmp[r] = (t_sum - acc[r]) - y;
+                acc[r] = t_sum;
             }
             __syncthreads();  // tile factors consumed; safe to overwrite next tile
         }
