@@ -28,6 +28,12 @@
 
 #define TO_KB(bytes) ((double)(bytes) / 1024.0)
 
+// The shared-memory LUT for nl_values/nl_deltas is a batch-kernel-only feature:
+// only evolve_batch_kernel builds the cache and passes it down, so the extra LUT
+// parameters of calc_EBpsiU / calc_B_only / volume_preserving_push exist only in
+// the batch translation unit. The split kernel calls them without LUT arguments.
+#define LUT_ACTIVE (USE_BATCH_KERNEL == 1 && LUT_VALUES_DELTAS == 1)
+
 static constexpr int N_TOR = n_tor;
 static constexpr int N_COORD_TOR = n_coord_tor;
 static constexpr int N_PERIOD = n_period;
@@ -1228,7 +1234,17 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                  double F0, double t_norm, double t_jorek,
                  int i_elm_f, const double st[2], double phi,       // i_elm_f is 1-based
                  double time,
-                 double E[3], double B[3])
+                 double E[3], double B[3]
+#if LUT_ACTIVE
+                 , const int*    sh_lut_keys
+                 , const double* sh_cache_v_flat
+                 , const double* sh_cache_d_flat
+#endif
+#if LUT_ACTIVE && LUT_DEBUG == 1
+                 , unsigned long long* sh_lut_hits
+                 , unsigned long long* sh_lut_misses
+#endif
+                 )
 {
     // Replace HZ[N_TOR]/dHZ[N_TOR] (2*N_TOR = 30 doubles = 60 registers for N_TOR=15)
     // with NMODE+1 cos/sin pairs (16 registers). Identical trig cost: NMODE sincos calls.
@@ -1252,6 +1268,18 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
     double Pd_s[2]   = {0.0, 0.0};
     double Pd_t[2]   = {0.0, 0.0};
     double Pd_phi[2] = {0.0, 0.0};
+
+#if LUT_ACTIVE
+    int lut_cache_slot = -1;
+    for (int s = 0; s < LUT_N_SLOTS; ++s)
+        if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
+#if LUT_DEBUG == 1
+    if (lut_cache_slot >= 0)
+        atomicAdd(sh_lut_hits,    1ULL);
+    else
+        atomicAdd(sh_lut_misses, 1ULL);
+#endif
+#endif
 
     double R = 0.0, R_s = 0.0, R_t = 0.0;
     double Zc = 0.0, Z_s = 0.0, Z_t = 0.0;
@@ -1280,8 +1308,19 @@ void calc_EBpsiU(const double* __restrict__ nl_values,
                         if (it & 1) { hz_it = cmode[i]; dhz_it = -ni * smode[i]; }
                         else        { hz_it = smode[i]; dhz_it =  ni * cmode[i]; }
                     }
+#if LUT_ACTIVE
+                    double raw_v = (lut_cache_slot >= 0)
+                        ? sh_cache_v_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
+                        : __ldg(&nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)]);
+                    double val_v = raw_v * sz;
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[(kv + NV*(it + N_TOR*(kf + NDEG*ivar))) * LUT_N_SLOTS + lut_cache_slot]
+                        : __ldg(&nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)]);
+                    double val_d = raw_d * sz;
+#else
                     double val_v = __ldg(&nl_values[nl_val_idx(ivar, kf, it, iv, n_nodes)]) * sz;
                     double val_d = __ldg(&nl_deltas[nl_val_idx(ivar, kf, it, iv, n_nodes)]) * sz;
+#endif
                     v   += val_v * hz_it;
                     vp  += val_v * dhz_it;
                     vd  += val_d * hz_it;
@@ -1384,7 +1423,17 @@ void calc_B_only(const double* __restrict__ nl_values,
                  double time_now, double time_prev, double t_jorek,
                  int flag_static,
                  int i_elm_f, const double st[2], double phi, double time,  // i_elm_f is 1-based
-                 double B[3])
+                 double B[3]
+#if LUT_ACTIVE
+                 , const int*    sh_lut_keys
+                 , const double* sh_cache_v_flat
+                 , const double* sh_cache_d_flat
+#endif
+#if LUT_ACTIVE && LUT_DEBUG == 1
+                 , unsigned long long* sh_lut_hits
+                 , unsigned long long* sh_lut_misses
+#endif
+                 )
 {
     // Linear time-interpolation of psi is active only in the dynamic branch,
     // matching do_interp_PRZ_1. Uniform across the launch (no warp divergence).
@@ -1402,6 +1451,18 @@ void calc_B_only(const double* __restrict__ nl_values,
     }
 
     int ie = i_elm_f - 1;
+
+#if LUT_ACTIVE
+    int lut_cache_slot = -1;
+    for (int s = 0; s < LUT_N_SLOTS; ++s)
+        if (sh_lut_keys[s] == i_elm_f) { lut_cache_slot = s; break; }
+#if LUT_DEBUG == 1
+    if (lut_cache_slot >= 0)
+        atomicAdd(sh_lut_hits,    1ULL);
+    else
+        atomicAdd(sh_lut_misses, 1ULL);
+#endif
+#endif
 
     // Only psi spatial derivatives needed for B (snapshot + delta accumulators).
     double P_s_0  = 0.0, P_t_0  = 0.0;
@@ -1428,10 +1489,25 @@ void calc_B_only(const double* __restrict__ nl_values,
                     int i = (it + 1) / 2;
                     hz_it = (it & 1) ? cmode[i] : smode[i];
                 }
+#if LUT_ACTIVE
+                // ivar=0 slice of the transposed cache: lid = kv + NV*(it + N_TOR*kf).
+                double raw_v = (lut_cache_slot >= 0)
+                    ? sh_cache_v_flat[(kv + NV*(it + N_TOR*kf)) * LUT_N_SLOTS + lut_cache_slot]
+                    : __ldg(&nl_values[nl_val_idx(0, kf, it, iv, n_nodes)]);
+                double val_v = raw_v * sz;
+#else
                 double val_v = __ldg(&nl_values[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
+#endif
                 v += val_v * hz_it;
                 if (do_interp) {
+#if LUT_ACTIVE
+                    double raw_d = (lut_cache_slot >= 0)
+                        ? sh_cache_d_flat[(kv + NV*(it + N_TOR*kf)) * LUT_N_SLOTS + lut_cache_slot]
+                        : __ldg(&nl_deltas[nl_val_idx(0, kf, it, iv, n_nodes)]);
+                    double val_d = raw_d * sz;
+#else
                     double val_d = __ldg(&nl_deltas[nl_val_idx(0, kf, it, iv, n_nodes)]) * sz;
+#endif
                     vd += val_d * hz_it;
                 }
             }
@@ -1489,7 +1565,17 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             int flag_static, int flag_zero_dpsidt,
                             double F0, double t_norm, double t_jorek,
                             double mass, double time, double timestep,
-                            int &ifail)
+                            int &ifail
+#if LUT_ACTIVE
+                            , const int*    sh_lut_keys
+                            , const double* sh_cache_v_flat
+                            , const double* sh_cache_d_flat
+#endif
+#if LUT_ACTIVE && LUT_DEBUG == 1
+                            , unsigned long long* sh_lut_hits
+                            , unsigned long long* sh_lut_misses
+#endif
+                            )
 {
     // No need to check if particle is valid, it is already done in the caller
     // Turn particle position from cylindrical to cartesian coordinates
@@ -1540,7 +1626,14 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                 time_now, time_prev, flag_static, flag_zero_dpsidt,
                 F0, t_norm, t_jorek,
                 i_elm_f, st, x[2], time + 0.5 * timestep,
-                E, B_field);
+                E, B_field
+#if LUT_ACTIVE
+                , sh_lut_keys, sh_cache_v_flat, sh_cache_d_flat
+#endif
+#if LUT_ACTIVE && LUT_DEBUG == 1
+                , sh_lut_hits, sh_lut_misses
+#endif
+                );
 
     // --- Second half-step ---
 
