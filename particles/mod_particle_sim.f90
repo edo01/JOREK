@@ -13,32 +13,32 @@ public group_num_from_id, config_num_from_id
 !> A group of particles, implemented as an allocatable array.
 !> It must contain particles of the same species (charge number).
 type :: particle_group
-  integer            :: Z                                          !< Atomic number of al particles in the group (-1 for electrons, 0 for fieldline-following)
-  real*8             :: mass                                       !< Mass of all the particles in the group
-  type(ADF11_all)    :: ad                                         !< OPEN-ADAS datafiles for this species
-  type(coronal)      :: cor                                        !< (coronal) equilibrium pre-calculation
-  real*8             :: dt                                         !< timestep (if fixed for all particles in this group)
-  character(len=3)   :: coupling_scheme                            !< coupling scheme to use for the group
-  real*8             :: n_particles                                !< number of super/marker particles in group
-  character(len=3)   :: id = "???"                                 !< unique identifier for the group (mainly used when restarting)
-  real*8             :: average_weight = -1.d0                     !< average weight of all particles in the group (preset value negative to avoid killing of particles in first instance)
-  logical            :: do_conservation_checks                     !< whether to write conservation checks every interaction in the output file (i.e. the change in particles/momentum/energy etc.)
+  integer            :: Z                      = 1        !< Atomic number of al particles in the group (-1 for electrons, 0 for fieldline-following)
+  real*8             :: mass                   = 0.d0     !< Mass of all the particles in the group
+  type(ADF11_all)    :: ad                                !< OPEN-ADAS datafiles for this species
+  type(coronal)      :: cor                               !< (coronal) equilibrium pre-calculation
+  real*8             :: dt                                !< timestep (if fixed for all particles in this group)
+  character(len=3)   :: coupling_scheme        = 'non'    !< coupling scheme to use for the group
+  real*8             :: n_particles            = 0.d0     !< number of super/marker particles in group
+  character(len=3)   :: id                     = 'non'    !< unique identifier for the group (mainly used when restarting)
+  real*8             :: average_weight         = -1.d0    !< average weight of all particles in the group (preset value negative to avoid killing of particles in first instance)
+  logical            :: do_conservation_checks = .false.  !< whether to write conservation checks every interaction in the output file (i.e. the change in particles/momentum/energy etc.)
  
   ! ================ for neutrals and impurities =============
-  logical            :: use_kin_ionisation       !< switch on ionisation for group         
-  logical            :: use_kin_puffing          !< switch on particle puffing for group
-  logical            :: use_kin_radiation        !< switch on line radiation for group
+  logical            :: use_kin_ionisation = .false.      !< switch on ionisation for group         
+  logical            :: use_kin_puffing    = .false.      !< switch on particle puffing for group
+  logical            :: use_kin_radiation  = .false.      !< switch on line radiation for group
 
   ! --- neutrals only
-  logical            :: use_kin_cx               !< switch on charge-exchange for group  
-  logical            :: use_kin_recombination    !< switch on recombination for group       
-  logical            :: use_kin_neutral_coll     !< switch on neutral self-collisions for group       
+  logical            :: use_kin_cx            = .false.   !< switch on charge-exchange for group  
+  logical            :: use_kin_recombination = .false.   !< switch on recombination for group       
+  logical            :: use_kin_neutral_coll  = .false.   !< switch on neutral self-collisions for group       
 
   ! --- impurities only
-  logical            :: use_kin_bg_collisions    !< switch on collisions with the background plasma
-  character(len=9)   :: kin_bg_coll_type         !< method to calculate heat flux in kin_bg_collision
-  real*8             :: homma2020_alpha          !< flux limiting factor alpha for Homma2020 heat flux
-  integer            :: ics_group_idx            !< internal index given to this specific impurities group
+  logical            :: use_kin_bg_collisions = .false.     !< switch on collisions with the background plasma
+  character(len=9)   :: kin_bg_coll_type      = 'Homma2020' !< method to calculate heat flux in kin_bg_collision
+  real*8             :: homma2020_alpha       = 1.5d0       !< flux limiting factor alpha for Homma2020 heat flux
+  integer            :: ics_group_idx         = -1          !< internal index given to this specific impurities group
 
   class(particle_base), dimension(:), allocatable :: particles
 

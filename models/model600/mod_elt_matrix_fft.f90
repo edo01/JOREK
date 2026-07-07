@@ -21,7 +21,7 @@ use phys_module
 use coupling_variables
 use mod_coupling_settings
 use pellet_module
-use diffusivities, only: get_dperp, get_zkperp, get_zk_iperp, get_zk_eperp
+use diffusivities, only: get_dperp, get_zkperp, get_zk_iperp, get_zk_eperp, get_vpinch
 use equil_info, only : get_psi_n
 use corr_neg
 use mod_neutral_source
@@ -62,6 +62,7 @@ real*8     :: Bgrad_rhoimp, Bgrad_rhoimp_psi, Bgrad_rhoimp_rhoimp, Bgrad_rhoimp_
 real*8     :: ZK_par_T, dZK_par_dT, ZKi_par_T, dZKi_par_dT, ZKe_par_T, dZKe_par_dT
 real*8     :: D_prof, D_par_local, ZK_prof, ZKi_prof, ZKe_prof, psi_norm, theta, zeta, delta_u_x, delta_u_y, delta_ps_x, delta_ps_y
 real*8     :: D_prof_imp, D_par_local_imp
+real*8     :: V_prof_pinch, psi_grad2
 real*8     :: rhs_ij(n_var), rhs_ij_k(n_var)
 real*8     :: amat(n_var,n_var), amat_k(n_var,n_var), amat_n(n_var,n_var), amat_kn(n_var,n_var), amat_nn(n_var,n_var)
 
@@ -1190,6 +1191,9 @@ do i=1,n_vertex_max
 
           ! --- Particle diffusivities
           D_prof         = get_dperp (psi_norm)
+          V_prof_pinch   = get_vpinch(psi_norm) * sign(1.d0,psi_bnd-psi_axis)
+          psi_grad2      = ps0_x**2 + ps0_y**2
+          if (psi_grad2 < 1.d-30) psi_grad2 = 1.d-30
           D_par_local     = D_par
           D_par_local_imp = D_par_imp
           D_perp_num_psin = D_perp_num +                                                  &
@@ -1647,23 +1651,27 @@ do i=1,n_vertex_max
 
                        - D_perp_num_psin*(v_xx + v_x/Bigr + v_yy)*(r0_xx + r0_x/Bigr + r0_yy) * BigR                                 * xjac * tstep * factor(var_rho,11)&
 
-                       - tgnum_rho * 0.25d0 * BigR**3 * (r0_x * u0_y - r0_y * u0_x)                                                                                     &
-                                                    * ( v_x * u0_y - v_y * u0_x) * xjac * tstep * tstep                                             * factor(var_rho,12)&
-                       - tgnum_rho * 0.25d0 / BigR * vpar0**2                                                                                                           &
-                                 * (r0_x * ps0_y - r0_y * ps0_x + F0 / BigR * r0_p)                                                                                     &
-                                 * ( v_x * ps0_y -  v_y * ps0_x                   ) * xjac * tstep * tstep * factor(var_rho,12) &
+                       - tgnum_rho * 0.25d0 * BigR**3 * (r0_x * u0_y - r0_y * u0_x)                              &
+                                                    * ( v_x * u0_y - v_y * u0_x) * xjac * tstep * tstep                                  * factor(var_rho,12)&
+                       - tgnum_rho * 0.25d0 / BigR * vpar0**2                                                    &
+                                 * (r0_x * ps0_y - r0_y * ps0_x + F0 / BigR * r0_p)                              &
+                                 * ( v_x * ps0_y -  v_y * ps0_x                   ) * xjac * tstep * tstep                               * factor(var_rho,12)&
 
                       ! ------------------------------ from kinetic neutral / impurity coupling --------------------------------------
-                       + v * BigR * aux_rho0                                                                                         * xjac * tstep * factor(var_rho,13) 
+                       + v * BigR * aux_rho0                                                                                         * xjac * tstep * factor(var_rho,13) &
                       ! -------------------------------- end of terms from kinetic coupling ------------------------------------------
 
-            rhs_ij_k(var_rho) = - ((D_par_local+D_par_sc_num*tau_sc)-D_prof) * BigR / BB2 * Bgrad_rho_k_star * (Bgrad_rho-Bgrad_rhoimp)    * xjac * tstep * factor(var_rho,4) &
-                            - ((D_par_local_imp+D_par_imp_sc_num*tau_sc)-D_prof_imp) * BigR / BB2 * Bgrad_rho_k_star * Bgrad_rhoimp        * xjac * tstep * factor(var_rho,4) &
-                            - D_prof * BigR  * (                  v_p*(r0_p-rimp0_p) /BigR**2 )                                      * xjac * tstep * factor(var_rho,5) &
-                            - D_prof_imp * BigR  * (                  v_p*rimp0_p /BigR**2 )                                         * xjac * tstep * factor(var_rho,5) &
-                       - tgnum_rho * 0.25d0 / BigR * vpar0**2                                                                                                           &
-                                 * (r0_x * ps0_y - r0_y * ps0_x + F0 / BigR * r0_p)                                                                                     &
-                                 * (                            + F0 / BigR * v_p) * xjac * tstep * tstep                                          * factor(var_rho,12)
+                      ! --- Inward pinch (rho only): weak form of -∇·(r0 * V_pinch_vec),
+                      !     V_pinch_vec = -V_prof_pinch * ∇ψ/|∇ψ| (positive V_prof_pinch = inward toward magnetic axis)
+                       - V_prof_pinch / sqrt(psi_grad2) * (v_x * ps0_x + v_y * ps0_y) * r0 * BigR * xjac * tstep * factor(var_rho,14)
+
+            rhs_ij_k(var_rho) = - ((D_par_local+D_par_sc_num*tau_sc)-D_prof) * BigR / BB2 * Bgrad_rho_k_star * (Bgrad_rho-Bgrad_rhoimp) * xjac * tstep * factor(var_rho,4) &
+                            - ((D_par_local_imp+D_par_imp_sc_num*tau_sc)-D_prof_imp) * BigR / BB2 * Bgrad_rho_k_star * Bgrad_rhoimp     * xjac * tstep * factor(var_rho,4) &
+                            - D_prof * BigR  * (                  v_p*(r0_p-rimp0_p) /BigR**2 )     * xjac * tstep * factor(var_rho,5) &
+                            - D_prof_imp * BigR  * (                  v_p*rimp0_p /BigR**2 )        * xjac * tstep * factor(var_rho,5) &
+                       - tgnum_rho * 0.25d0 / BigR * vpar0**2 &
+                                 * (r0_x * ps0_y - r0_y * ps0_x + F0 / BigR * r0_p)                              &
+                                 * (                            + F0 / BigR * v_p) * xjac * tstep * tstep        * factor(var_rho,12) 
 
             !###################################################################################################
             !#  Parallel Velocity Equation                                                                     #
@@ -1733,7 +1741,13 @@ do i=1,n_vertex_max
                                 + tauIC*2.   * (ps0_x * Pi0_x + ps0_y * Pi0_y)                   &
                                 + aki_neo_prof(ms,mt) * tauIC*2. * r0 * (ps0_x * Ti0_x + ps0_y * Ti0_y) - r0 * Vpar0 * Btheta2) * xjac * tstep * factor(var_vpar,10) * BigR
               endif
-              
+
+              ! --- Inward pinch: advection of v_par by V_pinch = -V_prof_pinch * ∇ψ/|∇ψ|
+              !     Adds ρ V_pinch · ∇v_par to the v_par equation (momentum-conserving coupling to density pinch)
+              rhs_ij(var_vpar) = rhs_ij(var_vpar) &
+                                 + V_prof_pinch / sqrt(psi_grad2) * (ps0_x * vpar0_x + ps0_y * vpar0_y) &
+                                         * r0 * v * BigR * xjac * tstep * factor(var_vpar,13)
+
               rhs_ij_k(var_vpar) = + 0.5d0 * r0 * vpar0**2 * BB2 * F0 / BigR * v_p                      * xjac * tstep * factor(var_vpar,3) &
   
                  - tgnum_vpar * 0.25d0 * r0 * Vpar0**2 * BB2 &
@@ -2753,7 +2767,9 @@ do i=1,n_vertex_max
 
                           + tgnum_rho * 0.25d0 / BigR * vpar0**2                                                        &
                                     * (rho_x * ps0_y - rho_y * ps0_x )                             &
-                                    * ( v_x * ps0_y -  v_y * ps0_x   ) * xjac * theta * tstep * tstep
+                                    * ( v_x * ps0_y -  v_y * ps0_x   ) * xjac * theta * tstep * tstep &
+
+                          + V_prof_pinch / sqrt(psi_grad2) * (v_x * ps0_x + v_y * ps0_y) * rho * BigR   * xjac * theta * tstep
 
                   amat_k(var_rho,var_rho) = + ((D_par_local+D_par_sc_num*tau_sc)-D_prof) * BigR / BB2 * Bgrad_rho_k_star * Bgrad_rho_rho          * xjac * theta * tstep &
  
@@ -2964,10 +2980,14 @@ do i=1,n_vertex_max
 
                                + tgnum_vpar * 0.25d0 * vpar0 * Vpar0**2 * BB2 * fact_conservative_u &
                                          * (-(ps0_s * rho_t - ps0_t * rho_s)/xjac                          ) / BigR  &
-                                         * (-(ps0_s * v_t     - ps0_t * v_s)    /xjac)  * xjac * theta * tstep*tstep
+                                         * (-(ps0_s * v_t     - ps0_t * v_s)    /xjac)  * xjac * theta * tstep*tstep &
+
+                               ! --- Inward pinch: d/d(rho) of ρ V_pinch · ∇v_par
+                               + V_prof_pinch / sqrt(psi_grad2) * (ps0_x * vpar0_x + ps0_y * vpar0_y) &
+                                       * rho * v * BigR * xjac * theta * tstep
 
                     !===============================End of new TG_num terms============================
-  
+
                     amat_k(var_vpar,var_rho) = - 0.5d0 * rho * vpar0**2 * BB2 * F0 / BigR * v_p       * xjac * theta * tstep &
   
                                 + tgnum_vpar * 0.25d0 * rho * Vpar0**2 * BB2 &
@@ -3096,9 +3116,13 @@ do i=1,n_vertex_max
 
                     !===============================End of new TG_num terms============================
                             
-                            + visco_par_par * F0**2 / (BigR * BB2) * Bgrad_vpar_vpar * Bgrad_rho_star         * xjac * theta * tstep
+                            + visco_par_par * F0**2 / (BigR * BB2) * Bgrad_vpar_vpar * Bgrad_rho_star         * xjac * theta * tstep &
 
-  
+                            ! --- Inward pinch: d/d(vpar) of rho V_pinch . grad(v_par)
+                            + V_prof_pinch / sqrt(psi_grad2) * (ps0_x * vpar_x + ps0_y * vpar_y) &
+                                    * r0 * v * BigR * xjac * theta * tstep
+
+
                     if (normalized_velocity_profile) then
                       amat(var_vpar,var_vpar) = amat(var_vpar,var_vpar) + (visco_par + visco_par_sc_num * tau_sc) * (v_x * Vpar_x + v_y * Vpar_y) * BigR        * xjac  * theta * tstep 
                     else

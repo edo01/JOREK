@@ -1,12 +1,12 @@
-subroutine grid_xpoint_wall(node_list, element_list, n_flux, n_open, n_private, n_leg, n_leg_out, n_tht, n_ext,&
-  xr_closed, SIG_open, SIG_closed, SIG_private, SIG_theta, SIG_leg_0, SIG_leg_1, dPSI_open, dPSI_private)
+subroutine grid_upper_xpoint_wall(node_list, element_list, n_flux, n_open, n_up_priv, n_up_leg, n_up_leg_out, n_tht, n_ext,&
+  xr_closed, SIG_open, SIG_closed, SIG_up_priv, SIG_theta_up, SIG_up_leg_0, SIG_up_leg_1, dPSI_open, dPSI_up_priv)
 !-----------------------------------------------------------------------
 ! subroutine defines a flux surface aligned finite element grid
 ! including a single x-point.
 ! Add shape of external wall, align to wall close to it.
 !-----------------------------------------------------------------------
 
-use constants,  only: LOWER_XPOINT
+use constants,  only: UPPER_XPOINT
 use data_structure
 use tr_module 
 use gauss
@@ -24,10 +24,10 @@ implicit none
 ! --- Routine parameters
 type (type_node_list),    intent(inout) :: node_list
 type (type_element_list), intent(inout) :: element_list
-integer,                  intent(in)    :: n_flux, n_open, n_private, n_leg, n_leg_out, n_tht
+integer,                  intent(in)    :: n_flux, n_open, n_up_priv, n_up_leg, n_up_leg_out, n_tht
 real*8,                   intent(in)    :: xr_closed(3), SIG_closed(3)
-real*8,                   intent(in)    :: SIG_open, SIG_private, SIG_theta, SIG_leg_0, SIG_leg_1
-real*8,                   intent(in)    :: dPSI_open, dPSI_private
+real*8,                   intent(in)    :: SIG_open, SIG_up_priv, SIG_theta_up, SIG_up_leg_0, SIG_up_leg_1
+real*8,                   intent(in)    :: dPSI_open, dPSI_up_priv
 
 ! --- local variables
 type (type_surface_list) :: flux_list
@@ -77,17 +77,17 @@ integer             :: i_elm1, i_vertex1, i_node1, i_node_save, iv1, iv2, iv3, i
 integer             :: i_elm2, i_vertex2, i_node2
 integer             :: n_remove_elements, n_remove_nodes, remove_elements(100), remove_nodes(100), newnode_index(n_nodes_max)
 integer             :: node_indices( (n_order+1)/2, (n_order+1)/2 )
-integer             :: skip_index, n_leg_out_loc, n_leg_total
+integer             :: skip_index, n_up_leg_out_loc, n_up_leg_total
 
 xpoint = .true.
 extend = .true.;   if (n_ext .lt. 1) extend = .false.
-xcase  = LOWER_XPOINT
+xcase  = UPPER_XPOINT
 my_id  = 0
 
 PI = 2.d0 * asin(1.d0)
 
 write(*,*) '*************************************'
-write(*,*) '*    X-point(wall) grid             *'
+write(*,*) '*    X-point up (wall) grid         *'
 write(*,*) '*************************************'
 
 open(23,file=wall_file)
@@ -113,13 +113,14 @@ call find_xpoint(my_id,node_list,element_list,psi_xpoint,R_xpoint,Z_xpoint,i_elm
 ! -------------------------------------------------------------------------------------------
 
 
-flux_list%n_psi = n_flux - 1 + n_open + n_private            ! excludes the axis
+flux_list%n_psi = n_flux - 1 + n_open + n_up_priv            ! excludes the axis
 
 allocate(flux_list%psi_values(flux_list%n_psi))
-allocate(s_values(n_flux+n_open+n_private),psi_gaussians(4,n_flux+n_open+n_private))
+allocate(s_values(n_flux+n_open+n_up_priv),psi_gaussians(4,n_flux+n_open+n_up_priv))
 
 allocate(s_tmp(n_flux),Aspline(n_flux),Bspline(n_flux),Cspline(n_flux),Dspline(n_flux),s_equidistant(n_flux))
 s_tmp = 0
+
 call meshac3(n_flux,s_tmp,xr_closed(1),xr_closed(2),xr_closed(3),SIG_closed(1),SIG_closed(2),SIG_closed(3),0.2d0,1.0d0)
 
 do i=1,n_flux
@@ -129,7 +130,7 @@ call spline(n_flux,s_equidistant,s_tmp,0.d0,0.d0,2,Aspline,Bspline,Cspline,Dspli
 
 do i=1,n_flux-1
   s_values(i) = s_tmp(i+1)
-  flux_list%psi_values(i) =  psi_axis + s_values(i)**2 * (psi_xpoint(1) - psi_axis)
+  flux_list%psi_values(i) =  psi_axis + s_values(i)**2 * (psi_xpoint(2) - psi_axis)
 enddo
 
 deallocate(s_tmp,Aspline,Bspline,Cspline,Dspline,s_equidistant)
@@ -144,24 +145,24 @@ call spline(n_open+1,s_equidistant,s_tmp,0.d0,0.d0,2,Aspline,Bspline,Cspline,Dsp
 
 do i=1,n_open
   s_values(i+n_flux-1)             =  1.d0 + dPSI_open*s_tmp(i+1)
-  flux_list%psi_values(i+n_flux-1) =  psi_axis + s_values(i+n_flux-1)**2 * (psi_xpoint(1) - psi_axis)
+  flux_list%psi_values(i+n_flux-1) =  psi_axis + s_values(i+n_flux-1)**2 * (psi_xpoint(2) - psi_axis)
 enddo
 
 deallocate(s_tmp,Aspline,Bspline,Cspline,Dspline,s_equidistant)
-allocate(s_tmp(n_private+1),Aspline(n_private+1),Bspline(n_private+1), &
-                            Cspline(n_private+1),Dspline(n_private+1),s_equidistant(n_private+1))
+allocate(s_tmp(n_up_priv+1),Aspline(n_up_priv+1),Bspline(n_up_priv+1), &
+                            Cspline(n_up_priv+1),Dspline(n_up_priv+1),s_equidistant(n_up_priv+1))
 
 s_tmp = 0
-call meshac2(n_private+1,s_tmp,0.d0,9999.d0,SIG_private,9999.d0,0.6d0,1.0d0)
+call meshac2(n_up_priv+1,s_tmp,0.d0,9999.d0,SIG_up_priv,9999.d0,0.6d0,1.0d0)
 
-do i=1,n_private+1
-  s_equidistant(i) = float(i-1)/float(n_private)
+do i=1,n_up_priv+1
+  s_equidistant(i) = float(i-1)/float(n_up_priv)
 enddo
-call spline(n_private+1,s_equidistant,s_tmp,0.d0,0.d0,2,Aspline,Bspline,Cspline,Dspline)
+call spline(n_up_priv+1,s_equidistant,s_tmp,0.d0,0.d0,2,Aspline,Bspline,Cspline,Dspline)
 
-do i=1,n_private
-  s_values(i+n_flux-1+n_open)             =  1.d0 - dPSI_private*s_tmp(i+1)
-  flux_list%psi_values(i+n_flux-1+n_open) =  psi_axis + s_values(i+n_flux-1+n_open)**2 * (psi_xpoint(1) - psi_axis)
+do i=1,n_up_priv
+  s_values(i+n_flux-1+n_open)             =  1.d0 - dPSI_up_priv*s_tmp(i+1)
+  flux_list%psi_values(i+n_flux-1+n_open) =  psi_axis + s_values(i+n_flux-1+n_open)**2 * (psi_xpoint(2) - psi_axis)
 enddo
 
 call find_flux_surfaces(my_id,xpoint,xcase,node_list,element_list,flux_list)
@@ -182,25 +183,25 @@ endif
 ! -------------------------------------------------------------------------------------------
 
 !-------------------------------------- store some data for the new grid
-n_psi   = n_flux + n_open + n_private          ! includes the axis
+n_psi   = n_flux + n_open + n_up_priv          ! includes the axis
 
-n_leg_out_loc = n_leg_out
-if (n_leg_out .eq. 0) n_leg_out_loc = n_leg
-n_leg_total = n_leg + n_leg_out_loc
+n_up_leg_out_loc = n_up_leg_out
+if (n_up_leg_out .eq. 0) n_up_leg_out_loc = n_up_leg
+n_up_leg_total = n_up_leg + n_up_leg_out_loc
 
-n_theta = n_tht + n_leg_total                  ! includes center and legs
+n_theta = n_tht + n_up_leg_total                  ! includes center and legs
 
 n_total = n_psi + n_ext                        ! add number of non-aligned surfaces
 
-write(*,*) "n_leg           :", n_leg
-write(*,*) "n_leg_out_loc   :", n_leg_out_loc
-write(*,*) "n_leg_total     :", n_leg_total
+write(*,*) "n_up_leg           :", n_up_leg
+write(*,*) "n_up_leg_out_loc   :", n_up_leg_out_loc
+write(*,*) "n_up_leg_total     :", n_up_leg_total
 
 allocate(RR_new(n_total,n_theta),ZZ_new(n_total,n_theta))
 allocate(ielm_flux(n_total,n_theta),s_flux(n_total,n_theta))
 allocate(t_flux(n_total,n_theta),t_tht(n_total,n_theta))
 
-tht_x = atan2(Z_xpoint(1)-Z_axis,R_xpoint(1)-R_axis)
+tht_x = atan2(Z_xpoint(2)-Z_axis,R_xpoint(2)-R_axis)
 if (tht_x .lt. 0.d0) tht_x = tht_x + 2.d0 * PI
 
 !-------------------------------- define the polar coordinate
@@ -211,7 +212,7 @@ allocate(theta_sep(n_theta),R_sep(n_theta),Z_sep(n_theta))
 
 deallocate(s_tmp); allocate(s_tmp(n_tht))
 s_tmp = 0
-call meshac2(n_tht,s_tmp,0.d0,1.d0,SIG_theta,SIG_theta,0.8d0,1.0d0)
+call meshac2(n_tht,s_tmp,0.d0,1.d0,SIG_theta_up,SIG_theta_up,0.8d0,1.0d0)
 
 do j=1,n_tht
   theta_sep(j) = tht_x + 2.d0 * PI * s_tmp(j)
@@ -224,14 +225,14 @@ enddo
 write(*,*) ' tht_x : ',tht_x
 tht_max = PI/2.d0+tht_x
 write(*,*) ' L9 : ',tht_max
-call find_wall_crossing(R_wall,Z_wall,n_wall,R_xpoint(1),Z_xpoint(1),tht_max,RL9,ZL9,Tw)
+call find_wall_crossing(R_wall,Z_wall,n_wall,R_xpoint(2),Z_xpoint(2),tht_max,RL9,ZL9,Tw)
 
 tht_max = 3.d0*PI/2.d0+tht_x
 write(*,*) ' L8 : ',tht_max
-call find_wall_crossing(R_wall,Z_wall,n_wall,R_xpoint(1),Z_xpoint(1),tht_max,RL8,ZL8,Tw)
+call find_wall_crossing(R_wall,Z_wall,n_wall,R_xpoint(2),Z_xpoint(2),tht_max,RL8,ZL8,Tw)
 
-write(*,'(A,2e16.8)') ' L8 (inside wall crossing) : ',RL8,ZL8  ! inside wall crossing at x-point level
-write(*,'(A,2e16.8)') ' L9 (outside wall crossing): ',RL9,ZL9  ! outside wall crossing at x-point level
+write(*,'(A,2e16.8)') ' L8 (outside wall crossing) : ',RL8,ZL8  ! inside wall crossing at x-point level
+write(*,'(A,2e16.8)') ' L9 (inside wall crossing): ',RL9,ZL9  ! outside wall crossing at x-point level
 
 
 
@@ -252,10 +253,10 @@ do j=2,n_tht-1
 
 enddo
 
-R_sep(1) = R_xpoint(1)
-Z_sep(1) = Z_xpoint(1)
-R_sep(n_tht) = R_xpoint(1)
-Z_sep(n_tht) = Z_xpoint(1)
+R_sep(1) = R_xpoint(2)
+Z_sep(1) = Z_xpoint(2)
+R_sep(n_tht) = R_xpoint(2)
+Z_sep(n_tht) = Z_xpoint(2)
 
 if ( write_ps ) then
   call lincol(2)
@@ -264,19 +265,19 @@ if ( write_ps ) then
 endif
 
 !------------------------------------ find crossing with the first wall
-allocate(R_wall_max(n_tht+n_leg_total),Z_wall_max(n_tht+n_leg_total),T_wall_par(n_tht+n_leg_total))
-allocate(R_wall_min(n_tht+n_leg_total),Z_wall_min(n_tht+n_leg_total))
+allocate(R_wall_max(n_tht+n_up_leg_total),Z_wall_max(n_tht+n_up_leg_total),T_wall_par(n_tht+n_up_leg_total))
+allocate(R_wall_min(n_tht+n_up_leg_total),Z_wall_min(n_tht+n_up_leg_total))
 
 do j=1,n_tht
 
-  if (Z_sep(j) .le. Z_axis) then
+  if (Z_sep(j) .ge. Z_axis) then
 
     if (j .gt. n_tht/2) then
-      Z_wall_max(j) = Z_sep(j) + (ZL8 - Z_xpoint(1)) * ((Z_sep(j) - Z_axis)/(Z_xpoint(1) - Z_axis))**2
-      tht_max = PI
+      Z_wall_max(j) = Z_sep(j) + (ZL8 - Z_xpoint(2)) * ((Z_sep(j) - Z_axis)/(Z_xpoint(2) - Z_axis))**2
+      tht_max = 0.d0 ! PI
     else
-      Z_wall_max(j) = Z_sep(j) + (ZL9 - Z_xpoint(1)) * ((Z_sep(j) - Z_axis)/(Z_xpoint(1) - Z_axis))**2
-      tht_max = 0.d0
+      Z_wall_max(j) = Z_sep(j) + (ZL9 - Z_xpoint(2)) * ((Z_sep(j) - Z_axis)/(Z_xpoint(2) - Z_axis))**2
+      tht_max = PI   ! 0.d0
     endif
 
     call find_wall_crossing(R_wall,Z_wall,n_wall,R_sep(j),Z_wall_max(j),tht_max,Rw,Zw,Tw)
@@ -309,21 +310,21 @@ if ( write_ps ) then
 endif
 
 !------------------------------------ find crossing of last fluxsurface
-n_tht_3 = n_tht + n_leg_total
+n_tht_3 = n_tht + n_up_leg_total
 
 call tr_allocate(R_max,1,n_tht_3,"R_max")
 call tr_allocate(Z_max,1,n_tht_3,"Z_max")
 call tr_allocate(R_min,1,n_tht_3,"R_min")
 call tr_allocate(Z_min,1,n_tht_3,"Z_min")
 
-call find_theta_surface(node_list,element_list,flux_list,i_max,angle_L9,R_xpoint(1),Z_xpoint(1), &
+call find_theta_surface(node_list,element_list,flux_list,i_max,angle_L8,R_xpoint(2),Z_xpoint(2), &
                         i_elm_find,s_find,t_find,i_find)
 
 call interp_RZ(node_list,element_list,i_elm_find(1),s_find(1),t_find(1),RL10,ZL10)
 
 write(*,'(A,2e16.8)') ' L10 (last flux surface level x-point, outside): ',RL10,ZL10 ! outside wall crossing at x-point level
 
-call find_theta_surface(node_list,element_list,flux_list,i_max,angle_L8,R_xpoint(1),Z_xpoint(1), &
+call find_theta_surface(node_list,element_list,flux_list,i_max,angle_L9,R_xpoint(2),Z_xpoint(2), &
                         i_elm_find,s_find,t_find,i_find)
 
 call interp_RZ(node_list,element_list,i_elm_find(1),s_find(1),t_find(1),RL11,ZL11)
@@ -331,27 +332,27 @@ call interp_RZ(node_list,element_list,i_elm_find(1),s_find(1),t_find(1),RL11,ZL1
 write(*,'(A,2e16.8)') ' L11 (last flux surface level x-point, inside): ',RL11,ZL11  ! inside wall crossing at x-point level
 
 
-!------------------------------ second part of the grid below the x-point
+!------------------------------ second part of the grid above the x-point
 
 call find_theta_surface(node_list,element_list,flux_list,flux_list%n_psi,tht_x,R_axis,Z_axis,i_elm_find,s_find,t_find,i_find)
 
 do i=1,i_find
    call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RL5,ZL5)
 
-   if (ZL5 .le. Z_xpoint(1)) exit
+   if (ZL5 .ge. Z_xpoint(2)) exit
 enddo
 
-write(*,'(A,2e16.8)') ' L5 (last private flux surface, below x-point): ',RL5,ZL5
+write(*,'(A,2e16.8)') ' L5 (last private flux surface, above x-point): ',RL5,ZL5
 
 !------------------------------ find wall crossing of open and private field lines (i.e strike points)
 
-allocate(R_strike(n_open+n_private+1,2),Z_strike(n_open+n_private+1,2))
+allocate(R_strike(n_open+n_up_priv+1,2),Z_strike(n_open+n_up_priv+1,2))
 
 R_strike(:,1) = 1.d10
 R_strike(:,2) = 0.d0
 Z_strike      = 0.d0
 
-do i=1, n_open + n_private + 1
+do i=1, n_open + n_up_priv + 1
 
   i_flux = n_flux -1 + i - 1
 
@@ -367,7 +368,7 @@ do i=1, n_open + n_private + 1
 
     elseif (Z_wall(k) .eq. Z_wall(k+1)) then
 
-      call find_Z_surface(node_list,element_list,flux_list,i_flux,Rw,i_elm_find,s_find,t_find,st_find,i_find)
+      call find_Z_surface(node_list,element_list,flux_list,i_flux,Zw,i_elm_find,s_find,t_find,st_find,i_find)
 
     else
 
@@ -383,11 +384,11 @@ do i=1, n_open + n_private + 1
       
            .and. ((Z_wall(k)-ZZg1)*(Z_wall(k+1)-ZZg1) .le. 0.d0) )  then
 
-        if ((RRg1 .le. R_xpoint(1)) .and. (ZZg1 .le. Z_axis)) then
+        if     ((RRg1 .le. RL5) .and. (ZZg1 .ge. Z_axis)) then
             R_strike(i,1) = RRg1
             Z_strike(i,1) = ZZg1
 !            write(*,'(A,i3,2f8.4)') ' INNER strike point : ',i,RRg1,ZZg1
-        elseif ((RRg1 .gt. R_xpoint(1)) .and. (ZZg1 .le. Z_axis)) then
+        elseif ((RRg1 .gt. RL5) .and. (ZZg1 .ge. Z_axis)) then
              R_strike(i,2) = RRg1
              Z_strike(i,2) = ZZg1
 !             write(*,'(A,i3,2f8.4)') ' OUTER strike point : ',i,RRg1,ZZg1
@@ -401,23 +402,23 @@ enddo
 
 if ( write_ps ) then
   call lincol(2)
-  call lplot(1,1,461,R_strike(:,1),Z_strike(:,1),-(n_open+n_private+1),1,'Nodes',5,'X',1,'Y',1)
+  call lplot(1,1,461,R_strike(:,1),Z_strike(:,1),-(n_open+n_up_priv+1),1,'Nodes',5,'X',1,'Y',1)
   call lincol(3)
-  call lplot(1,1,461,R_strike(:,2),Z_strike(:,2),-(n_open+n_private+1),1,'Nodes',5,'X',1,'Y',1)
+  call lplot(1,1,461,R_strike(:,2),Z_strike(:,2),-(n_open+n_up_priv+1),1,'Nodes',5,'X',1,'Y',1)
   call lincol(0)
 endif
 
-deallocate(s_tmp); allocate(s_tmp(n_leg)) ; allocate(s_tmp_out(n_leg_out_loc))
+deallocate(s_tmp); allocate(s_tmp(n_up_leg),s_tmp_out(n_up_leg_out_loc))
 s_tmp = 0
 s_tmp_out = 0
-call meshac2(n_leg,s_tmp,0.d0,1.d0,SIG_leg_0,SIG_leg_1,0.6d0,1.0d0)
-call meshac2(n_leg_out_loc,s_tmp_out,0.d0,1.d0,SIG_leg_0,SIG_leg_1,0.6d0,1.0d0)
+call meshac2(n_up_leg,s_tmp,0.d0,1.d0,SIG_up_leg_0,SIG_up_leg_1,0.6d0,1.0d0)
+call meshac2(n_up_leg_out_loc,s_tmp_out,0.d0,1.d0,SIG_up_leg_0,SIG_up_leg_1,0.6d0,1.0d0)
 
 
-!----------------------------- inner leg, private side
-do j=1,n_leg
+!----------------------------- outer leg, private side
+do j=1,n_up_leg_out_loc
 
-  R_min(n_tht + j) = R_strike(n_open+n_private+1,1) + (RL5-R_strike(n_open+n_private+1,1)) * s_tmp(j)
+  R_min(n_tht + j) = R_strike(n_open+n_up_priv+1,2) + (RL5-R_strike(n_open+n_up_priv+1,2)) * s_tmp_out(j)
 
   call find_R_surface(node_list,element_list,flux_list,n_psi-1,R_min(n_tht+j),i_elm_find,s_find,t_find,st_find,i_find)
 
@@ -425,7 +426,7 @@ do j=1,n_leg
 
     call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RRg1,ZZg1)
 
-    if (ZZg1 .le. Z_xpoint(1)) exit
+    if (ZZg1 .ge. Z_xpoint(2)) exit
 
   enddo
 
@@ -433,31 +434,31 @@ do j=1,n_leg
 
 enddo
 
-!----------------------------- outer leg, private side
-do j=1,n_leg_out_loc
+!----------------------------- inner leg, private side
+do j=1,n_up_leg
 
-  R_min(n_tht + n_leg + j) = R_strike(n_open+n_private+1,2) + (RL5-R_strike(n_open+n_private+1,2)) * s_tmp_out(j)
+  R_min(n_tht + n_up_leg_out_loc + j) = R_strike(n_open+n_up_priv+1,1) + (RL5-R_strike(n_open+n_up_priv+1,1)) * s_tmp(j)
 
-  call find_R_surface(node_list,element_list,flux_list,n_psi-1,R_min(n_tht+n_leg+j),i_elm_find,s_find,t_find,st_find,i_find)
+  call find_R_surface(node_list,element_list,flux_list,n_psi-1,R_min(n_tht+n_up_leg_out_loc+j),i_elm_find,s_find,t_find,st_find,i_find)
 
   do i=1,i_find
 
     call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RRg1,ZZg1)
 
-    if (ZZg1 .le. Z_xpoint(1)) exit
+    if (ZZg1 .ge. Z_xpoint(2)) exit
 
   enddo
 
-  Z_min(n_tht + n_leg + j) = ZZg1
+  Z_min(n_tht + n_up_leg_out_loc + j) = ZZg1
 
 enddo
 
 
 
-!----------------------------- inner leg
-do j=1,n_leg
+!----------------------------- outer leg, SOL
+do j=1,n_up_leg_out_loc
 
-  Z_max(n_tht + j) = Z_strike(n_open+1,1) + (ZL11 - Z_strike(n_open+1,1)) * s_tmp(j)
+  Z_max(n_tht + j) = Z_strike(n_open+1,2) + (ZL10 - Z_strike(n_open+1,2)) * s_tmp_out(j)
 
   call find_Z_surface(node_list,element_list,flux_list,i_max,Z_max(n_tht+j),i_elm_find,s_find,t_find,st_find,i_find)
 
@@ -465,7 +466,7 @@ do j=1,n_leg
 
     call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RRg1,ZZg1)
 
-    if (RRg1 .le. R_xpoint(1)) exit
+    if (RRg1 .ge. R_xpoint(2)) exit
 
   enddo
 
@@ -473,29 +474,29 @@ do j=1,n_leg
 
 enddo
 
-!----------------------------- outer leg, SOL
-do j=1,n_leg_out_loc
+!----------------------------- inner leg, SOL
+do j=1,n_up_leg
 
-  Z_max(n_tht + n_leg + j) = Z_strike(n_open+1,2) + (ZL10 - Z_strike(n_open+1,2)) * s_tmp_out(j)
+  Z_max(n_tht + n_up_leg_out_loc + j) = Z_strike(n_open+1,1) + (ZL11 - Z_strike(n_open+1,1)) * s_tmp(j)
 
-  call find_Z_surface(node_list,element_list,flux_list,i_max,Z_max(n_tht+n_leg+j),i_elm_find,s_find,t_find,st_find,i_find)
+  call find_Z_surface(node_list,element_list,flux_list,i_max,Z_max(n_tht+n_up_leg_out_loc+j),i_elm_find,s_find,t_find,st_find,i_find)
 
   do i=1,i_find
 
     call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RRg1,ZZg1)
 
-    if (RRg1 .ge. R_xpoint(1)) exit
+    if (RRg1 .le. R_xpoint(2)) exit
 
   enddo
 
-  R_max(n_tht + n_leg + j) = RRg1
+  R_max(n_tht + n_up_leg_out_loc + j) = RRg1
 
 enddo
 
-!--------------------------- along the speratrix of on the inner leg
-do j=1,n_leg
+!--------------------------- along the speratrix of on the outer leg
+do j=1,n_up_leg_out_loc
 
-  R_sep(n_tht + j) =  R_strike(1,1) + (R_xpoint(1) - R_strike(1,1)) * s_tmp(j)
+  R_sep(n_tht + j) = R_strike(1,2) + (R_xpoint(2) - R_strike(1,2)) * s_tmp_out(j)
 
   call find_R_surface(node_list,element_list,flux_list,i_sep,R_sep(n_tht+j),i_elm_find,s_find,t_find,st_find,i_find)
 
@@ -503,58 +504,58 @@ do j=1,n_leg
 
     call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RRg1,ZZg1)
 
-    if (ZZg1 .le. Z_xpoint(1)) exit
+    if (ZZg1 .ge. Z_xpoint(2)) exit
 
   enddo
 
-  Z_sep(n_tht  + j) = ZZg1
+  Z_sep(n_tht + j) = ZZg1
 
 enddo
-Z_sep(n_tht+n_leg) = Z_xpoint(1) ! this one is known
+Z_sep(n_tht+n_up_leg_out_loc) = Z_xpoint(2) ! this one is known
 
-!--------------------------- along the speratrix of on the outer leg
-do j=1,n_leg_out_loc
+!--------------------------- along the speratrix of on the inner leg
+do j=1,n_up_leg
 
-  R_sep(n_tht + n_leg + j) = R_strike(1,2) + (R_xpoint(1) - R_strike(1,2)) * s_tmp_out(j)
-  call find_R_surface(node_list,element_list,flux_list,i_sep,R_sep(n_tht+n_leg+j),i_elm_find,s_find,t_find,st_find,i_find)
+  R_sep(n_tht + n_up_leg_out_loc + j) =  R_strike(1,1) + (R_xpoint(2) - R_strike(1,1)) * s_tmp(j)
+  call find_R_surface(node_list,element_list,flux_list,i_sep,R_sep(n_tht+n_up_leg_out_loc+j),i_elm_find,s_find,t_find,st_find,i_find)
 
   do i=1,i_find
 
     call interp_RZ(node_list,element_list,i_elm_find(i),s_find(i),t_find(i),RRg1,ZZg1)
 
-    if (ZZg1 .le. Z_xpoint(1)) exit
+    if (ZZg1 .ge. Z_xpoint(2)) exit
 
   enddo
 
-  Z_sep(n_tht + n_leg + j) = ZZg1
+  Z_sep(n_tht + n_up_leg_out_loc + j) = ZZg1
 
 enddo
-Z_sep(n_tht+n_leg_total) = Z_xpoint(1) ! this one is known
+Z_sep(n_tht+n_up_leg_total) = Z_xpoint(2) ! this one is known
 
 s_tmp = 0.d0
 s_tmp_out = 0.d0
-call meshac2(n_leg,s_tmp,0.d0,1.d0,0.3d0,0.3d0,0.6d0,1.0d0)
-call meshac2(n_leg_out_loc,s_tmp_out,0.d0,1.d0,0.3d0,0.3d0,0.6d0,1.0d0)
+call meshac2(n_up_leg,s_tmp,0.d0,1.d0,0.3d0,0.3d0,0.6d0,1.0d0)
+call meshac2(n_up_leg_out_loc,s_tmp_out,0.d0,1.d0,0.3d0,0.3d0,0.6d0,1.0d0)
 
-do j=1,n_leg
-  R_wall_max(j+n_tht) = R_wall_max(n_tht) + 0.8d0*(R_max(n_tht+1) - R_wall_max(n_tht)) * float(j-1)/float(n_leg-1)
-  Z_wall_max(j+n_tht) = Z_wall_max(n_tht) + 0.8d0*(Z_max(n_tht+1) - Z_wall_max(n_tht)) * float(j-1)/float(n_leg-1) 
-  tht_max = PI
-  call find_wall_crossing(R_wall,Z_wall,n_wall,R_max(n_tht+n_leg-j+1)+0.1,Z_wall_max(j+n_tht),tht_max,Rw,Zw,Tw)
+do j=1,n_up_leg_out_loc
+  R_wall_max(j+n_tht) = R_wall_max(n_tht) + 0.8d0*(R_max(n_tht+1)-R_wall_max(n_tht)) * float(j-1)/float(n_up_leg_out_loc-1)
+  Z_wall_max(j+n_tht) = Z_wall_max(n_tht) + 0.8d0*(Z_max(n_tht+1)-Z_wall_max(n_tht)) * float(j-1)/float(n_up_leg_out_loc-1)
+  tht_max = 0.d0
+  call find_wall_crossing(R_wall,Z_wall,n_wall,R_max(n_tht+n_up_leg_out_loc-j+1)-0.1,Z_wall_max(j+n_tht),tht_max,Rw,Zw,Tw)
   R_wall_max(j+n_tht) = Rw
   Z_wall_max(j+n_tht) = Zw
   T_wall_par(j+n_tht) = Tw
 enddo
 
 
-do j=1,n_leg_out_loc
-  R_wall_max(j+n_tht+n_leg) = R_wall_max(1) + 0.8d0*(R_max(n_tht+n_leg+1)-R_wall_max(1)) * float(j-1)/float(n_leg_out_loc-1)
-  Z_wall_max(j+n_tht+n_leg) = Z_wall_max(1) + 0.8d0*(Z_max(n_tht+n_leg+1)-Z_wall_max(1)) * float(j-1)/float(n_leg_out_loc-1)
-  tht_max = 0.d0
-  call find_wall_crossing(R_wall,Z_wall,n_wall,R_max(j+n_tht+n_leg)-0.1,Z_wall_max(j+n_tht+n_leg),tht_max,Rw,Zw,Tw)
-  R_wall_max(j+n_tht+n_leg) = Rw
-  Z_wall_max(j+n_tht+n_leg) = Zw
-  T_wall_par(j+n_tht+n_leg) = Tw
+do j=1,n_up_leg
+  R_wall_max(j+n_tht+n_up_leg_out_loc) = R_wall_max(1) + 0.8d0*(R_max(n_tht+n_up_leg_out_loc+1) - R_wall_max(1)) * float(j-1)/float(n_up_leg-1)
+  Z_wall_max(j+n_tht+n_up_leg_out_loc) = Z_wall_max(1) + 0.8d0*(Z_max(n_tht+n_up_leg_out_loc+1) - Z_wall_max(1)) * float(j-1)/float(n_up_leg-1) 
+  tht_max = PI
+  call find_wall_crossing(R_wall,Z_wall,n_wall,R_max(j+n_tht+n_up_leg_out_loc)+0.1,Z_wall_max(j+n_tht+n_up_leg_out_loc),tht_max,Rw,Zw,Tw)
+  R_wall_max(j+n_tht+n_up_leg_out_loc) = Rw
+  Z_wall_max(j+n_tht+n_up_leg_out_loc) = Zw
+  T_wall_par(j+n_tht+n_up_leg_out_loc) = Tw
 enddo
 
 
@@ -566,21 +567,21 @@ if ( write_ps ) then
   call lincol(0)
 
   call lincol(2)
-  call lplot6(1,1,R_max,Z_max,-(n_tht+n_leg_total),' ')
+  call lplot6(1,1,R_max,Z_max,-(n_tht+n_up_leg_total),' ')
   call lincol(5)
-  call lplot6(1,1,R_min(n_tht+1),Z_min(n_tht+1),-(n_leg_total),' ')
+  call lplot6(1,1,R_min(n_tht+1),Z_min(n_tht+1),-(n_up_leg_total),' ')
   call lincol(4)
-  call lplot6(1,1,R_sep,Z_sep,-(n_tht+n_leg_total),' ')
+  call lplot6(1,1,R_sep,Z_sep,-(n_tht+n_up_leg_total),' ')
   call lincol(0)
 endif
 
-!do i=1,n_tht+2*n_leg
-!  write(*,'(A,i4,6f10.6)') ' R_max,Z_max : ',i,R_max(i),Z_max(i),R_sep(i),Z_sep(i),R_min(i),Z_min(i)
+!do j=1,n_tht+n_up_leg_total
+!  write(32,*) R_sep(j), Z_sep(j), theta_sep(j)
 !enddo
 
 !------------------------------ interpolation points are known, construct polar coordinate lines
 n_pieces=3
-allocate(R_polar(n_pieces,4,n_tht+n_leg_total),Z_polar(n_pieces,4,n_tht+n_leg_total))
+allocate(R_polar(n_pieces,4,n_tht+n_up_leg_total),Z_polar(n_pieces,4,n_tht+n_up_leg_total))
 
 do j=1,n_tht
 
@@ -630,22 +631,22 @@ enddo
 
 
 
-do j=1,n_leg_total
+do j=1,n_up_leg_total
 
   delta = 0.2
 
-  if ((j .eq. n_leg)   .or. (j .eq. n_leg_total)) then
+  if ((j .eq. n_up_leg_out_loc)   .or. (j .eq. n_up_leg_total)) then
     delta = 0.d0
-  elseif ((j .eq. n_leg-1) .or. (j .eq. n_leg_total-1)) then
+  elseif ((j .eq. n_up_leg_out_loc-1) .or. (j .eq. n_up_leg_total-1)) then
     delta = 0.05d0
-  elseif ((j .eq. n_leg-2) .or. (j .eq. n_leg_total-2)) then
+  elseif ((j .eq. n_up_leg_out_loc-2) .or. (j .eq. n_up_leg_total-2)) then
     delta = 0.1d0
   endif
 
-  if (j .le. n_leg) then
-    j2 = n_leg -j + 1
+  if (j .le. n_up_leg_out_loc) then
+    j2 = n_up_leg_out_loc -j + 1
   else
-    j2 = n_leg_total - (j-n_leg) + 1
+    j2 = n_up_leg_total - (j-n_up_leg_out_loc) + 1
   endif
 
   R_polar(1,1,n_tht+j) = R_min(n_tht+j)
@@ -678,91 +679,15 @@ do j=1,n_leg_total
   Z_polar(2,2,n_tht+j) = ( Z_polar(2,1,n_tht+j) +  2.d0 * Z_sep(n_tht+j) ) / 3.d0
   Z_polar(2,3,n_tht+j) = ( Z_polar(2,4,n_tht+j) +  2.d0 * Z_sep(n_tht+j) ) / 3.d0
 
-#ifdef D3D_WALL
-  if (j .eq. 1) then
-    R_polar(3,1,n_tht+j) = R_wall_max(n_tht+j2)
-    R_polar(3,4,n_tht+j) = R_wall_max(n_tht+j2) 
-    R_polar(3,2,n_tht+j) = R_wall_max(n_tht+j2) 
-    R_polar(3,3,n_tht+j) = R_wall_max(n_tht+j2) 
-
-    Z_polar(3,4,n_tht+j) = -1.223 
-
-    Z_polar(3,2,n_tht+j) = (2.d0 * Z_polar(3,1,n_tht+j) +        Z_polar(3,4,n_tht+j)) / 3.d0
-    Z_polar(3,3,n_tht+j) = (       Z_polar(3,1,n_tht+j) + 2.d0 * Z_polar(3,4,n_tht+j)) / 3.d0
-
-    R_polar(2,4,n_tht+j) = R_wall_max(n_tht+j2) 
-    Z_polar(2,4,n_tht+j) = -1.223 
-
-  endif
-
-  if ((j .ge. 2) .and. (j .le. 5)) then
-
-    R_polar(3,4,n_tht+j) =  0.25d0 * R_polar(3,4,n_tht+j) + 0.75d0 * R_polar(3,4,n_tht+j-1)
-    
-    R_polar(3,2,n_tht+j) = (2.0d0 * R_polar(3,1,n_tht+j) +         R_polar(3,4,n_tht+j)) / 3.d0
-    R_polar(3,3,n_tht+j) = (        R_polar(3,1,n_tht+j) + 2.0d0 * R_polar(3,4,n_tht+j)) / 3.d0
-
-    Z_polar(3,4,n_tht+j) = -1.223 
-
-    Z_polar(3,2,n_tht+j) = (2.d0 * Z_polar(3,1,n_tht+j) +        Z_polar(3,4,n_tht+j)) / 3.d0
-    Z_polar(3,3,n_tht+j) = (       Z_polar(3,1,n_tht+j) + 2.d0 * Z_polar(3,4,n_tht+j)) / 3.d0
-
-    R_polar(2,4,n_tht+j) = R_polar(3,4,n_tht+j) 
-    Z_polar(2,4,n_tht+j) = Z_polar(3,4,n_tht+j) 
-
-  endif
-#endif
-
 enddo
 
-#ifdef AUG_WALL
-
-R_polar(3,2,n_tht+1) =  1.294 
-Z_polar(3,2,n_tht+1) = -0.955
-
-R_polar(3,3,n_tht+1) =  1.292 
-Z_polar(3,3,n_tht+1) = -0.983
-
-R_polar(3,4,n_tht+1) =  1.287 
-Z_polar(3,4,n_tht+1) = -1.001
-
-R_polar(2,4,n_tht+1) = R_polar(3,4,n_tht+1) 
-Z_polar(2,4,n_tht+1) = Z_polar(3,4,n_tht+1) 
-
-Z_polar(2,3,n_tht+1) = 2.d0 * Z_polar(2,4,n_tht+1) - Z_polar(3,3,n_tht+1)  
-R_polar(2,3,n_tht+1) = 2.d0 * R_polar(2,4,n_tht+1) - R_polar(3,3,n_tht+1)  
-
-j_end = n_leg/2
-
-do j= 2, j_end-1
-
-  R_polar(3,:,n_tht+j) =  real(j-1,8)/real(j_end-1,8) * R_polar(3,:,n_tht+j_end) + real(j_end-j,8)/real(j_end-1,8) * R_polar(3,:,n_tht+1)
-  Z_polar(3,:,n_tht+j) =  real(j-1,8)/real(j_end-1,8) * Z_polar(3,:,n_tht+j_end) + real(j_end-j,8)/real(j_end-1,8) * Z_polar(3,:,n_tht+1)
-  
-  R_polar(2,4,n_tht+j) = R_polar(3,4,n_tht+j) 
-  Z_polar(2,4,n_tht+j) = Z_polar(3,4,n_tht+j) 
-
-  Z_polar(2,3,n_tht+j) = 2.d0 * Z_polar(2,4,n_tht+j) - Z_polar(3,3,n_tht+j)  
-  R_polar(2,3,n_tht+j) = 2.d0 * R_polar(2,4,n_tht+j) - R_polar(3,3,n_tht+j)  
-
-enddo
-
-R_polar(3,:,n_tht+2) = 0.5d0 * R_polar(3,:,n_tht+1) + 0.5d0 * R_polar(3,:,n_tht+3)
-Z_polar(3,:,n_tht+2) = 0.5d0 * Z_polar(3,:,n_tht+1) + 0.5d0 * Z_polar(3,:,n_tht+3)
-  
-R_polar(2,4,n_tht+2) = R_polar(3,4,n_tht+2) 
-Z_polar(2,4,n_tht+2) = Z_polar(3,4,n_tht+2) 
-
-Z_polar(2,3,n_tht+2) = 2.d0 * Z_polar(2,4,n_tht+2) - Z_polar(3,3,n_tht+2)  
-R_polar(2,3,n_tht+2) = 2.d0 * R_polar(2,4,n_tht+2) - R_polar(3,3,n_tht+2)  
-#endif
 
 if ( write_ps ) then
   call lincol(3)
 
   npl = 11
   allocate(xout(2),xp(npl),yp(npl))
-  do j=1,n_tht+n_leg_total
+  do j=1,n_tht+n_up_leg_total
 
     do m=1,n_pieces
       
@@ -807,7 +732,7 @@ do j=1, n_tht          ! the magnetic axis
 enddo
 
 
-allocate(k_cross(n_flux+n_open+n_private+1,n_theta))
+allocate(k_cross(n_flux+n_open+n_up_priv+1,n_theta))
 
 k_cross = 0
 
@@ -845,9 +770,9 @@ do i=1, n_flux + n_open - 1
 enddo
 
 !DIR$ NOVECTOR
-do i=n_flux-1, n_flux - 1  + n_open + n_private
+do i=n_flux-1, n_flux - 1  + n_open + n_up_priv
 !DIR$ NOVECTOR
-  do j=n_tht+1, n_tht + n_leg_total
+  do j=n_tht+1, n_tht + n_up_leg_total
 !DIR$ NOVECTOR
     do k=1,n_pieces       ! 3 line pieces per coordinate line
 
@@ -963,9 +888,9 @@ index_xpoint = newnode_list%n_nodes + 1
 
 n_xpoint=4
 
-call interp(node_list,element_list,i_elm_xpoint(1),1,1,s_xpoint(1),t_xpoint(1),&
+call interp(node_list,element_list,i_elm_xpoint(2),1,1,s_xpoint(2),t_xpoint(2),&
                    PSg1,dPSg1_dr,dPSg1_ds,dPSg1_drs,dPSg1_drr,dPSg1_dss)
-call interp_RZ(node_list,element_list,i_elm_xpoint(1),s_xpoint(1),t_xpoint(1), &
+call interp_RZ(node_list,element_list,i_elm_xpoint(2),s_xpoint(2),t_xpoint(2), &
                    RRg1,dRRg1_dr,dRRg1_ds,ZZg1,dZZg1_dr,dZZg1_ds)
 
 EJAC = dRRg1_dr*dZZg1_ds - dRRg1_ds * dZZg1_dr
@@ -989,25 +914,25 @@ alpha_min = min(alpha1,alpha2)
 
 write(*,*) ' ALPHA : ',alpha_max,alpha_min
 
-newnode_list%node(index_xpoint)%x(1,1,:) = (/ R_xpoint(1), Z_xpoint(1) /)
+newnode_list%node(index_xpoint)%x(1,1,:) = (/ R_xpoint(2), Z_xpoint(2) /)
 newnode_list%node(index_xpoint)%x(1,2,:) = (/ cos(angle_L9),sin(angle_L9) /)
 newnode_list%node(index_xpoint)%x(1,3,:) = (/ alpha_max,1.d0 /) / sqrt(alpha_max**2 + 1.d0)
 newnode_list%node(index_xpoint)%x(1,4,:) = 0.d0
 newnode_list%node(index_xpoint)%boundary = 0
 
-newnode_list%node(index_xpoint+1)%x(1,1,:) = (/ R_xpoint(1), Z_xpoint(1) /)
-newnode_list%node(index_xpoint+1)%x(1,2,:) = (/ R_xpoint(1)-R_axis,Z_xpoint(1)-Z_axis/)/sqrt((R_xpoint(1)-R_axis)**2+(Z_xpoint(1)-Z_axis)**2)
+newnode_list%node(index_xpoint+1)%x(1,1,:) = (/ R_xpoint(2), Z_xpoint(2) /)
+newnode_list%node(index_xpoint+1)%x(1,2,:) = (/ R_xpoint(2)-R_axis,Z_xpoint(2)-Z_axis/)/sqrt((R_xpoint(2)-R_axis)**2+(Z_xpoint(2)-Z_axis)**2)
 newnode_list%node(index_xpoint+1)%x(1,3,:) = (/ alpha_max,1.d0 /) / sqrt(alpha_max**2 + 1.d0)
 newnode_list%node(index_xpoint+1)%x(1,4,:) = 0.d0
 newnode_list%node(index_xpoint+1)%boundary = 0
 
-newnode_list%node(index_xpoint+2)%x(1,1,:) = (/ R_xpoint(1), Z_xpoint(1) /)
-newnode_list%node(index_xpoint+2)%x(1,2,:) = (/ R_xpoint(1)-R_axis,Z_xpoint(1)-Z_axis/)/sqrt((R_xpoint(1)-R_axis)**2+(Z_xpoint(1)-Z_axis)**2)
+newnode_list%node(index_xpoint+2)%x(1,1,:) = (/ R_xpoint(2), Z_xpoint(2) /)
+newnode_list%node(index_xpoint+2)%x(1,2,:) = (/ R_xpoint(2)-R_axis,Z_xpoint(2)-Z_axis/)/sqrt((R_xpoint(2)-R_axis)**2+(Z_xpoint(2)-Z_axis)**2)
 newnode_list%node(index_xpoint+2)%x(1,3,:) = (/ alpha_min,1.d0 /) / sqrt(alpha_min**2 + 1.d0)
 newnode_list%node(index_xpoint+2)%x(1,4,:) = 0.d0
 newnode_list%node(index_xpoint+2)%boundary = 0
 
-newnode_list%node(index_xpoint+3)%x(1,1,:) = (/ R_xpoint(1), Z_xpoint(1) /)
+newnode_list%node(index_xpoint+3)%x(1,1,:) = (/ R_xpoint(2), Z_xpoint(2) /)
 newnode_list%node(index_xpoint+3)%x(1,2,:) = (/ -cos(angle_L8),-sin(angle_L8) /)
 newnode_list%node(index_xpoint+3)%x(1,3,:) = (/ alpha_min,1.d0 /) / sqrt(alpha_min**2 + 1.d0)
 newnode_list%node(index_xpoint+3)%x(1,4,:) = 0.d0
@@ -1071,20 +996,20 @@ index = newnode_list%n_nodes
 
 index_leg2 = index+1
 
-write(*,*) ' -- starting with nodes on outer leg -- '
-do j=1, n_leg_out_loc                         !--------------------------- nodes on outer leg
+write(*,*) ' -- starting with nodes on inner leg -- '
+do j=1, n_up_leg                       !--------------------------- nodes on inner leg
 
-  j2 = n_tht + n_leg + j
+  j2 = n_tht + n_up_leg_out_loc + j
 
-  do k=1,n_open+n_private+1
+  do k=1,n_open+n_up_priv+1
 
-    if (k .le. n_private) then
-      i = n_flux - 1 + n_open + n_private - k + 1
+    if (k .le. n_up_priv) then
+      i = n_flux -1 + n_open + n_up_priv - k + 1
     else
-      i = n_flux - 1 + (k-n_private) - 1
+      i = n_flux -1 + (k-n_up_priv) - 1
     endif
 
-    if (.not. ( (j .eq. n_leg_out_loc) .and. (i .le. n_flux+n_open-1))) then  ! exclude horizontal line (already there)
+    if (.not. ( (j .eq. n_up_leg) .and. (i .le. n_flux+n_open-1))) then  ! exclude horizontal line (already there)
 
       m = k_cross(i+1,j2)
 
@@ -1115,7 +1040,7 @@ do j=1, n_leg_out_loc                         !--------------------------- nodes
       newnode_list%node(index)%x(1,4,:) = 0.d0
       newnode_list%node(index)%boundary = 0
 
-      if ((k.eq.1) .or. (k .eq. n_open+n_private+1)) then
+      if ((k.eq.1) .or. (k .eq. n_open+n_up_priv+1)) then
         newnode_list%node(index)%boundary = newnode_list%node(index)%boundary + 2
       endif
       if (j.eq.1) then
@@ -1130,18 +1055,18 @@ enddo
 newnode_list%n_nodes = index
 index_leg1 = index+1
 
-write(*,*) ' -- starting with nodes on inner leg -- '
-do l=1, n_leg-1                       !--------------------------- nodes on inner leg
+write(*,*) ' -- starting with nodes on outer leg -- '
+do l=1, n_up_leg_out_loc-1                       !--------------------------- nodes on outer leg
 
-  j  = n_leg - l
+  j  = n_up_leg_out_loc - l
   j2 = n_tht + j
 
-  do k=1,n_open+n_private+1
+  do k=1,n_open+n_up_priv+1
 
-    if (k .le. n_private) then
-      i = n_flux -1 + n_open + n_private - k + 1
+    if (k .le. n_up_priv) then
+      i = n_flux -1 + n_open + n_up_priv - k + 1
     else
-      i = n_flux -1 + (k-n_private) - 1
+      i = n_flux -1 + (k-n_up_priv) - 1
     endif
 
     m = k_cross(i+1,j2)
@@ -1173,7 +1098,7 @@ do l=1, n_leg-1                       !--------------------------- nodes on inne
     newnode_list%node(index)%x(1,4,:) = 0.d0
     newnode_list%node(index)%boundary = 0
 
-    if ((k.eq.1) .or. (k .eq. n_open+n_private+1)) then
+    if ((k.eq.1) .or. (k .eq. n_open+n_up_priv+1)) then
       newnode_list%node(index)%boundary = newnode_list%node(index)%boundary + 2
     endif
     if  (j.eq.1) then
@@ -1193,7 +1118,7 @@ if (extend) then
   index_ext2 = index + 1
 
   sign_psi = 1.d0
-  if (psi_axis .gt. psi_xpoint(1)) sign_psi = -1.d0
+  if (psi_axis .gt. psi_xpoint(2)) sign_psi = -1.d0
 
   do i=1,n_ext
     do j=1,n_tht
@@ -1265,20 +1190,20 @@ if (extend) then
       index_ext_leg1 = index+1
     endif
 
-    do j=2,n_leg                                  ! left leg
+    do j=2,n_up_leg_out_loc                                  ! left leg
       j2    = n_tht + j 
-      j2rev = n_tht + n_leg - j + 1
+      j2rev = n_tht + n_up_leg_out_loc - j + 1
       index = index+1
       dRtmp = R_wall_max(j2) - R_max(j2rev)
       dZtmp = Z_wall_max(j2) - Z_max(j2rev)
 
-      dRtmp = R_wall_max(j2) - newnode_list%node(index_leg1 + (j-1)*(n_open+n_private+1) - 1)%x(1,1,1)
-      dZtmp = Z_wall_max(j2) - newnode_list%node(index_leg1 + (j-1)*(n_open+n_private+1) - 1)%x(1,1,2)
-      Rtmp = newnode_list%node(index_leg1 + (j-1)*(n_open+n_private+1) - 1)%x(1,1,1) + dRtmp * float(i)/float(n_ext)
-      Ztmp = newnode_list%node(index_leg1 + (j-1)*(n_open+n_private+1) - 1)%x(1,1,2) + dZtmp * float(i)/float(n_ext)
+      dRtmp = R_wall_max(j2) - newnode_list%node(index_leg1 + (j-1)*(n_open+n_up_priv+1) - 1)%x(1,1,1)
+      dZtmp = Z_wall_max(j2) - newnode_list%node(index_leg1 + (j-1)*(n_open+n_up_priv+1) - 1)%x(1,1,2)
+      Rtmp = newnode_list%node(index_leg1 + (j-1)*(n_open+n_up_priv+1) - 1)%x(1,1,1) + dRtmp * float(i)/float(n_ext)
+      Ztmp = newnode_list%node(index_leg1 + (j-1)*(n_open+n_up_priv+1) - 1)%x(1,1,2) + dZtmp * float(i)/float(n_ext)
 
-      tht_bnd = atan2(newnode_list%node(index_leg1+(j-1)*(n_open+n_private+1)-1)%x(1,3,2),&
-                      newnode_list%node(index_leg1+(j-1)*(n_open+n_private+1)-1)%x(1,3,1))
+      tht_bnd = atan2(newnode_list%node(index_leg1+(j-1)*(n_open+n_up_priv+1)-1)%x(1,3,2),&
+                      newnode_list%node(index_leg1+(j-1)*(n_open+n_up_priv+1)-1)%x(1,3,1))
 
       if (T_wall_par(j2) .gt. PI)            T_wall_par(j2) = T_wall_par(j2) - 2.d0*PI
       if (T_wall_par(j2) - tht_bnd .gt. PI)  T_wall_par(j2) = T_wall_par(j2) - 2.d0*PI
@@ -1287,20 +1212,20 @@ if (extend) then
       tht_ext = tht_bnd + (T_wall_par(j2) - tht_bnd) * float(i)/float(n_ext)
 
       if (j .gt. 2) then
-        dRtmp2 = R_wall_max(j2-1) - newnode_list%node(index_leg1 + (j-2)*(n_open+n_private+1) - 1)%x(1,1,1)
-        dZtmp2 = Z_wall_max(j2-1) - newnode_list%node(index_leg1 + (j-2)*(n_open+n_private+1) - 1)%x(1,1,2)
-        Rtmp2 = newnode_list%node(index_leg1 + (j-2)*(n_open+n_private+1) - 1)%x(1,1,1) + dRtmp2 * float(i)/float(n_ext)
-        Ztmp2 = newnode_list%node(index_leg1 + (j-2)*(n_open+n_private+1) - 1)%x(1,1,2) + dZtmp2 * float(i)/float(n_ext)
+        dRtmp2 = R_wall_max(j2-1) - newnode_list%node(index_leg1 + (j-2)*(n_open+n_up_priv+1) - 1)%x(1,1,1)
+        dZtmp2 = Z_wall_max(j2-1) - newnode_list%node(index_leg1 + (j-2)*(n_open+n_up_priv+1) - 1)%x(1,1,2)
+        Rtmp2 = newnode_list%node(index_leg1 + (j-2)*(n_open+n_up_priv+1) - 1)%x(1,1,1) + dRtmp2 * float(i)/float(n_ext)
+        Ztmp2 = newnode_list%node(index_leg1 + (j-2)*(n_open+n_up_priv+1) - 1)%x(1,1,2) + dZtmp2 * float(i)/float(n_ext)
       else
         Rtmp2 = Rtmp
         Ztmp2 = Ztmp
       endif
 
-      if (j .lt. n_leg) then
-        dRtmp3 = R_wall_max(j2+1) - newnode_list%node(index_leg1 + (j)*(n_open+n_private+1) - 1)%x(1,1,1)
-        dZtmp3 = Z_wall_max(j2+1) - newnode_list%node(index_leg1 + (j)*(n_open+n_private+1) - 1)%x(1,1,2)
-        Rtmp3 = newnode_list%node(index_leg1 + (j)*(n_open+n_private+1) - 1)%x(1,1,1) + dRtmp3 * float(i)/float(n_ext)
-        Ztmp3 = newnode_list%node(index_leg1 + (j)*(n_open+n_private+1) - 1)%x(1,1,2) + dZtmp3 * float(i)/float(n_ext)
+      if (j .lt. n_up_leg_out_loc) then
+        dRtmp3 = R_wall_max(j2+1) - newnode_list%node(index_leg1 + (j)*(n_open+n_up_priv+1) - 1)%x(1,1,1)
+        dZtmp3 = Z_wall_max(j2+1) - newnode_list%node(index_leg1 + (j)*(n_open+n_up_priv+1) - 1)%x(1,1,2)
+        Rtmp3 = newnode_list%node(index_leg1 + (j)*(n_open+n_up_priv+1) - 1)%x(1,1,1) + dRtmp3 * float(i)/float(n_ext)
+        Ztmp3 = newnode_list%node(index_leg1 + (j)*(n_open+n_up_priv+1) - 1)%x(1,1,2) + dZtmp3 * float(i)/float(n_ext)
       else
         Rtmp3 = Rtmp
         Ztmp3 = Ztmp
@@ -1318,11 +1243,11 @@ if (extend) then
         newnode_list%node(index)%x(1,2,:) = (/ -sin(tht_ext),  cos(tht_ext) /)
       endif
 
-      if ((i .eq. n_ext) .and. (j .ne. n_leg)) then
+      if ((i .eq. n_ext) .and. (j .ne. n_up_leg_out_loc)) then
         newnode_list%node(index)%boundary = 5
-        newnode_list%node(index_leg1 + (j-1)*(n_open+n_private+1) - 1)%boundary = 0
+        newnode_list%node(index_leg1 + (j-1)*(n_open+n_up_priv+1) - 1)%boundary = 0
       endif
-      if ((i .eq. n_ext) .and. (j .eq. n_leg)) then
+      if ((i .eq. n_ext) .and. (j .eq. n_up_leg_out_loc)) then
         newnode_list%node(index)%boundary = 9
       endif
     enddo
@@ -1331,18 +1256,18 @@ if (extend) then
       index_ext_leg2 = index+1
     endif
 
-    do j=2,n_leg_out_loc                                 ! right leg
-      j2    = n_tht + n_leg + j
-      j2rev = n_tht + n_leg_total - j + 1 
+    do j=2,n_up_leg                                 ! right leg
+      j2    = n_tht + n_up_leg_out_loc + j
+      j2rev = n_tht + n_up_leg_total - j + 1 
       index = index+1
 
-      dRtmp = R_wall_max(j2) - newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%x(1,1,1)
-      dZtmp = Z_wall_max(j2) - newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%x(1,1,2)
-      Rtmp = newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%x(1,1,1) + dRtmp * float(i)/float(n_ext)
-      Ztmp = newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%x(1,1,2) + dZtmp * float(i)/float(n_ext)
+      dRtmp = R_wall_max(j2) - newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%x(1,1,1)
+      dZtmp = Z_wall_max(j2) - newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%x(1,1,2)
+      Rtmp = newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%x(1,1,1) + dRtmp * float(i)/float(n_ext)
+      Ztmp = newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%x(1,1,2) + dZtmp * float(i)/float(n_ext)
 
-      tht_bnd = atan2(newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%x(1,3,2),&
-                      newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%x(1,3,1))
+      tht_bnd = atan2(newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%x(1,3,2),&
+                      newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%x(1,3,1))
 
       if (T_wall_par(j2) .gt. PI)            T_wall_par(j2) = T_wall_par(j2) - 2.d0*PI
       if (T_wall_par(j2) - tht_bnd .gt. PI)  T_wall_par(j2) = T_wall_par(j2) - 2.d0*PI
@@ -1351,19 +1276,19 @@ if (extend) then
       tht_ext = tht_bnd + (T_wall_par(j2) - tht_bnd) * float(i)/float(n_ext)
 
       if (j .gt. 2) then
-        dRtmp2 = R_wall_max(j2-1) - newnode_list%node(index_leg2 + (n_leg_out_loc-j+2)*(n_open+n_private+1) - 1)%x(1,1,1)
-        dZtmp2 = Z_wall_max(j2-1) - newnode_list%node(index_leg2 + (n_leg_out_loc-j+2)*(n_open+n_private+1) - 1)%x(1,1,2)
-        Rtmp2 = newnode_list%node(index_leg2 + (n_leg_out_loc-j+2)*(n_open+n_private+1) - 1)%x(1,1,1) + dRtmp2 * float(i)/float(n_ext)
-        Ztmp2 = newnode_list%node(index_leg2 + (n_leg_out_loc-j+2)*(n_open+n_private+1) - 1)%x(1,1,2) + dZtmp2 * float(i)/float(n_ext)
+        dRtmp2 = R_wall_max(j2-1) - newnode_list%node(index_leg2 + (n_up_leg-j+2)*(n_open+n_up_priv+1) - 1)%x(1,1,1)
+        dZtmp2 = Z_wall_max(j2-1) - newnode_list%node(index_leg2 + (n_up_leg-j+2)*(n_open+n_up_priv+1) - 1)%x(1,1,2)
+        Rtmp2 = newnode_list%node(index_leg2 + (n_up_leg-j+2)*(n_open+n_up_priv+1) - 1)%x(1,1,1) + dRtmp2 * float(i)/float(n_ext)
+        Ztmp2 = newnode_list%node(index_leg2 + (n_up_leg-j+2)*(n_open+n_up_priv+1) - 1)%x(1,1,2) + dZtmp2 * float(i)/float(n_ext)
       else
         Rtmp2 = Rtmp
         Ztmp2 = Ztmp
       endif
-      if (j .lt. n_leg_out_loc) then
-        dRtmp3 = R_wall_max(j2+1) - newnode_list%node(index_leg2 + (n_leg_out_loc-j)*(n_open+n_private+1) - 1)%x(1,1,1)
-        dZtmp3 = Z_wall_max(j2+1) - newnode_list%node(index_leg2 + (n_leg_out_loc-j)*(n_open+n_private+1) - 1)%x(1,1,2)
-        Rtmp3 = newnode_list%node(index_leg2 + (n_leg_out_loc-j)*(n_open+n_private+1) - 1)%x(1,1,1) + dRtmp3 * float(i)/float(n_ext)
-        Ztmp3 = newnode_list%node(index_leg2 + (n_leg_out_loc-j)*(n_open+n_private+1) - 1)%x(1,1,2) + dZtmp3 * float(i)/float(n_ext)
+      if (j .lt. n_up_leg) then
+        dRtmp3 = R_wall_max(j2+1) - newnode_list%node(index_leg2 + (n_up_leg-j)*(n_open+n_up_priv+1) - 1)%x(1,1,1)
+        dZtmp3 = Z_wall_max(j2+1) - newnode_list%node(index_leg2 + (n_up_leg-j)*(n_open+n_up_priv+1) - 1)%x(1,1,2)
+        Rtmp3 = newnode_list%node(index_leg2 + (n_up_leg-j)*(n_open+n_up_priv+1) - 1)%x(1,1,1) + dRtmp3 * float(i)/float(n_ext)
+        Ztmp3 = newnode_list%node(index_leg2 + (n_up_leg-j)*(n_open+n_up_priv+1) - 1)%x(1,1,2) + dZtmp3 * float(i)/float(n_ext)
       else
         Rtmp3 = Rtmp
         Ztmp3 = Ztmp
@@ -1381,11 +1306,11 @@ if (extend) then
         newnode_list%node(index)%x(1,2,:) = (/ -sin(tht_ext),  cos(tht_ext) /)
       endif
 
-      if ((i .eq. n_ext) .and. (j .ne. n_leg_out_loc)) then
+      if ((i .eq. n_ext) .and. (j .ne. n_up_leg)) then
         newnode_list%node(index)%boundary = 5
-        newnode_list%node(index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1)%boundary = 0
+        newnode_list%node(index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1)%boundary = 0
       endif
-      if ((i .eq. n_ext) .and. (j .eq. n_leg_out_loc)) then
+      if ((i .eq. n_ext) .and. (j .eq. n_up_leg)) then
         newnode_list%node(index)%boundary = 9
       endif
 
@@ -1458,10 +1383,10 @@ enddo
 newelement_list%n_elements = (n_flux - 1)*(n_tht - 1)
 
 if ( newnode_list%n_nodes > n_nodes_max ) then
-  write(*,*) 'ERROR in grid_xpoint_wall: hard-coded parameter n_nodes_max is too small'
+  write(*,*) 'ERROR in grid_upper_xpoint_wall: hard-coded parameter n_nodes_max is too small'
   stop
 else if ( newelement_list%n_elements > n_elements_max ) then
-  write(*,*) 'ERROR in grid_xpoint_wall: hard-coded parameter n_elements_max is too small'
+  write(*,*) 'ERROR in grid_upper_xpoint_wall: hard-coded parameter n_elements_max is too small'
   stop
 end if
 
@@ -1506,10 +1431,10 @@ enddo
 newelement_list%n_elements = newelement_list%n_elements + (n_open) * (n_tht-1)
 
 if ( newnode_list%n_nodes > n_nodes_max ) then
-  write(*,*) 'ERROR in grid_xpoint_wall: hard-coded parameter n_nodes_max is too small'
+  write(*,*) 'ERROR in grid_upper_xpoint_wall: hard-coded parameter n_nodes_max is too small'
   stop
 else if ( newelement_list%n_elements > n_elements_max ) then
-  write(*,*) 'ERROR in grid_xpoint_wall: hard-coded parameter n_elements_max is too small'
+  write(*,*) 'ERROR in grid_upper_xpoint_wall: hard-coded parameter n_elements_max is too small'
   stop
 end if
 
@@ -1517,55 +1442,55 @@ node_start   = (n_flux-1)*(n_tht-1) + 4 + (n_open+1) * n_tht - 2
 
 index = newelement_list%n_elements
 
-do i=1, n_open+n_private
+do i=1, n_open+n_up_priv
 
-  do j=1, n_leg_total - 2
+  do j=1, n_up_leg_total - 2
 
     index = index + 1
 
-    if (j .lt. n_leg_out_loc) then
+    if (j .lt. n_up_leg) then
 
-      newelement_list%element(index)%vertex(1) = node_start + (j-1)*(n_open+n_private+1) + i
-      newelement_list%element(index)%vertex(2) = node_start + (j-1)*(n_open+n_private+1) + i+1
-      newelement_list%element(index)%vertex(3) = node_start + (j  )*(n_open+n_private+1) + i+1
-      newelement_list%element(index)%vertex(4) = node_start + (j  )*(n_open+n_private+1) + i
+      newelement_list%element(index)%vertex(1) = node_start + (j-1)*(n_open+n_up_priv+1) + i
+      newelement_list%element(index)%vertex(2) = node_start + (j-1)*(n_open+n_up_priv+1) + i+1
+      newelement_list%element(index)%vertex(3) = node_start + (j  )*(n_open+n_up_priv+1) + i+1
+      newelement_list%element(index)%vertex(4) = node_start + (j  )*(n_open+n_up_priv+1) + i
 
-    elseif (j .ge. n_leg_out_loc) then
+    elseif (j .ge. n_up_leg) then
 
-      newelement_list%element(index)%vertex(1) = node_start + (j-1)*(n_open+n_private+1) + i   - n_open - 1
-      newelement_list%element(index)%vertex(2) = node_start + (j-1)*(n_open+n_private+1) + i+1 - n_open - 1
-      newelement_list%element(index)%vertex(3) = node_start + (j  )*(n_open+n_private+1) + i+1 - n_open - 1
-      newelement_list%element(index)%vertex(4) = node_start + (j  )*(n_open+n_private+1) + i   - n_open - 1
+      newelement_list%element(index)%vertex(1) = node_start + (j-1)*(n_open+n_up_priv+1) + i   - n_open - 1
+      newelement_list%element(index)%vertex(2) = node_start + (j-1)*(n_open+n_up_priv+1) + i+1 - n_open - 1
+      newelement_list%element(index)%vertex(3) = node_start + (j  )*(n_open+n_up_priv+1) + i+1 - n_open - 1
+      newelement_list%element(index)%vertex(4) = node_start + (j  )*(n_open+n_up_priv+1) + i   - n_open - 1
 
     endif
 
-    if (j .eq. n_leg_out_loc - 1) then
+    if (j .eq. n_up_leg - 1) then
 
-      if (i .gt. n_private) then
-        newelement_list%element(index)%vertex(3) = node_start - n_open*n_tht + 1 + (i-n_private-1)*n_tht
-        newelement_list%element(index)%vertex(4) = node_start - n_open*n_tht + 1 + (i-n_private-2)*n_tht
+      if (i .gt. n_up_priv) then
+        newelement_list%element(index)%vertex(3) = node_start - n_open*n_tht + 1 + (i-n_up_priv-1)*n_tht
+        newelement_list%element(index)%vertex(4) = node_start - n_open*n_tht + 1 + (i-n_up_priv-2)*n_tht
       endif
-      if (i .eq. n_private) then
+      if (i .eq. n_up_priv) then
          newelement_list%element(index)%vertex(3) = index_xpoint + 2
       endif
-      if (i .eq. n_private+1) then
+      if (i .eq. n_up_priv+1) then
          newelement_list%element(index)%vertex(4) = index_xpoint + 3
       endif
     endif
 
-    if (j .eq. n_leg_out_loc) then
+    if (j .eq. n_up_leg) then
 
-      if (i .gt. n_private) then
-        newelement_list%element(index)%vertex(1) = node_start + (i-n_private-n_open-1)*n_tht
-        newelement_list%element(index)%vertex(2) = node_start + (i-n_private-n_open  )*n_tht
+      if (i .gt. n_up_priv) then
+        newelement_list%element(index)%vertex(1) = node_start + (i-n_up_priv-n_open-1)*n_tht
+        newelement_list%element(index)%vertex(2) = node_start + (i-n_up_priv-n_open  )*n_tht
       else
-        newelement_list%element(index)%vertex(1) = node_start + (j-1)*(n_open+n_private+1) + i
-        newelement_list%element(index)%vertex(2) = node_start + (j-1)*(n_open+n_private+1) + i+1
+        newelement_list%element(index)%vertex(1) = node_start + (j-1)*(n_open+n_up_priv+1) + i
+        newelement_list%element(index)%vertex(2) = node_start + (j-1)*(n_open+n_up_priv+1) + i+1
       endif
-      if (i.eq. n_private)   then
+      if (i.eq. n_up_priv)   then
         newelement_list%element(index)%vertex(2) = index_xpoint + 1
       endif
-      if (i.eq. n_private+1) then
+      if (i.eq. n_up_priv+1) then
         newelement_list%element(index)%vertex(1) = index_xpoint
       endif
     endif
@@ -1589,40 +1514,40 @@ if (extend) then
         newelement_list%element(index)%vertex(1) = index_ext1 - n_tht + j
         newelement_list%element(index)%vertex(4) = index_ext1 - n_tht + j + 1
       else
-        newelement_list%element(index)%vertex(1) = index_ext2 + (n_tht+n_leg_total-2)*(i-2) + j - 1
-        newelement_list%element(index)%vertex(4) = index_ext2 + (n_tht+n_leg_total-2)*(i-2) + j
+        newelement_list%element(index)%vertex(1) = index_ext2 + (n_tht+n_up_leg_total-2)*(i-2) + j - 1
+        newelement_list%element(index)%vertex(4) = index_ext2 + (n_tht+n_up_leg_total-2)*(i-2) + j
       endif
-      newelement_list%element(index)%vertex(2) = index_ext2 + (n_tht+n_leg_total-2)*(i-1) + j - 1
-      newelement_list%element(index)%vertex(3) = index_ext2 + (n_tht+n_leg_total-2)*(i-1) + j
+      newelement_list%element(index)%vertex(2) = index_ext2 + (n_tht+n_up_leg_total-2)*(i-1) + j - 1
+      newelement_list%element(index)%vertex(3) = index_ext2 + (n_tht+n_up_leg_total-2)*(i-1) + j
     enddo
   enddo
 
   do i=1, n_ext
-    do j=1, n_leg-1                      ! left leg
+    do j=1, n_up_leg_out_loc-1                      ! outer leg (filled first in USN)
       index = index + 1
       if (i .eq.1) then
         if (j .eq. 1) then
           newelement_list%element(index)%vertex(1) = index_ext1 
-          newelement_list%element(index)%vertex(4) = index_leg1 + (j  )*(n_open+n_private+1) - 1
+          newelement_list%element(index)%vertex(4) = index_leg1 + (j  )*(n_open+n_up_priv+1) - 1
           newelement_list%element(index)%vertex(2) = index_ext2 + n_tht - 1
           newelement_list%element(index)%vertex(3) = index_ext2 + n_tht 
         else
-          newelement_list%element(index)%vertex(1) = index_leg1 + (j-1)*(n_open+n_private+1) - 1 
-          newelement_list%element(index)%vertex(4) = index_leg1 + (j  )*(n_open+n_private+1) - 1
+          newelement_list%element(index)%vertex(1) = index_leg1 + (j-1)*(n_open+n_up_priv+1) - 1 
+          newelement_list%element(index)%vertex(4) = index_leg1 + (j  )*(n_open+n_up_priv+1) - 1
           newelement_list%element(index)%vertex(2) = index_ext2 + n_tht - 2 + j
           newelement_list%element(index)%vertex(3) = index_ext2 + n_tht - 1 + j
         endif
       else
         if (j .eq. 1) then
-          newelement_list%element(index)%vertex(1) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_leg_total-2)
-          newelement_list%element(index)%vertex(4) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_leg_total-2) + 1
-          newelement_list%element(index)%vertex(2) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_leg_total-2)
-          newelement_list%element(index)%vertex(3) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_leg_total-2) + 1
+          newelement_list%element(index)%vertex(1) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_up_leg_total-2)
+          newelement_list%element(index)%vertex(4) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_up_leg_total-2) + 1
+          newelement_list%element(index)%vertex(2) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_up_leg_total-2)
+          newelement_list%element(index)%vertex(3) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_up_leg_total-2) + 1
         else
-          newelement_list%element(index)%vertex(1) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_leg_total-2) + j-1
-          newelement_list%element(index)%vertex(4) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_leg_total-2) + j
-          newelement_list%element(index)%vertex(2) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_leg_total-2) + j-1
-          newelement_list%element(index)%vertex(3) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_leg_total-2)+ j
+          newelement_list%element(index)%vertex(1) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_up_leg_total-2) + j-1
+          newelement_list%element(index)%vertex(4) = index_ext2 + n_tht-1 + (i-2)*(n_tht+n_up_leg_total-2) + j
+          newelement_list%element(index)%vertex(2) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_up_leg_total-2) + j-1
+          newelement_list%element(index)%vertex(3) = index_ext2 + n_tht-1 + (i-1)*(n_tht+n_up_leg_total-2)+ j
         endif
 
       endif
@@ -1632,47 +1557,47 @@ if (extend) then
         newnode_list%node(newelement_list%element(index)%vertex(4))%boundary = 0
         newnode_list%node(newelement_list%element(index)%vertex(2))%boundary = 5
         newnode_list%node(newelement_list%element(index)%vertex(3))%boundary = 5
-        if (j .eq. n_leg-1)then
+        if (j .eq. n_up_leg_out_loc-1)then
           newnode_list%node(newelement_list%element(index)%vertex(3))%boundary = 9 !3  ! LEFT LEG
           newnode_list%node(newelement_list%element(index)%vertex(4))%boundary = 4 !3  ! LEFT LEG
         endif
       endif
-      if ((j .eq. n_leg-1) .and. (i .ne. n_ext)) then
+      if ((j .eq. n_up_leg_out_loc-1) .and. (i .ne. n_ext)) then
           newnode_list%node(newelement_list%element(index)%vertex(4))%boundary = 4 !1  ! LEFT LEG
           newnode_list%node(newelement_list%element(index)%vertex(3))%boundary = 4 !1  ! LEFT LEG
       endif
 
-      if (j .eq. n_leg-1) elm_left(i) = index
+      if (j .eq. n_up_leg_out_loc-1) elm_left(i) = index
 
     enddo
   enddo
 
   do i=1,n_ext
-    do j=1, n_leg_out_loc-1                    ! right leg
+    do j=1, n_up_leg-1                    ! right leg
       index = index + 1
       if (i.eq.1) then
         if (j.eq. 1) then
           newelement_list%element(index)%vertex(4) = index_ext1 - n_tht + 1
-          newelement_list%element(index)%vertex(1) = index_leg2 + (n_leg_out_loc-j)*(n_open+n_private+1) - 1
+          newelement_list%element(index)%vertex(1) = index_leg2 + (n_up_leg-j)*(n_open+n_up_priv+1) - 1
           newelement_list%element(index)%vertex(3) = index_ext2
           newelement_list%element(index)%vertex(2) = index_ext_leg2 + j - 1 
         else
-          newelement_list%element(index)%vertex(4) = index_leg2 + (n_leg_out_loc-j+1)*(n_open+n_private+1) - 1 
-          newelement_list%element(index)%vertex(1) = index_leg2 + (n_leg_out_loc-j  )*(n_open+n_private+1) - 1
+          newelement_list%element(index)%vertex(4) = index_leg2 + (n_up_leg-j+1)*(n_open+n_up_priv+1) - 1 
+          newelement_list%element(index)%vertex(1) = index_leg2 + (n_up_leg-j  )*(n_open+n_up_priv+1) - 1
           newelement_list%element(index)%vertex(3) = index_ext_leg2 + j - 2
           newelement_list%element(index)%vertex(2) = index_ext_leg2 + j - 1
         endif
       else
         if (j.eq. 1) then
-          newelement_list%element(index)%vertex(1) = index_ext_leg2 + (i-2)*(n_tht+n_leg_total-2)
-          newelement_list%element(index)%vertex(2) = index_ext_leg2 + (i-1)*(n_tht+n_leg_total-2) 
-          newelement_list%element(index)%vertex(3) = index_ext2 + (n_tht+n_leg_total-2)*(i-1) + j - 1
-          newelement_list%element(index)%vertex(4) = index_ext2 + (n_tht+n_leg_total-2)*(i-2) + j - 1
+          newelement_list%element(index)%vertex(1) = index_ext_leg2 + (i-2)*(n_tht+n_up_leg_total-2)
+          newelement_list%element(index)%vertex(2) = index_ext_leg2 + (i-1)*(n_tht+n_up_leg_total-2) 
+          newelement_list%element(index)%vertex(3) = index_ext2 + (n_tht+n_up_leg_total-2)*(i-1) + j - 1
+          newelement_list%element(index)%vertex(4) = index_ext2 + (n_tht+n_up_leg_total-2)*(i-2) + j - 1
         else
-          newelement_list%element(index)%vertex(4) = index_ext_leg2 + (i-2)*(n_tht+n_leg_total-2) + j - 2 
-          newelement_list%element(index)%vertex(3) = index_ext_leg2 + (i-1)*(n_tht+n_leg_total-2) + j - 2
-          newelement_list%element(index)%vertex(1) = index_ext_leg2 + (i-2)*(n_tht+n_leg_total-2) + j - 1
-          newelement_list%element(index)%vertex(2) = index_ext_leg2 + (i-1)*(n_tht+n_leg_total-2) + j - 1
+          newelement_list%element(index)%vertex(4) = index_ext_leg2 + (i-2)*(n_tht+n_up_leg_total-2) + j - 2 
+          newelement_list%element(index)%vertex(3) = index_ext_leg2 + (i-1)*(n_tht+n_up_leg_total-2) + j - 2
+          newelement_list%element(index)%vertex(1) = index_ext_leg2 + (i-2)*(n_tht+n_up_leg_total-2) + j - 1
+          newelement_list%element(index)%vertex(2) = index_ext_leg2 + (i-1)*(n_tht+n_up_leg_total-2) + j - 1
         endif
       endif
 
@@ -1681,35 +1606,35 @@ if (extend) then
         newnode_list%node(newelement_list%element(index)%vertex(1))%boundary = 0
         newnode_list%node(newelement_list%element(index)%vertex(3))%boundary = 5
         newnode_list%node(newelement_list%element(index)%vertex(2))%boundary = 5
-        if (j .eq. n_leg_out_loc-1) then
+        if (j .eq. n_up_leg-1) then
           newnode_list%node(newelement_list%element(index)%vertex(1))%boundary = 4 ! 3  ! RIGHT LEG
           newnode_list%node(newelement_list%element(index)%vertex(2))%boundary = 9 ! 3  ! RIGHT LEG
         endif
       endif
  
-      if ((j .eq. n_leg_out_loc-1) .and. (i .ne. n_ext)) then
+      if ((j .eq. n_up_leg-1) .and. (i .ne. n_ext)) then
           newnode_list%node(newelement_list%element(index)%vertex(1))%boundary = 4  ! 1  ! RIGHT LEG
           newnode_list%node(newelement_list%element(index)%vertex(2))%boundary = 4  ! 1  ! RIGHT LEG
       endif
 
-      if (j .eq. n_leg_out_loc-1) elm_right(i) = index
+      if (j .eq. n_up_leg-1) elm_right(i) = index
 
     enddo
   enddo
 
-  newelement_list%n_elements = newelement_list%n_elements + n_ext * (n_tht-1) + n_ext*(n_leg_total-2)
+  newelement_list%n_elements = newelement_list%n_elements + n_ext * (n_tht-1) + n_ext*(n_up_leg_total-2)
   
   if ( newnode_list%n_nodes > n_nodes_max ) then
-    write(*,*) 'ERROR in grid_xpoint_wall: hard-coded parameter n_nodes_max is too small'
+    write(*,*) 'ERROR in grid_upper_xpoint_wall: hard-coded parameter n_nodes_max is too small'
     stop
   else if ( newelement_list%n_elements > n_elements_max ) then
-    write(*,*) 'ERROR in grid_xpoint_wall: hard-coded parameter n_elements_max is too small'
+    write(*,*) 'ERROR in grid_upper_xpoint_wall: hard-coded parameter n_elements_max is too small'
     stop
   end if
 
 endif
 
-!newelement_list%n_elements = newelement_list%n_elements + (n_open+n_private)*(2*n_leg-2)
+!newelement_list%n_elements = newelement_list%n_elements + (n_open+n_up_priv)*(2*n_up_leg_out_loc-2)
 newelement_list%n_elements = index
 
 if ( newnode_list%n_nodes > n_nodes_max ) then
@@ -2027,4 +1952,4 @@ call update_neighbours(node_list,element_list, force_rtree_initialize=.true.)
 write(*,*) ' completed grid_xpoint_wall'
 
 return
-end subroutine grid_xpoint_wall
+end subroutine grid_upper_xpoint_wall

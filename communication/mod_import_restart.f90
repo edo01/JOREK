@@ -95,7 +95,7 @@ subroutine import_binary_restart(node_list, element_list, filename, format_rst, 
   logical, optional,             intent(in)              :: no_perturbations ! don't initialize new harmonics
   logical, optional,             intent(in)              :: use_3D_rtree ! use 3D rtree for stellarator model
   ! --- Local variables
-  integer              :: i, j, m, k, n_tor_tmp
+  integer              :: i, j, m, k, n_tor_tmp, i_p, i_inj, p_begin
   real*8               :: growth_mag, growth_kin, amplitude
   integer, allocatable :: mode_tmp(:)
   real*8,  allocatable :: values_tmp(:,:,:), deltas_tmp(:,:,:), aux_values_tmp(:,:,:)
@@ -116,6 +116,11 @@ subroutine import_binary_restart(node_list, element_list, filename, format_rst, 
   real*8,  allocatable :: spi_psi_arr_drift (:)
   real*8,  allocatable :: spi_grad_psi_arr_drift (:)
   integer, allocatable :: plasmoid_in_domain_arr (:)
+
+  real*8, allocatable  :: xtime_spi_ablation_tmp(:,:)         !< The time history of SPI ablation
+  real*8, allocatable  :: xtime_spi_ablation_rate_tmp(:,:)    !< The time history of SPI ablation rate
+  real*8, allocatable  :: xtime_spi_ablation_bg_tmp(:,:)      !< The time history of SPI ablation for background species
+  real*8, allocatable  :: xtime_spi_ablation_bg_rate_tmp(:,:) ! <The time history of SPI ablation rate for bg species
 
   integer              :: n_spi_check, n_inj_check
   logical              :: modes_changed
@@ -600,24 +605,78 @@ endif
     if (n_spi_tot >= 1) then
 
       if (index_start >= 1) then
+        if (spi_abl_history_old) then
+          if (allocated(xtime_spi_ablation_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_tmp,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_rate_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_rate_tmp,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_rate_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_bg_tmp,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_rate_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_bg_rate_tmp,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_rate_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
 
-        if (allocated(xtime_spi_ablation)) &
-          call tr_deallocate(xtime_spi_ablation,"xtime_spi_ablation",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
-        if (allocated(xtime_spi_ablation_rate)) &
-          call tr_deallocate(xtime_spi_ablation_rate,"xtime_spi_ablation_rate",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation_rate,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
-        if (allocated(xtime_spi_ablation_bg)) &
-          call tr_deallocate(xtime_spi_ablation_bg,"xtime_spi_ablation_bg",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation_bg,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
-        if (allocated(xtime_spi_ablation_bg_rate)) &
-          call tr_deallocate(xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation_bg_rate,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          read(21)  xtime_spi_ablation_tmp(1:n_spi_tot,1:index_start)
+          read(21)  xtime_spi_ablation_rate_tmp(1:n_spi_tot,1:index_start)
+          read(21)  xtime_spi_ablation_bg_tmp(1:n_spi_tot,1:index_start)
+          read(21)  xtime_spi_ablation_bg_rate_tmp(1:n_spi_tot,1:index_start)
 
-        read(21)  xtime_spi_ablation(1:n_spi_tot,1:index_start)
-        read(21)  xtime_spi_ablation_rate(1:n_spi_tot,1:index_start)
-        read(21)  xtime_spi_ablation_bg(1:n_spi_tot,1:index_start)
-        read(21)  xtime_spi_ablation_bg_rate(1:n_spi_tot,1:index_start)
+          if (allocated(xtime_spi_ablation)) &
+            call tr_deallocate(xtime_spi_ablation,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation,1,n_inj,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_rate)) &
+            call tr_deallocate(xtime_spi_ablation_rate,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg)) &
+            call tr_deallocate(xtime_spi_ablation_bg,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_rate)) &
+            call tr_deallocate(xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+
+          p_begin = 0
+          xtime_spi_ablation = 0.0
+          xtime_spi_ablation_rate = 0.0
+          xtime_spi_ablation_bg = 0.0
+          xtime_spi_ablation_bg_rate = 0.0
+          do i_inj = 1, n_inj
+            do i_p = 1, n_spi(i_inj)
+              xtime_spi_ablation(i_inj,:) = xtime_spi_ablation(i_inj,:) + xtime_spi_ablation_tmp(i_p+p_begin,:)
+              xtime_spi_ablation_rate(i_inj,:) = xtime_spi_ablation_rate(i_inj,:) + xtime_spi_ablation_rate_tmp(i_p+p_begin,:)
+              xtime_spi_ablation_bg(i_inj,:) = xtime_spi_ablation_bg(i_inj,:) + xtime_spi_ablation_bg_tmp(i_p+p_begin,:)
+              xtime_spi_ablation_bg_rate(i_inj,:) = xtime_spi_ablation_bg_rate(i_inj,:) + xtime_spi_ablation_bg_rate_tmp(i_p+p_begin,:)
+            end do  
+            p_begin = p_begin + n_spi(i_inj)
+          end do
+
+          call tr_deallocate(xtime_spi_ablation_tmp,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_deallocate(xtime_spi_ablation_rate_tmp,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_deallocate(xtime_spi_ablation_bg_tmp,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_deallocate(xtime_spi_ablation_bg_rate_tmp,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+        else
+          ! For the binary file, simply output the warning so that the users are aware.
+          write(*,*) "WARNING! The dimension of the SPI ablation history is changed. Make sure to set spi_abl_history_old = .t. if you are restarting from an old restart file or the first time!"
+          if (allocated(xtime_spi_ablation)) &
+            call tr_deallocate(xtime_spi_ablation,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation,1,n_inj,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_rate)) &
+            call tr_deallocate(xtime_spi_ablation_rate,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg)) &
+            call tr_deallocate(xtime_spi_ablation_bg,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_rate)) &
+            call tr_deallocate(xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+
+          read(21)  xtime_spi_ablation(1:n_inj,1:index_start)
+          read(21)  xtime_spi_ablation_rate(1:n_inj,1:index_start)
+          read(21)  xtime_spi_ablation_bg(1:n_inj,1:index_start)
+          read(21)  xtime_spi_ablation_bg_rate(1:n_inj,1:index_start)
+        endif
       end if
 
       read(21,err=999, end=999) n_spi_check
@@ -938,7 +997,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   logical, parameter   			:: import_perturbation = .false.
 
   ! --- Local variables
-  integer              :: i, j, m, k, n_tor_tmp, n_coord_tor_tmp, jorek_model_tmp, n_var_tmp, n_order_tmp, n_period_tmp, rst_hdf5_version_tmp
+  integer              :: i, j, m, k, n_tor_tmp, n_coord_tor_tmp, jorek_model_tmp, n_var_tmp, n_order_tmp, n_period_tmp, rst_hdf5_version_tmp, i_p, p_begin
   integer              :: n_plane_tmp, n_vertex_max_tmp, n_nodes_max_tmp, n_elements_max_tmp,n_boundary_max_tmp, n_nodes_tmp, n_dof_tmp
   integer              :: n_pieces_max_tmp, n_degrees_tmp, nref_max_tmp, n_ref_list_tmp, n_new_modes
   real*8               :: growth_mag, growth_kin, amplitude
@@ -951,6 +1010,8 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   integer(HID_T)     :: file_id, datatype, dataset
   integer            :: ind, n_spi_check, n_inj_check
   character          :: t_current_prof_initialized
+  integer            :: var_rank       !< Rank of an array in the restart file
+  integer(HSIZE_T),dimension(:),allocatable :: var_dims       !< Dimension of an array in the restart file
   
   real(RKIND), allocatable :: t_x(:,:,:,:)
   real(RKIND), allocatable :: t_values(:,:,:,:)
@@ -962,6 +1023,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   real(RKIND), allocatable :: t_r_tor_eq(:,:)
   real(RKIND), allocatable :: t_j_field(:,:,:,:)
   real(RKIND), allocatable :: t_b_field(:,:,:,:)
+  real(RKIND), allocatable :: t_b_vac_field(:,:,:,:)
   real(RKIND), allocatable :: t_chi_correction(:,:,:)
   real(RKIND), allocatable :: t_j_source(:,:,:)
 
@@ -1013,6 +1075,11 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   real*8, allocatable :: spi_psi_arr_drift (:)
   real*8, allocatable :: spi_grad_psi_arr_drift (:)
   integer,allocatable :: plasmoid_in_domain_arr (:)
+
+  real*8, allocatable  :: xtime_spi_ablation_tmp(:,:)         !< The time history of SPI ablation
+  real*8, allocatable  :: xtime_spi_ablation_rate_tmp(:,:)    !< The time history of SPI ablation rate
+  real*8, allocatable  :: xtime_spi_ablation_bg_tmp(:,:)      !< The time history of SPI ablation for background species
+  real*8, allocatable  :: xtime_spi_ablation_bg_rate_tmp(:,:) ! <The time history of SPI ablation rate for bg species
 
   integer :: err_exists, dterr, n_spi_begin, i_inj
   logical :: flag_exists, type_match, aux_values_read
@@ -1176,6 +1243,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_allocate(t_pressure,1,node_list%n_nodes,1,n_degrees_tmp,                              "node_list%pressure",CAT_UNKNOWN)
   call tr_allocate(t_j_field,1,node_list%n_nodes,1,n_coord_tor_tmp,1,n_degrees_tmp,1,n_dim+1,  "node_list%j_field",CAT_UNKNOWN)
   call tr_allocate(t_b_field,1,node_list%n_nodes,1,n_coord_tor_tmp,1,n_degrees_tmp,1,n_dim+1,    "node_list%b_field",     CAT_UNKNOWN)
+  call tr_allocate(t_b_vac_field,1,node_list%n_nodes,1,n_coord_tor_tmp,1,n_degrees_tmp,1,n_dim+1,"node_list%b_vac_field",     CAT_UNKNOWN)
   call tr_allocate(t_chi_correction,1,node_list%n_nodes,1,     n_coord_tor_tmp,1,n_degrees_tmp,            "node_list%chi_correction",CAT_UNKNOWN)
   call tr_allocate(t_j_source,1,node_list%n_nodes,1,     n_tor_tmp,1,n_degrees_tmp,            "node_list%j_source",CAT_UNKNOWN)
 #endif 
@@ -1268,7 +1336,11 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   endif
 
 #ifndef USE_DOMM
+#ifdef USE_EXT_FIELD
+  call HDF5_array4D_reading(file_id,t_b_vac_field,   'b_vac_field')
+#else
   call HDF5_array3D_reading(file_id,t_chi_correction, 'chi_correction')
+#endif
 #endif
 
   call HDF5_array3D_reading(file_id,t_j_source, 'j_source')
@@ -1365,7 +1437,11 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
     node_list%node(i)%j_field  = t_j_field(i,:,:,:)
 #endif
 #ifndef USE_DOMM
+#ifdef USE_EXT_FIELD
+    node_list%node(i)%b_vac_field     = t_b_vac_field(i,:,:,:)
+#else
     node_list%node(i)%chi_correction  = t_chi_correction(i,:,:)
+#endif
 #endif
     node_list%node(i)%j_source = 0.d0 
     do m=1,n_tor_tmp,2
@@ -1947,31 +2023,110 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
     if (n_spi_tot >= 1) then
 
       if (index_start >= 1) then
-        if (allocated(xtime_spi_ablation)) &
-          call tr_deallocate(xtime_spi_ablation,"xtime_spi_ablation",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
-        if (allocated(xtime_spi_ablation_rate)) &
-          call tr_deallocate(xtime_spi_ablation_rate,"xtime_spi_ablation_rate",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation_rate,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
-        if (allocated(xtime_spi_ablation_bg)) &
-          call tr_deallocate(xtime_spi_ablation_bg,"xtime_spi_ablation_bg",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation_bg,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
-        if (allocated(xtime_spi_ablation_bg_rate)) &
-          call tr_deallocate(xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
-        call tr_allocate(xtime_spi_ablation_bg_rate,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+        if (spi_abl_history_old) then
+          ! For the h5 file, check the restart file to consistency
+          var_rank = 0
+          if(allocated(var_dims)) deallocate(var_dims)
+          call HDF5_extract_dataset_rank_shape(file_id,var_rank,var_dims,"xtime_spi_ablation")
+          if(var_dims(1) .ne. n_spi_tot) then
+            write(*,*) "WARNING! Dimention of xtime_spi_ablation not equal to n_spi_tot, check if the correct spi_abl_history_old flag is set! Exiting!", var_dims(1), n_spi_tot
+            stop
+          endif
+          if(allocated(var_dims)) deallocate(var_dims)
+          if (allocated(xtime_spi_ablation_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_tmp,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_rate_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_rate_tmp,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_rate_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_bg_tmp,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_rate_tmp)) &
+            call tr_deallocate(xtime_spi_ablation_bg_rate_tmp,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_rate_tmp,1,n_spi_tot,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
 
-        call HDF5_array2D_reading(file_id,xtime_spi_ablation,"xtime_spi_ablation")
-        call HDF5_array2D_reading(file_id,xtime_spi_ablation_rate,"xtime_spi_ablation_rate")
+          call HDF5_array2D_reading(file_id,xtime_spi_ablation_tmp,"xtime_spi_ablation")
+          call HDF5_array2D_reading(file_id,xtime_spi_ablation_rate_tmp,"xtime_spi_ablation_rate")
 
-        call H5Lexists_f(file_id,"xtime_spi_ablation_bg",flag_exists,err_exists) !Backward compatibility
-        if (flag_exists .and. err_exists == 0) then
-          call HDF5_array2D_reading(file_id,xtime_spi_ablation_bg,"xtime_spi_ablation_bg")
-          call HDF5_array2D_reading(file_id,xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate")
+          call H5Lexists_f(file_id,"xtime_spi_ablation_bg",flag_exists,err_exists) !Backward compatibility
+          if (flag_exists .and. err_exists == 0) then
+            call HDF5_array2D_reading(file_id,xtime_spi_ablation_bg_tmp,"xtime_spi_ablation_bg")
+            call HDF5_array2D_reading(file_id,xtime_spi_ablation_bg_rate_tmp,"xtime_spi_ablation_bg_rate")
+          else
+            xtime_spi_ablation_bg_tmp = 0.
+            xtime_spi_ablation_bg_rate_tmp = 0.
+            write(*,*)"Backward Compatibility: No bg species ablation history information found, assuming none."
+          end if
+
+          if (allocated(xtime_spi_ablation)) &
+            call tr_deallocate(xtime_spi_ablation,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation,1,n_inj,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_rate)) &
+            call tr_deallocate(xtime_spi_ablation_rate,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg)) &
+            call tr_deallocate(xtime_spi_ablation_bg,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_rate)) &
+            call tr_deallocate(xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+
+          p_begin = 0
+          xtime_spi_ablation = 0.0
+          xtime_spi_ablation_rate = 0.0
+          xtime_spi_ablation_bg = 0.0
+          xtime_spi_ablation_bg_rate = 0.0
+          do i_inj = 1, n_inj
+            do i_p = 1, n_spi(i_inj)
+              xtime_spi_ablation(i_inj,:) = xtime_spi_ablation(i_inj,:) + xtime_spi_ablation_tmp(i_p+p_begin,:)
+              xtime_spi_ablation_rate(i_inj,:) = xtime_spi_ablation_rate(i_inj,:) + xtime_spi_ablation_rate_tmp(i_p+p_begin,:)
+              xtime_spi_ablation_bg(i_inj,:) = xtime_spi_ablation_bg(i_inj,:) + xtime_spi_ablation_bg_tmp(i_p+p_begin,:)
+              xtime_spi_ablation_bg_rate(i_inj,:) = xtime_spi_ablation_bg_rate(i_inj,:) + xtime_spi_ablation_bg_rate_tmp(i_p+p_begin,:)
+            end do  
+            p_begin = p_begin + n_spi(i_inj)
+          end do
+
+          call tr_deallocate(xtime_spi_ablation_tmp,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_deallocate(xtime_spi_ablation_rate_tmp,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_deallocate(xtime_spi_ablation_bg_tmp,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_deallocate(xtime_spi_ablation_bg_rate_tmp,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
         else
-          xtime_spi_ablation_bg = 0.
-          xtime_spi_ablation_bg_rate = 0.
-          write(*,*)"Backward Compatibility: No bg species ablation history information found, assuming none."
-        end if
+          ! For the h5 file, check the restart file to consistency
+          var_rank = 0
+          if(allocated(var_dims)) deallocate(var_dims)
+          call HDF5_extract_dataset_rank_shape(file_id,var_rank,var_dims,"xtime_spi_ablation")
+          if(var_dims(1) .ne. n_inj) then
+            write(*,*) "WARNING! Dimention of xtime_spi_ablation not equal to n_inj, check if the correct spi_abl_history_old flag is set! Exiting!", var_dims(1), n_inj
+            stop
+          endif
+          if(allocated(var_dims)) deallocate(var_dims)
+          if (allocated(xtime_spi_ablation)) &
+            call tr_deallocate(xtime_spi_ablation,"xtime_spi_ablation",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation,1,n_inj,1,index_start+nstep,"xtime_spi_ablation",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_rate)) &
+            call tr_deallocate(xtime_spi_ablation_rate,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_rate",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg)) &
+            call tr_deallocate(xtime_spi_ablation_bg,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg",CAT_UNKNOWN)
+          if (allocated(xtime_spi_ablation_bg_rate)) &
+            call tr_deallocate(xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+          call tr_allocate(xtime_spi_ablation_bg_rate,1,n_inj,1,index_start+nstep,"xtime_spi_ablation_bg_rate",CAT_UNKNOWN)
+
+          call HDF5_array2D_reading(file_id,xtime_spi_ablation,"xtime_spi_ablation")
+          call HDF5_array2D_reading(file_id,xtime_spi_ablation_rate,"xtime_spi_ablation_rate")
+
+          call H5Lexists_f(file_id,"xtime_spi_ablation_bg",flag_exists,err_exists) !Backward compatibility
+          if (flag_exists .and. err_exists == 0) then
+            call HDF5_array2D_reading(file_id,xtime_spi_ablation_bg,"xtime_spi_ablation_bg")
+            call HDF5_array2D_reading(file_id,xtime_spi_ablation_bg_rate,"xtime_spi_ablation_bg_rate")
+          else
+            xtime_spi_ablation_bg = 0.
+            xtime_spi_ablation_bg_rate = 0.
+            write(*,*)"Backward Compatibility: No bg species ablation history information found, assuming none."
+          end if
+        endif
       end if
 
       call H5Lexists_f(file_id,"n_spi_tot",flag_exists,err_exists) !Backward compatibility
@@ -2261,6 +2416,7 @@ subroutine import_hdf5_restart(node_list, element_list, filename, format_rst, er
   call tr_deallocate(t_r_tor_eq,"t_r_tor_eq",CAT_UNKNOWN)
   call tr_deallocate(t_j_field,"t_j_field",CAT_UNKNOWN)
   call tr_deallocate(t_b_field,"t_b_field",CAT_UNKNOWN)
+  call tr_deallocate(t_b_vac_field,"t_b_vac_field",CAT_UNKNOWN)
   call tr_deallocate(t_chi_correction,"t_chi_correction",CAT_UNKNOWN)
   call tr_deallocate(t_j_source,"t_j_source",CAT_UNKNOWN)
 #endif

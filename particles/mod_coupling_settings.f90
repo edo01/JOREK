@@ -1,5 +1,6 @@
 !> variables and functions related to settings for the coupling between kinetic particles and the fluid
 module mod_coupling_settings
+use mpi
 use mod_model_settings
 use phys_module, only: n_part_groups, n_part_groups_max, part_group_configs
 use phys_module, only: n_aux_var, n_diag_var
@@ -20,6 +21,7 @@ logical :: use_epp               = .false. !< use pressure coupling scheme for e
 logical :: use_epf               = .false. !< use full anisotropic pressure tensor coupling scheme for energetic particles
 logical :: use_kin_recomb_global = .false. !< whether recombination is required (has effect on both fluid and kinetic side)
 integer :: n_ics                 = 0       !< number of ics groups in the simulation
+integer :: ierr                            !< mpi error code
 contains
 
     
@@ -34,27 +36,39 @@ subroutine check_compatibility_and_determine_coupling_schemes()
   do group_num=1, n_part_groups
     select case (part_group_configs(group_num)%coupling_scheme)
       case ('ncs')
+        call check_no_ics_params(group_num)
+        call check_no_epf_rep_params(group_num)
         call check_compatibility_ncs(group_num)
         use_ncs = .true.
       case ('ics')
+        call check_no_ncs_params(group_num)
+        call check_no_epf_rep_params(group_num)
         call check_compatibility_ics(group_num)
         use_ics = .true.
         n_ics = n_ics + 1
         part_group_configs(group_num)%ics_group_idx = n_ics
       case ('rep')
+        call check_no_epf_params(group_num)
+        call check_no_ics_ncs_params(group_num)
         use_rep = .true.
       case ('epc')
+        write(*,*) "ERROR: coupling scheme 'epc' is not yet implemented"
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
         use_epc = .true.
       case ('epp')
+        write(*,*) "ERROR: coupling scheme 'epp' is not yet implemented"
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
         use_epp = .true.
       case ('epf')
+        call check_no_rep_params(group_num)
+        call check_no_ics_ncs_params(group_num)
         call check_compatibility_epf(group_num)
         use_epf = .true.
       case ('non')
         
       case default
         write(*,*) "ERROR: The coupling scheme '", part_group_configs(group_num)%coupling_scheme, "' is invalid."
-        stop
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
     end select
 
     if (part_group_configs(group_num)%use_kin_recombination .eqv. .true.) then
@@ -74,7 +88,7 @@ subroutine check_compatibility_ncs(group_num)
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
     write(*,*) "  Currently only type = 'particle_kinetic_leapfrog' is supported for"
     write(*,*) "  groups with coupling scheme 'ncs'"
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
   !> currently ncs particles are not compatible with fluid neutrals and fluid impurities
@@ -82,7 +96,7 @@ subroutine check_compatibility_ncs(group_num)
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
     write(*,*) "  Currently kinetic neutrals are not compatible with fluid neutrals/impurities."
     write(*,*) "  Please recompile with with_neutrals and with_impurities=.false."
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
   
 end subroutine check_compatibility_ncs
@@ -91,20 +105,13 @@ end subroutine check_compatibility_ncs
 subroutine check_compatibility_ics(group_num)
   implicit none
   integer :: group_num
-  
-  !> ics not compatible with use_kin_recombination
-  if (part_group_configs(group_num)%use_kin_recombination) then
-    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
-    write(*,*) "  use_kin_recombination can only be .t. for groups with coupling scheme 'ncs'"
-    stop
-  endif
 
   !> currently ics particles must be of type 'particle_kinetic_leapfrog'
   if (trim(part_group_configs(group_num)%type) /= 'particle_kinetic_leapfrog') then
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
     write(*,*) "  Currently only type = 'particle_kinetic_leapfrog' is supported for"
     write(*,*) "  groups with coupling scheme 'ics'"
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
   !> currently ics particles are not compatible with fluid neutrals and fluid impurities
@@ -112,7 +119,7 @@ subroutine check_compatibility_ics(group_num)
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
     write(*,*) "  Currently kinetic impurities are not compatible with fluid neutrals/impurities."
     write(*,*) "  Please recompile with with_neutrals and with_impurities=.false."
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
 end subroutine check_compatibility_ics
@@ -125,16 +132,16 @@ subroutine check_compatibility_epf(group_num)
   if (trim(part_group_configs(group_num)%type) /= 'particle_kinetic_leapfrog') then
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
     write(*,*) "  Currently only type = 'particle_kinetic_leapfrog' is supported for"
-    write(*,*) "  groups with coupling scheme 'ncs'"
-    stop
+    write(*,*) "  groups with coupling scheme 'epf'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
   !> currently epf particles are not compatible with fluid neutrals and fluid impurities
   if (with_neutrals .or. with_impurities) then
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
-    write(*,*) "  Currently kinetic neutrals are not compatible with fluid neutrals/impurities."
+    write(*,*) "  Currently energetic particles are not compatible with fluid neutrals/impurities."
     write(*,*) "  Please recompile with with_neutrals and with_impurities=.false."
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
   !> currently epf particles are not compatible with two temperature
@@ -142,7 +149,7 @@ subroutine check_compatibility_epf(group_num)
     write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "': "
     write(*,*) "  Currently kinetic neutrals are not compatible with two temperature models, "
     write(*,*) "  Please recompile with with_TiTe=.false."
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
   !> Check initialisation parameters
@@ -150,21 +157,189 @@ subroutine check_compatibility_epf(group_num)
     if (part_group_configs(group_num)%T_maxwell .eq. 0.d0) then
       write(*,*) "ERROR: Maxwell initialisation chosen, but no temperature supplied"
       write(*,*) "  please set part_group_configs()%T_maxwell"
-      stop
+      call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
     endif
     if (part_group_configs(group_num)%n_phi_planes .eq. 0) then
       write(*,*) "ERROR: Maxwell initialisation chosen, but n_phi_planes = 0"
       write(*,*) "  needs to be at least 1, please set part_group_configs()%n_phi_planes"
-      stop
+      call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
     endif
   endif
   if (part_group_configs(group_num)%n_particles_total .eq. 0.d0) then
     write(*,*) "ERROR: n_particles_total = 0, this is how weights are set"
     write(*,*) "  please set part_group_configs()%n_particles_total"
-    stop
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
 end subroutine check_compatibility_epf
+
+!> Checks that no ncs parameters have been set - used for non ncs groups
+subroutine check_no_ncs_params(group_num)
+  implicit none
+  integer :: group_num
+
+  if (part_group_configs(group_num)%use_kin_recombination) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_recombination can only be .t. for groups with coupling scheme 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%use_kin_cx) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_cx can only be .t. for groups with coupling scheme 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%use_kin_neutral_coll) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_neutral_coll can only be .t. for groups with coupling scheme 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (any(part_group_configs(group_num)%neutral_coll_dTw /= -1.d99)) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  neutral_coll_dTw can only be set for groups with coupling scheme 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+end subroutine check_no_ncs_params
+
+!> checks that no ics parameters have been set - used for non ics groups
+subroutine check_no_ics_params(group_num)
+  implicit none
+  integer :: group_num
+
+  if (part_group_configs(group_num)%use_kin_bg_collisions) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_bg_collisions can only be .t. for groups with coupling scheme 'ics'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (trim(part_group_configs(group_num)%kin_bg_coll_type) /= 'Homma2020') then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  kin_bg_coll_type can only be set for groups with coupling scheme 'ics'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%homma2020_alpha /= 1.5d0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  homma2020_alpha can only be set for groups with coupling scheme 'ics'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%ics_group_idx /= -1) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  ics_group_idx can only be set for groups with coupling scheme 'ics'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+end subroutine check_no_ics_params
+
+!> Checks that no ncs or ics parameters have been set - used for non ncs and non ics groups
+subroutine check_no_ics_ncs_params(group_num)
+  implicit none
+  integer :: group_num
+
+  call check_no_ncs_params(group_num)
+  call check_no_ics_params(group_num)
+
+  if (part_group_configs(group_num)%use_kin_ionisation) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_ionisation can only be .t. for groups with coupling scheme 'ics' or 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%use_kin_puffing) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_puffing can only be .t. for groups with coupling scheme 'ics' or 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%use_kin_radiation) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_kin_radiation can only be .t. for groups with coupling scheme 'ics' or 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (trim(part_group_configs(group_num)%atom_data_suffix) /= '') then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  atom_data_suffix can only be defined for groups with coupling scheme 'ics' or 'ncs'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+end subroutine check_no_ics_ncs_params
+
+!> Checks that no epf parameters have been set - used for non epf groups
+subroutine check_no_epf_params(group_num)
+  implicit none
+  integer :: group_num
+
+  if (part_group_configs(group_num)%T_maxwell /= 0.d0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  T_maxwell can only be set for groups with coupling scheme 'epf'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%n_phi_planes /= 0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  n_phi_planes can only be set for groups with coupling scheme 'epf'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+end subroutine check_no_epf_params
+
+!> Checks that no rep parameters have been set - used for non rep groups
+subroutine check_no_rep_params(group_num)
+  implicit none
+  integer :: group_num
+
+  if (part_group_configs(group_num)%re_energy /= 0.d0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  re_energy can only be set for groups with coupling scheme 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%re_std_energy /= 0.d0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  re_std_energy can only be set for groups with coupling scheme 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%re_pitch /= 0.d0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  re_pitch can only be set for groups with coupling scheme 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+end subroutine check_no_rep_params
+
+!> CHecks that no epf/rep parameters have been set - used for non epf and non rep groups
+subroutine check_no_epf_rep_params(group_num)
+  implicit none
+  integer :: group_num
+
+  call check_no_epf_params(group_num)
+  call check_no_rep_params(group_num)
+
+  if (part_group_configs(group_num)%init_function /= 'none') then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  init_function can only be set for groups with coupling scheme 'epf' or 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%init_pdf /= 'none') then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  init_pdf can only be set for groups with coupling scheme 'epf' or 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%n_particles_total /= 0.d0) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  n_particles_total can only be set for groups with coupling scheme 'epf' or 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+end subroutine check_no_epf_rep_params
 
 !> compares the name of a given coupling variable associated with a coupling scheme (i.e. assessed_var) 
 !> with the list of coupling variables already used by the simulation (i.e. coupling_vars). If the 
@@ -182,7 +357,7 @@ subroutine assess_and_accumulate_variable(assessed_var, coupling_var_idx, coupli
     if (coupling_var_idx > n_aux_var_max) then
       write(*,*) "ERROR: The number of coupling variables required for kinetic-fluid coupling "
       write(*,*) "  exceeds the hardcoded n_aux_var_max. Consider increasing n_aux_var_max."
-      stop
+      call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
     endif
   endif
 end subroutine assess_and_accumulate_variable
@@ -276,7 +451,7 @@ subroutine determine_coupling_variables()
         PI_ZPHI_idx_kin = final_var_idx
       case default
         write(*,*) "Error: no match found for coupling variable: ", coupling_vars(i),", please check coupling_variables.f90 and recompile"
-        stop
+        call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
     end select
     write(*,"(2X,A12,' = ', I3)") coupling_vars(i), final_var_idx
   enddo

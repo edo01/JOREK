@@ -67,6 +67,7 @@ subroutine preset_parameters
   extended_boundary = .false.
   j_cutoff_rcoord = 99.0
   j_cutoff_sig = 0.025
+  bloating_factor = 1.0d0
 
   freeboundary_equil = .false. ! use free or fixed boundary equilibrium
   freeboundary       = .false. ! use free or fixed boundary?
@@ -142,7 +143,8 @@ subroutine preset_parameters
   bgf_rpolar    = 0.6
   bgf_tht       = 0.6
 
-  SIG_closed  = 0.1d0
+  xr_closed   = (/   1.0d0, 9999.d0, 9999.d0 /)
+  SIG_closed  = (/   0.1d0, 9999.d0, 0.1d0   /)
   SIG_open    = 0.1d0
   SIG_outer   = 0.1d0
   SIG_inner   = 0.1d0
@@ -239,6 +241,9 @@ subroutine preset_parameters
   ZK_par_max   = 1.d20
   D_perp(1:5)  = (/ 1.d-5, 0.d0, 0.d0, 99.d0, 99.d0 /)
   D_par        = 0.d0
+  V_pinch_gauss = 0.d0
+  V_pinch_psin  = 0.d0
+  V_pinch_sig   = 1.d0
   D_perp_imp(1:5)  = (/ 1.d-5, 0.d0, 0.d0, 99.d0, 99.d0 /)
   D_par_imp        = 0.d0
 
@@ -588,6 +593,7 @@ subroutine preset_parameters
   zk_perp_file       = 'none'
   zk_e_perp_file     = 'none'
   zk_i_perp_file     = 'none'
+  v_pinch_file       = 'none'
   R_Z_psi_bnd_file   = 'none'
   wall_file          = 'wall.txt'
   rot_file           = 'none'
@@ -814,6 +820,7 @@ subroutine preset_parameters
   spi_tor_rot     = .false.
   spi_num_vol     = .true.
   using_spi       = .false.
+  spi_abl_history_old = .false.
 
   output_prad_phi = .false.
 
@@ -910,6 +917,7 @@ part_group_configs(:)%use_kin_neutral_coll   = .false.
 do i=1,n_part_groups_max
   part_group_configs(i)%neutral_coll_dTw(:)  = -1.d99
 end do
+part_group_configs(:)%ncoll_each_nstep_part  = -9999991
 ! --- ics only
 part_group_configs(:)%use_kin_bg_collisions  = .false.
 part_group_configs(:)%kin_bg_coll_type       = 'Homma2020'

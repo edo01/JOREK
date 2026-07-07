@@ -41,19 +41,25 @@ subroutine flux_grid(node_list, element_list, bnd_node_list, bnd_elm_list, my_id
 
       if ( (xcase .ge. UPPER_XPOINT) .or. (grid_to_wall .and. (n_wall_blocks .gt. 0)) .or. RZ_grid_inside_wall ) then
         if (grid_to_wall) then
-          call grid_double_xpoint_inside_wall(node_list, element_list)
+          if ( (xcase .eq. UPPER_XPOINT) .and. (n_wall_blocks .eq. 0) ) then
+            if(my_id == 0 ) call grid_upper_xpoint_wall(node_list,element_list,n_flux,n_open,n_up_priv,n_up_leg,n_up_leg_out,  &
+                                                    n_tht,n_ext,xr_closed,SIG_open,SIG_closed,SIG_up_priv,SIG_theta_up,SIG_up_leg_0, &
+                                                    SIG_up_leg_1,dPSI_open,dPSI_up_priv)
+          else
+            call grid_double_xpoint_inside_wall(node_list, element_list)
+          endif
         else
           call grid_double_xpoint(node_list, element_list)
         endif
       else
   
         if (.not. grid_to_wall) then
-          call grid_xpoint(node_list,element_list,n_flux,n_open,n_private,n_leg,n_tht,   &
+          call grid_xpoint(node_list,element_list,n_flux,n_open,n_private,n_leg,n_tht,xr_closed,   &
                            SIG_open,SIG_closed,SIG_private,SIG_theta,SIG_leg_0,SIG_leg_1,dPSI_open,dPSI_private, xcase)
         else
 !!rks only for ITER wall for the moment
  !        write(*,*) 'ITER wall started'
-          if(my_id == 0 ) call grid_xpoint_wall(node_list,element_list,n_flux,n_open,n_private,n_leg,n_tht, n_ext,  &
+          if(my_id == 0 ) call grid_xpoint_wall(node_list,element_list,n_flux,n_open,n_private,n_leg,n_leg_out,n_tht, n_ext,xr_closed,  &
                                 SIG_open,SIG_closed,SIG_private,SIG_theta,SIG_leg_0,SIG_leg_1,dPSI_open,dPSI_private)
         endif !  if (.not. grid_to_wall) then
          

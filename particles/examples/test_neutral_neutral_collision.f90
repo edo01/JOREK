@@ -41,7 +41,7 @@ program test_NNC
   type(type_neutral_collision), dimension(:), allocatable :: neutral_collisions
 
   integer, parameter :: n_diag=6 !< how many diagnostic fields to project
-  !< p_ii (p_RR, p_ZZ, p_\phi\phi), n_1, n (=n_1+n_2), n_2
+  !< n (=n_1+n_2), n_1, n_2, p_ii (p_RR, p_ZZ, p_\phi\phi)
 
   !parameters of the grid
   real*8, parameter :: R_0 = 100.d0, Z_0 = 0.d0, length = 1.d0
@@ -126,6 +126,8 @@ program test_NNC
 
   ! --- initialize the neutral collision action
   neutral_collisions = neutral_collisions_from_config(sim)
+  neutral_collisions(1)%each_nstep_part = nstep_particles
+  sim%tstep_part_adj = tstep_particles
 
   ! --- setting up initial particle array
   weight = particlesource/(sim%groups(1)%n_particles) !< abusing particlesource to mean total weight of all particles in the sim for easy input iterations
@@ -152,7 +154,7 @@ program test_NNC
       p(i)%i_elm  = i_elm      
       p(i)%st     = [s,t]
       call interp_RZ(sim%fields%node_list,sim%fields%element_list,i_elm,s,t,R,Z)
-      p(i)%x      = [R,Z,RN(4)*TWOPI/n_period]
+      p(i)%x      = [R,Z,RN(4)*TWOPI]
       
       RN(5:8) = boxmueller_transform(RN(5:8))
       p(i)%v      = 0.d0 + sqrt(T_av*K_BOLTZ/(sim%groups(1)%mass * ATOMIC_MASS_UNIT))*RN(5:7)
@@ -217,6 +219,7 @@ program test_NNC
     call log_block(sim%my_id, trim(i_step_char), last_time)
 
     sim%time = sim%time + tstep_particles*nstep_particles
+    sim%istep_inner_loop = i_step
 
     call conservation_checks(sim,conserv_obj)
 
@@ -238,7 +241,7 @@ program test_NNC
     end if
 
     call log_block(sim%my_id, "Neutral self collision", last_time)
-    call neutral_collisions(1)%do(sim,tstep_particles*nstep_particles,projections%node_list, projections%element_list)
+    call neutral_collisions(1)%do(sim,projections%node_list, projections%element_list)
 
     ! print details of sim%particles to logfile (was used for early debugging)
     ! select type (pa => sim%groups(1)%particles)
@@ -341,10 +344,10 @@ contains
               do m=1,n_order+1  ! order of the polynomial
                 qty = 0.d0
                 factor = HH(l,m) * sim%fields%element_list%element(i_elm_old)%size(l,m) * particle_tmp%weight / nstep_particles
-                qty(1:3)                            = factor * mass * particle_tmp%v * particle_tmp%v ! directional pressure P_ii = dp_i/dt /A = mv_i^2 dt A n /dt /A = mv_i^2 n
-                if(particle_tmp%i_life == 1) qty(4) = factor                                          ! n_1 species density [m^-3]
-                qty(5)                              = factor                                          ! n=n_1+n_2 total species density [m^-3]
-                if(particle_tmp%i_life == 2) qty(6) = factor                                          ! n_2 species density [m^-3]
+                qty(1)                              = factor                                          ! n=n_1+n_2 total species density [m^-3]
+                if(particle_tmp%i_life == 1) qty(2) = factor                                          ! n_1 species density [m^-3]
+                if(particle_tmp%i_life == 2) qty(3) = factor                                          ! n_2 species density [m^-3]
+                qty(4:6)                            = factor * mass * particle_tmp%v * particle_tmp%v ! directional pressure P_ii = dp_i/dt /A = mv_i^2 dt A n /dt /A = mv_i^2 n
                 
                 do i_tor=1,n_tor ! toroidal harmonic
                   do k=1,n_diag  ! diagnostic quantity
