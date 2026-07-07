@@ -1,6 +1,7 @@
 module mod_re_avalanche
     use particle_tracer
     use mod_particle_io
+    use mod_particle_sim
     use mod_particle_diagnostics
     use mod_fields_linear   
     use mod_fields_hermite_birkhoff 
@@ -14,7 +15,23 @@ module mod_re_avalanche
     implicit none
     private 
 
-    public :: reorder_indices, Moller_scatt, do_binning_mpi
+    public :: reorder_indices, Moller_scatt, do_binning_mpi, type_re_avalanche, &
+              re_avalanche_from_config, gcd_re_avalanche
+
+    type :: type_re_avalanche
+      integer :: group_num 
+      integer*4 :: element_part_s, element_part_t, Ntor, n_limit
+      integer*4, allocatable :: emptyind(:)
+      integer :: each_nstep_part
+      integer*4 :: Nmombin, new_markers_per_element
+      real*8 :: gamma_min
+      logical :: constructed=.false. 
+    contains 
+      procedure :: initialize
+      procedure :: do => do_RE_avalanche
+    end type
+
+    integer :: gcd_re_avalanche = -9999991
 
 contains 
 
@@ -22,7 +39,7 @@ contains
   ! Let N_tot be the total amount of markers and N_active the amount of markers with i_elm>0
   ! Output of the subroutine is array emptyind which holds the indices of all the active 
   ! markers in emptyind(1:N_active) and all inactive markers in emptyind((N_active+1):N_tot)
-  subroutine reorder_indices(sim, n_part_bound, emptyind)
+  subroutine reorder_indices(sim, group_num, emptyind)
     use mod_particle_io 
     use mod_kinetic_relativistic
     
@@ -33,6 +50,10 @@ contains
     
     integer*4 :: i_empty, i_full, storedindex, j_empty, j_full
     real*8 :: start_time, end_time, tot_time(3)
+
+    integer*4 :: group_num
+
+    n_part_bound = size(sim%groups(group_num)%particles(:))
     
     j_empty = 1
     j_full = n_part_bound
@@ -83,8 +104,9 @@ contains
   subroutine Moller_scatt(sim, gamma_min, dt_coll, n_part, n_part_bound, n_part_old, emptyind)
     use mod_particle_io 
     use mod_kinetic_relativistic
-    use constants, only: mu_zero, k_boltz, pi, eps_zero, el_chg, mass_proton, c_light
+    use constants, only: mu_zero, k_boltz, pi, eps_zero, el_chg, c_light
     use mod_random_seed
+    !use mod_fields, only: calc_NeTe
     
     type(particle_sim)                  :: sim
     type(pcg32_rng), dimension(:), allocatable ::  rng1, rng2, rng3             ! Rngs used for the collisions
@@ -109,6 +131,7 @@ contains
     integer*4 :: process_rank, process_rank_plus_one, amount_processes 
     integer*4 :: ierror, ifail
     real*8 :: vel(3), n1(3), n2(3) !velocity vector and orthonormal vectors used for the collisions
+    real*8 :: DUMMY_REAL
 
     call reorder_indices(sim, n_part_bound, emptyind)
 
@@ -136,7 +159,8 @@ contains
 
       if (pini%i_elm .le. 0) cycle
 
-      ne = 1.d19
+      call sim%fields%calc_NeTe(sim%time, pini%i_elm, pini%st, pini%x(3), ne, DUMMY_REAL)
+      if (ne .le. 0.d0) cycle
 
       vel = pini%p/sqrt(dot_product(pini%p, pini%p)/(c_light**2.d0) + sim%groups(1)%mass**2.d0)
 
@@ -218,7 +242,7 @@ contains
   subroutine do_binning_mpi(sim, n_part, n_part_bound, n_limit, Nbin, Ntor, element_part_s, element_part_t, new_markers_per_element, emptyind, iterations)
     use mod_particle_io 
     use mod_kinetic_relativistic
-    use constants, only: mu_zero, k_boltz, pi, eps_zero, el_chg, mass_proton, c_light
+    use constants, only: mu_zero, k_boltz, pi, eps_zero, el_chg, c_light
     use mod_sobseq_rng
     use mod_pcg32_rng
     use mod_random_seed
@@ -235,31 +259,29 @@ contains
     integer*4 :: g, h, i, j, k, l, m, n
     real*8 :: weighttot, rand(1) 
     real*8, allocatable ::  cum_prob(:)
-    real*8 :: B(3), B_hat(3), e1(3), e2(3), gyro_angle(1)
+    real*8 :: B(3), gyro_angle(1)!, B_hat(3), e1(3), e2(3)
     integer*4, allocatable :: particles_in_volume(:,:,:,:), amount_markers_spatial_bin(:,:,:), next_empty(:,:,:)
     integer*4 :: countk, countbin
     integer*4 :: new_markers_per_element, emptyind(:)
-    integer*4 :: check
+    !integer*4 :: check
 
-    real*8  :: R, Z, phi, s, t, DUMMY_REAL
+    real*8  :: R, Z, phi, DUMMY_REAL !, s, t
     real*8  :: R_s, R_t, Z_s, Z_t, f
     real*8  :: Rbox(2), Zbox(2)
     integer, dimension(n_vertex_max) :: vertices
-    real*8 :: minR, minZ, minPhi, maxR, maxZ, maxPhi
+    real*8 :: minR, minZ, maxR, maxZ
     real*8 :: A_RZ
 
     real*8 :: p_para, mu 
     real*8, allocatable :: p_para_min(:,:,:,:), p_para_max(:,:,:,:), mu_min(:,:,:,:), mu_max(:,:,:,:)
-    integer*4 :: Nbin, pk, i_elm_find
+    integer*4 :: Nbin, pk!, i_elm_find
     real*8, allocatable :: p_para_mu_array(:), p_para_mu_array2(:,:,:,:,:,:), weighttot2(:,:,:,:)
 
     integer*4 :: element_part_s, element_part_t
     integer*4 :: iterations
 
-    real*8 ::  ran(4), factor
+    real*8 ::  ran(4)
     type(pcg32_rng), dimension(:), allocatable ::  rng1, rng, rng2
-
-    real*8 :: B_val_old
 
     real*8 :: gc_st(2), gc_phi
     integer*4 :: gc_i_elm
@@ -292,8 +314,6 @@ contains
 
     countk = 0
     countbin = 0
-
-    factor = 1.d0
     
     allocate(p_para_min(Ntor,sim%fields%element_list%n_elements,element_part_s,element_part_t)) 
     allocate(p_para_max(Ntor,sim%fields%element_list%n_elements,element_part_s,element_part_t))
@@ -600,9 +620,7 @@ contains
 
             A_RZ = (Rbox(2) - Rbox(1))*(Zbox(2)-Zbox(1))
 
-            factor = 1.d0
-
-            check = 0
+            !check = 0
 
 
             do n=1, new_markers_per_element_loop
@@ -627,7 +645,7 @@ contains
                   call rng2(process_rank_plus_one)%next(ran_p_mu)
 
                   p_para = (1/real(Nbin,8)*(real(l,8)-real(modulo(l,Nbin),8))+1.d0 -ran_p_mu(1))*(p_para_max(j,i,h,g)-p_para_min(j,i,h,g))/real(Nbin,8) + p_para_min(j,i,h,g)
-                  if (modulo(l,Nbin) .eq. 0) p_para = (1.d0+1.d0-ran_p_mu(1))*(p_para_max(j,i,h,g)-p_para_min(j,i,h,g))/real(Nbin,8) + p_para_min(j,i,h,g)
+                  if (modulo(l,Nbin) .eq. 0) p_para = (real(l,8)/real(Nbin,8)-ran_p_mu(1))*(p_para_max(j,i,h,g)-p_para_min(j,i,h,g))/real(Nbin,8) + p_para_min(j,i,h,g)
 
                   mu = (real(modulo(l,Nbin), 8) -ran_p_mu(2))*(mu_max(j,i,h,g)-mu_min(j,i,h,g))/real(Nbin,8) + mu_min(j,i,h,g)
                   if (modulo(l,Nbin) .eq. 0) mu = (real(Nbin,8) -ran_p_mu(2))*(mu_max(j,i,h,g)-mu_min(j,i,h,g))/real(Nbin,8) + mu_min(j,i,h,g)
@@ -658,11 +676,6 @@ contains
                       counter = counter +1
                         call interp_RZ(sim%fields%node_list, sim%fields%element_list, i, ran(2), ran(3), R, R_s, R_t, Z, Z_s, Z_t)
                         f = abs(R_s*Z_t - R_t*Z_s)/A_RZ
-                        if (f .gt. 1) then 
-                            write(*,*) 'value distribution function', f
-                            factor = factor*1.d-1
-                            cycle
-                        end if
                         if (ran(1) .le. f) then
                             call sim%fields%calc_EBpsiU(sim%time, i, [ran(2), ran(3)], 2.d0*Pi/Ntor*ran(4) + 2.d0*Pi/Ntor*(real(j,8)-1.d0), E, B, psi, U)
                             p_gc = relativistic_kinetic_to_relativistic_gc(sim%fields%node_list, sim%fields%element_list, p, sim%groups(1)%mass, B)                                
@@ -693,34 +706,32 @@ contains
                     call sim%fields%calc_EBpsiU(sim%time, i, p_gc%st, p_gc%x(3), E, B, psi, U)
                     particle_kin_rel = relativistic_gc_to_relativistic_kinetic(sim%fields%node_list, sim%fields%element_list, p_gc, sim%groups(1)%mass, B, gyro_angle(1))
 
-                    B_val_old = dot_product(B,B)
-
                     if (particle_kin_rel%i_elm .gt. 0) call sim%fields%calc_EBpsiU(sim%time, particle_kin_rel%i_elm, particle_kin_rel%st, particle_kin_rel%x(3), E, B, psi, U)
                     particle_gc_rel = relativistic_kinetic_to_relativistic_gc(sim%fields%node_list, &
                                       sim%fields%element_list, particle_kin_rel, sim%groups(1)%mass, B)
 
-                    if (particle_kin_rel%i_elm .gt. 0) then
+                    !if (particle_kin_rel%i_elm .gt. 0) then
                       p = particle_kin_rel
-                      if (p%i_elm .ne. particle_kin_rel%i_elm) write(*,*) 'something is going wrong with saving particle kin rel to a particle!!!'
+                    !  if (p%i_elm .ne. particle_kin_rel%i_elm) write(*,*) 'something is going wrong with saving particle kin rel to a particle!!!'
                       index = index +1
-                      if ((p%i_elm .gt. 0) .and. (p%i_elm .lt. 64)) countk = countk+1
-                    else 
-                      write(*,*) 'particle_kin_rel%i_elm <= 0, current element gc', i, p_gc%i_elm, p_gc%x(1), p_gc%x(2), p_gc%x(3), particle_kin_rel%x
-                      call get_orthonormals(B/norm2(B),e1,e2)
+                    !  if ((p%i_elm .gt. 0) .and. (p%i_elm .lt. 64)) countk = countk+1
+                    !else 
+                    !  write(*,*) 'particle_kin_rel%i_elm <= 0, current element gc', i, p_gc%i_elm, p_gc%x(1), p_gc%x(2), p_gc%x(3), particle_kin_rel%x
+                    !  call get_orthonormals(B/norm2(B),e1,e2)
 
-                      pvec = p_gc%p(1)*B_hat + sqrt(2.d0*sim%groups(1)%mass*norm2(B)*p_gc%p(2))*(e1*cos(gyro_angle(1))+e2*sin(gyro_angle(1)))
-                      write(*,*) 'xout', p_gc%x + (ATOMIC_MASS_UNIT*cross_product(B/norm2(B),pvec))/(EL_CHG*real(p_gc%q,8)*norm2(B))
-                    end if
+                    !  pvec = p_gc%p(1)*B_hat + sqrt(2.d0*sim%groups(1)%mass*norm2(B)*p_gc%p(2))*(e1*cos(gyro_angle(1))+e2*sin(gyro_angle(1)))
+                    !  write(*,*) 'xout', p_gc%x + (ATOMIC_MASS_UNIT*cross_product(B/norm2(B),pvec))/(EL_CHG*real(p_gc%q,8)*norm2(B))
+                    !end if
                 end select
 
-                check = check + 1
+              !  check = check + 1
 
-              if (check .eq. 0) then
-                write(*,*) 'Hier gaat iets niet goed'
-              end if
+              !if (check .eq. 0) then
+              !  write(*,*) 'Hier gaat iets niet goed'
+              !end if
             end do 
 
-            if (abs(check - new_markers_per_element_loop) .gt. 1.d-6) write(*,*) 'check komt ook niet overeen met de hoeveelheid markers die geplaatst zouden moeten worden', check, new_markers_per_element
+            !if (abs(check - new_markers_per_element_loop) .gt. 1.d-6) write(*,*) 'check komt ook niet overeen met de hoeveelheid markers die geplaatst zouden moeten worden', check, new_markers_per_element
 
           end do
           end do
@@ -796,5 +807,155 @@ contains
 
   end subroutine do_binning_mpi
 
+  function re_avalanche_from_config(sim) result(re_avalanche)
+    use phys_module, only: part_group_configs, n_part_groups_max 
+    use mod_particle_sim, only: group_num_from_id
+
+    implicit none
+
+    type(particle_sim), intent(inout)                      :: sim
+    class(type_re_avalanche), allocatable, dimension(:) :: re_avalanche
+
+    integer :: i, group_num, n_reava_objs, i_reava_obj
+    character(len=3) :: id 
+
+    n_reava_objs = 0
+    do i=1, n_part_groups_max
+      id = part_group_configs(i)%id 
+      if(id == "non") cycle
+      if(.not. part_group_configs(i)%use_re_avalanche) then
+        if(any(abs(part_group_configs(i)%res_st_bin(:) - 1) .gt. 1.d-10) .or.  (abs(part_group_configs(i)%res_phi_bin - 1) .gt. 1.d-10)) then
+          if(sim%my_id.eq.0) write(*,*) 'WARNING: currently resampling only works with re-avalanche, part_group_configs(',i,')%res_st_bin and %res_phi_bin will be ignored as part_group_configs(',i,')%use_re_avalanche=.false.'
+        end if
+        cycle
+      end if 
+      n_reava_objs = n_reava_objs+1
+    end do 
+
+    allocate(re_avalanche(n_reava_objs))
+
+    i_reava_obj=0
+    do i=1,n_part_groups_max
+      id = part_group_configs(i)%id
+      if(id == "non") cycle
+      if(.not. part_group_configs(i)%use_re_avalanche) cycle
+      i_reava_obj = i_reava_obj + 1
+
+      if(part_group_configs(i)%coupling_scheme .ne. "rep") then
+        if(sim%my_id .eq. 0) write(*,*) 'ERROR: RE avalanche can only be use with runaway electrons, but part_group_configs(',i,')%use_re_avalanche=.true. while part_group_configs(',i,')%coupling_scheme=',part_group_configs(i)%coupling_scheme,' instead of rep. Aborting.'
+        stop
+      end if 
+
+      if(any(part_group_configs(i)%res_st_bin(:) .lt. 1) .or. (part_group_configs(i)%res_phi_bin .lt. 1)) then
+        if(sim%my_id .eq. 0) write(*,*) 'Negative values for amount of bins in st in part_group_configs(',i,')%res_st_bin=',part_group_configs(i)%res_st_bin,' or for toroidal bins in part_group_configs(',i,')%res_phi_bin=',part_group_configs(i)%res_phi_bin,' Please check your input. Aborting.'
+        stop
+      end if 
+      group_num = group_num_from_id(sim, id)
+      call re_avalanche(i_reava_obj)%initialize(sim,group_num,part_group_configs(i)%res_st_bin,part_group_configs(i)%res_phi_bin, size(sim%groups(group_num)%particles(:)), part_group_configs(i)%gamma_min, part_group_configs(i)%new_markers_per_spatial_bin, part_group_configs(i)%bins_per_mom_direction, part_group_configs(i)%reava_each_nstep_part)
+    end do 
+
+    if(i_reava_obj .ne. n_reava_objs) then
+      if(sim%my_id .eq. 0) write(*,*) 'ERROR in setup for RE avalanche: number of objects to be made is inconsistent?', i_reava_obj, n_reava_objs
+      stop
+    end if 
+
+  end function re_avalanche_from_config
+
+
+  subroutine initialize(this, sim, group_num, st_bin, phi_bin, n_limit, gamma_min, new_markers, Nmombin, each_nstep_part)
+    use mod_math_operators, only: gcd
+    implicit none  
+    class(type_re_avalanche),      intent(inout) :: this
+    type(particle_sim),            intent(inout)    :: sim
+    integer,                       intent(in)    :: group_num
+    integer*4,                     intent(in)    :: st_bin(2), phi_bin
+    integer,                       intent(in)    :: n_limit
+    real*8,                        intent(in)    :: gamma_min 
+    integer*4,                     intent(in)    :: each_nstep_part, new_markers, Nmombin
+
+    integer :: i, seed, n_thread, l
+
+    this%element_part_s = st_bin(1)
+    this%element_part_t = st_bin(2) 
+    this%Ntor = phi_bin
+    
+    allocate(this%emptyind(n_limit))
+    this%emptyind = (/(l, l=1,n_limit, 1)/) 
+    this%n_limit = n_limit
+
+    this%gamma_min = gamma_min 
+    this%new_markers_per_element = new_markers
+    this%Nmombin = Nmombin 
+    this%each_nstep_part = each_nstep_part
+
+    this%each_nstep_part = each_nstep_part
+    if (each_nstep_part .ne. -9999991) then
+      call sim%update_lcm_gcd(each_nstep_part)
+      if(gcd_re_avalanche .eq. -9999991) then
+        gcd_re_avalanche = each_nstep_part
+      else
+        gcd_re_avalanche = gcd(gcd_re_avalanche,each_nstep_part)
+      endif
+    endif
+
+    this%constructed = .true.
+  end subroutine initialize
+
+  subroutine do_RE_avalanche(this, sim)
+    implicit none
+
+    class(type_re_avalanche), intent(inout) :: this
+    type(particle_sim),  intent(inout) :: sim
+
+    integer*4 :: n_part, n_limit
+    logical ::resampling
+    integer*4 :: iterations=5
+    real*8 :: start_time, end_time, tot_time(3)
+    real*8 :: dt_coll
+
+    if(.not. this%constructed) then 
+      if(sim%my_id.eq.0) write(*,*) 'ERROR: Something went wrong in initializing RE avalanche. Aborting.'
+      stop
+    end if 
+
+    call reorder_indices(sim, this%n_limit, this%emptyind)
+
+    n_part = count(sim%groups(this%group_num)%particles(:)%i_elm .gt. 0)
+    n_limit = this%n_limit
+
+    if (3*n_part .gt. n_limit) then 
+      if(sim%my_id .eq. 0) write(*,*) "Start resampling, necessary as n_part = ", n_part," and n_limit = ", n_limit 
+      start_time = MPI_WTIME()
+
+      call do_binning_mpi(sim, n_part, n_limit, n_limit, this%Nmombin, this%Ntor, this%element_part_s, this%element_part_t, this%new_markers_per_element, this%emptyind, iterations)
+
+      end_time = MPI_WTIME()
+      tot_time = mpi_minmeanmax(end_time-start_time)
+      if (sim%my_id .eq. 0) then
+          write(*,"(A,3f10.3,A)") , "Time taken for resampling finished in (min/mean/max): ", tot_time, " seconds"
+      endif
+
+      n_part = count(sim%groups(this%group_num)%particles(:)%i_elm .gt. 0)
+      if (3*n_part .gt. n_limit) then 
+        write(*,*) 'Settings of the resampling do not allow for a large enough decrease in amount of markers. Consider tuning the settings to have less volume bins or increase the size of the particle group.'
+        stop
+      end if 
+    end if 
+
+    if(this%each_nstep_part .eq. -9999991) then
+      dt_coll = sim%nstep_inner_loop*sim%tstep_part_adj
+    else
+      dt_coll = this%each_nstep_part*sim%tstep_part_adj
+    endif
+
+    start_time = MPI_WTIME()
+    call Moller_scatt(sim, this%gamma_min, dt_coll, n_part, n_limit, n_part, this%emptyind)
+    end_time = MPI_WTIME()
+    tot_time = mpi_minmeanmax(end_time-start_time)
+    if (sim%my_id .eq. 0) then
+        write(*,"(A,3f10.3,A)") , "Time taken for knock-on collisions finished in (min/mean/max): ", tot_time, " seconds"
+    endif
+
+  end subroutine do_RE_avalanche
 
 end module mod_re_avalanche

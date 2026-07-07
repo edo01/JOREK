@@ -921,6 +921,11 @@ part_group_configs(:)%num_re                 = 0.d0
 part_group_configs(:)%re_energy              = 0.d0
 part_group_configs(:)%re_std_energy          = 0.d0
 part_group_configs(:)%re_pitch               = 0.d0
+part_group_configs(:)%use_re_avalanche       = .false. 
+do i=1,n_part_groups_max
+  part_group_configs(i)%res_st_bin(:)          = 1
+end do 
+part_group_configs(:)%res_phi_bin            = 1
 
 !----- specific to epf
 part_group_configs(:)%T_maxwell              = 0.d0

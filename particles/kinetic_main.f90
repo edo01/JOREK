@@ -43,6 +43,7 @@ use mod_coupling_settings, only: use_kin_recomb_global
 use mod_initialise_particles
 use equil_info
 use mod_output_file_routines, only: write_to_outputfile
+use mod_re_avalanche
 
 use phys_module, only: index_now
 use phys_module, only: tstep,tstep_n,restart_particles, restart, t_start, nout
@@ -90,6 +91,7 @@ integer,                      dimension(:), allocatable :: recomb_groups
 type(particle_puffing),       dimension(:), allocatable :: puff_actions   
 type(wall_act_group),         dimension(:), allocatable :: wall_act_groups
 type(type_neutral_collision), dimension(:), allocatable :: neutral_collisions
+type(type_re_avalanche),           dimension(:), allocatable :: re_avalanche
 
 !tmp
 class(type_rng), dimension(:), allocatable :: wall_rng
@@ -211,6 +213,9 @@ enddo ! n_part_groups
 
 ! neutral collisions
 neutral_collisions = neutral_collisions_from_config(sim)
+
+! RE avalanche
+re_avalanche = re_avalanche_from_config(sim)
 
 ! --- Set up feedback to the plasma (does not currently include recombination)
 jorek_feedback = new_projection(sim%fields%node_list, sim%fields%element_list, &
@@ -340,6 +345,13 @@ do while (.not. sim%stop_now)
     !> Currently supports: (Work in progress)
     !>  - kinetic neutrals
     !>  - kinetic impurities
+
+    ! RE avalanche
+    if ((size(re_avalanche) .gt. 0) .and. ((mod(istep_inner_loop, gcd_re_avalanche) .eq. 0.d0) .or. last_step)) then
+      do i=1,size(re_avalanche)
+        call re_avalanche(i)%do(sim)
+      end do 
+    end if 
 
     ! evolution loop is called every inner particle step, for inner_stepsize number of steps at once
     do group_num=1, n_part_groups
