@@ -329,7 +329,7 @@ contains
     debyeLength = sqrt( EPS_ZERO * SPEED_OF_LIGHT**2 / ( ( ne * EL_CHG**2 ) / ( the * MASS_ELECTRON ) ) )
     ubar  = SPEED_OF_LIGHT * sqrt( u**2 / ( 1 + u**2 )  + 3.d0 * the )
     mr    = ma * MASS_ELECTRON / ( ma + MASS_ELECTRON )
-    bcl   = qa * EL_CHG / ( 4.d0 * PI * EPS_ZERO * mr * ubar**2 )
+    bcl   = abs(qa) * EL_CHG / ( 4.d0 * PI * EPS_ZERO * mr * ubar**2 )
     bqm   = HBAR / ( 2.d0 * mr * ubar )
     cloge = log(debyeLength/max(bcl,bqm))
 
