@@ -147,6 +147,7 @@ contains
     use mod_basisfunctions
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
+    use mod_pcg32_rng
     
     implicit none
     class(particle_sim), target, intent(inout)                :: sim
@@ -156,6 +157,10 @@ contains
     type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8,  intent(in)                                       :: tstep_part_adj
     integer, intent(in)                                       :: nstep_part_adj
+
+    type(pcg32_rng), dimension(:), allocatable  :: rng_ccoll !< rng for small-angle collisions
+    integer*4                                   :: seed
+    integer*4                                   :: i_thread, n_threads, seq, n_streams, ierr
 
     character(len=3) :: cs
 
@@ -171,6 +176,24 @@ contains
 
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm                  ! rho_SI = rho_norm * rho
+
+    ! -- Setting up the rng for small-angle collisions
+    ! Calculate 1 seed and communicate over MPI
+    if (sim%my_id .eq. 0) seed = random_seed()
+    call MPI_Bcast(seed, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+    ! Set up actual rng
+    n_threads = 1
+    !$ n_threads = omp_get_max_threads()
+    allocate(rng_ccoll(0:n_threads-1))
+    n_streams = sim%n_mpi*n_threads
+    do i_thread = 0, n_threads-1 
+      seq = sim%my_id*n_threads + i_thread + 1
+      call rng_ccoll(i_thread)%initialize(3, seed, n_streams, seq, ierr)
+      if(ierr .ne. 0) then 
+        call MPI_ABORT(MPI_COMM_WORLD, -1, ierr)
+        write(*,*) "WARNING: Something went wrong in set-up rng for small-angle collisions"
+      end if 
+    end do 
 
     ! Loop over all particle groups
     n_lost = 0
@@ -245,6 +268,8 @@ contains
       !$omp end parallel do 
   
     end select
+
+    deallocate(rng_ccoll)
     
   end subroutine evolve_REs
 
