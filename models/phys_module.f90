@@ -1122,6 +1122,9 @@ module phys_module
     real*8              :: gamma_min               !< cut-off momentum used for knock-on collisions
     integer             :: bins_per_mom_direction  !< resampling: amount of equally spaced bins in p_para and mu
     integer             :: new_markers_per_spatial_bin !< resampling: amount of new markers in each volume bin
+    logical             :: use_radreact            !< toggle radiation reaction force includes in RE pusher
+    logical             :: use_ccoll               !< toggle inclusion of small-angle collisions without effects of partial screening
+    logical             :: use_partial_screening   !< toggle inclusion of small-angle collisions with effects of partial screening
 
     ! =============== for energetic particles ('epc', 'epp', 'epf' coupling schemes) ==========
     real*8              :: T_maxwell               !< Maxwellian temperature [eV] for the energetic particles

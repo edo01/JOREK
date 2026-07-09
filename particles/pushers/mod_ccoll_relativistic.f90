@@ -15,6 +15,7 @@ module mod_ccoll_relativistic
   use mod_simpson, only : simpson_adaptive, func_real8_1D
   use mod_interp_methods, only: interp_bilinear
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
+  use mod_pcg32_rng
   implicit none
 
   real*8, parameter :: DEFAULT_L0L1_eps    = 1.D-8 !< default tolerance in eval_L0L1
@@ -41,7 +42,7 @@ module mod_ccoll_relativistic
        ccoll_init, ccoll_deallocate, ccoll_kinetic_relativistic_push, ccoll_gc_relativistic_push, &
        ccoll_kinetic_relativistic_explicitpush, ccoll_gc_relativistic_explicitpush, &
        ccoll_explicitpush_partialscreening, ccoll_gc_relativistic_push_partialscreening, &
-       ccoll_kinetic_relativistic_push_partialscreening
+       ccoll_kinetic_relativistic_push_partialscreening, ccoll_none
 
 contains
 
@@ -176,7 +177,7 @@ contains
     if (allocated(dat%mi))    deallocate(dat%mi) 
     if (allocated(dat%Z0))    deallocate(dat%Z0) 
     if (allocated(dat%Zi))    deallocate(dat%Zi) 
-    if (allocated(dat%Ii))    deallocate(dat%ai) 
+    if (allocated(dat%Ii))    deallocate(dat%Ii) 
 
   end subroutine ccoll_deallocate
 
@@ -416,28 +417,44 @@ contains
 
   end subroutine ccoll_coeffs
 
+    !> Dummy routine for when no small-angle collisions are requested.
+  subroutine ccoll_none(dat, p, fields, mass, time, dt, rng, i_rng)
+    use mod_particle_types
+    use mod_fields
+    type(ccoll_data),                             intent(in)    :: dat
+    class(particle_kinetic_relativistic),         intent(inout) :: p
+    class(fields_base),                           intent(in)    :: fields
+    real*8,                                       intent(in)    :: mass, time, dt
+    type(pcg32_rng), dimension(:), allocatable,   intent(inout) :: rng
+    integer,                                      intent(in)    :: i_rng
+    ! intentionally empty
+  end subroutine ccoll_none
+
 
   !> Updates particle momentum after collisions
   !> Pushing is done by calling the explicit push function. This function is just a wrapper
   !> that additionally evaluates the plasma quantities and takes care of the coordinate transformation
   !> in momentum space thus simplifying the process of including collisions in simulations.
-  subroutine ccoll_kinetic_relativistic_push(dat, prt, fields, mass, time, dt)
+  subroutine ccoll_kinetic_relativistic_push(dat, prt, fields, mass, time, dt, rng, i_rng) 
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_kinetic_relativistic), intent(inout) :: prt
     class(fields_base), intent(in) :: fields
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
+    type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
 
     real*8 :: E(3), B(3), psi, U, ne, rnd(3), pout(3), Te, Ti, the
     real*8, allocatable :: ni(:), thi(:)
+    integer*4, intent(in) :: i_rng
 
     allocate(ni(size(dat%mi)), thi(size(dat%mi)))
     call fields%calc_NjTj(time, prt%i_elm, prt%st, prt%x(3), dat%m_i_over_m_imp, ne, Te, ni, Ti)
     the = Te * K_BOLTZ / ( MASS_ELECTRON * SPEED_OF_LIGHT**2 )
     thi = Ti * K_BOLTZ / ( dat%mi * SPEED_OF_LIGHT**2 )
     
-    ! This should be ~N(0,1) but this approximation works well enough
-    call random_number(rnd)
+    ! This should be ~N(0,1) but this approximation (two-point distriution) 
+    ! works well enough for cases far from the critical field
+    call rng(i_rng)%next(rnd)
     rnd = floor(2.d0*rnd)
     rnd = -1.d0 + 2.d0 * rnd
 
@@ -460,7 +477,8 @@ contains
     real*8, intent(in)    :: ni(:)  !< list of background ion densities [1/m^3]
     real*8, intent(in)    :: thi(:) !< normalized ion temperatures [T_b/(m_b*c^2)]
     real*8, intent(in)    :: dt     !< time step length [s]
-    real*8, intent(in)    :: rnd(3) !< array with three elements of standard normal random numbers ~ N(0,1)
+    real*8, intent(in)    :: rnd(3) !< array with three elements of standard normal random numbers ~ N(0,1), but
+                                    !  approximated with three elements of two-point distribution in ccoll_kinetic_relativistic_push
     real*8, intent(in)    :: uin(3) !< normalized test particle momentum [p/mc]
     
     real*8, intent(out) :: uout(3) !< updated momentum [p/mc]
@@ -562,7 +580,7 @@ contains
     real*8, intent(in)    :: uin    !< test particle momentum  [p/mc]
     real*8, intent(in)    :: xiin   !< test particle pitch [ppar/p]
     real*8, intent(in)    :: cutoff !< minimum normalized momentum, energies below this are reflected
-    real*8, intent(in)    :: rnd(2) !< normally ditributed random numbes
+    real*8, intent(in)    :: rnd(2) !< normally ditributed random numbes, approximated with two-point distribution
 
     real*8,   intent(out) :: uout  !< updated momentum
     real*8,   intent(out) :: xiout !< updated pitch
@@ -755,15 +773,17 @@ contains
   !> Push gyro orbiting electron taking partial screening into account
   !> Evaluates the field and takes care of the coordinate transformation before calling the
   !> explicit pusher.
-  subroutine ccoll_kinetic_relativistic_push_partialscreening(dat, prt, fields, mass, time, dt)
+  subroutine ccoll_kinetic_relativistic_push_partialscreening(dat, prt, fields, mass, time, dt, rng, i_rng)
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_kinetic_relativistic), intent(inout) :: prt
     class(fields_base), intent(in) :: fields
+    type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
     real*8 :: E(3), B(3), psi, U, ne, rnd(2), pin, pout, xiin, xiout, Te, Ti, the, bperp(3), bhat(3)
     real*8, allocatable :: ni(:), thi(:)
     integer :: ierr
+    integer*4, intent(in) :: i_rng
 
     call fields%calc_EBpsiU(time, prt%i_elm, prt%st, prt%x(3), E, B, psi, U)
     bhat = vector_cylindrical_to_cartesian(prt%x(3), B) / norm2(B)

@@ -937,7 +937,9 @@ if (my_id .eq. 0) then
   call MPI_PACK(part_group_configs%new_markers_per_spatial_bin, n_part_groups_max,     MPI_INTEGER,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
   call MPI_PACK(part_group_configs%bins_per_mom_direction,      n_part_groups_max,     MPI_INTEGER,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
   call MPI_PACK(part_group_configs%reava_each_nstep_part,       n_part_groups_max,     MPI_INTEGER,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
-
+  call MPI_PACK(part_group_configs%use_radreact,                n_part_groups_max,     MPI_LOGICAL,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
+  call MPI_PACK(part_group_configs%use_ccoll,                   n_part_groups_max,     MPI_LOGICAL,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
+  call MPI_PACK(part_group_configs%use_partial_screening,       n_part_groups_max,     MPI_LOGICAL,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
 
   call MPI_PACK(part_group_configs%T_maxwell,                  n_part_groups_max,     MPI_REAL8,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
   call MPI_PACK(part_group_configs%n_phi_planes,               n_part_groups_max,     MPI_INTEGER,buffer,bufsize,position,MPI_COMM_WORLD,ierr)
@@ -1935,11 +1937,14 @@ if (my_id .ne. 0) then
   do i=1,n_part_groups_max
     call MPI_UNPACK(buffer,bufsize,position,part_group_configs(i)%res_st_bin,            2,                MPI_INTEGER,MPI_COMM_WORLD,ierr)
   end do
-  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%res_phi_bin,                n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
-  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%gamma_min,                  n_part_groups_max,MPI_REAL8,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%res_phi_bin,                 n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%gamma_min,                   n_part_groups_max,MPI_REAL8,MPI_COMM_WORLD,ierr)
   call MPI_UNPACK(buffer,bufsize,position,part_group_configs%new_markers_per_spatial_bin, n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
-  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%bins_per_mom_direction,     n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
-  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%reava_each_nstep_part,      n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%bins_per_mom_direction,      n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%reava_each_nstep_part,       n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%use_radreact,                n_part_groups_max,MPI_LOGICAL,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%use_ccoll,                   n_part_groups_max,MPI_LOGICAL,MPI_COMM_WORLD,ierr)
+  call MPI_UNPACK(buffer,bufsize,position,part_group_configs%use_partial_screening,       n_part_groups_max,MPI_LOGICAL,MPI_COMM_WORLD,ierr)
 
   call MPI_UNPACK(buffer,bufsize,position,part_group_configs%T_maxwell,                  n_part_groups_max,MPI_REAL8,MPI_COMM_WORLD,ierr)
   call MPI_UNPACK(buffer,bufsize,position,part_group_configs%n_phi_planes,               n_part_groups_max,MPI_INTEGER,MPI_COMM_WORLD,ierr)

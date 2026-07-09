@@ -5,6 +5,7 @@ module mod_particle_evolution
     use particle_tracer
     use phys_module, only: CENTRAL_MASS, CENTRAL_DENSITY
     use phys_module, only: use_manual_random_seed, n_aux_var, part_kill_ratio, proj_collection_period
+    use phys_module, only: part_group_configs
     use mod_coupling_settings
     use coupling_variables
     use mod_project_particles
@@ -14,11 +15,45 @@ module mod_particle_evolution
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
+    use mod_ccoll_relativistic
     !$ use omp_lib
 
     implicit none
     private
     public :: evolve_particle_group, evolve_REs
+
+    !> Abstract interfaces for the pushers / collision operators used in evolve_REs. 
+    !> Allows for switching between with and without radiation reaction force for the push
+    !> and between small-angle collisions with and without partial screening.
+    abstract interface
+      subroutine i_re_push(p, fields, mass, time, dt, ifail)
+        !use mod_particle_types, only: particle_kinetic_relativistic
+        !use mod_fields, only: fields_base
+        import :: particle_kinetic_relativistic
+        import :: fields_base
+        class(particle_kinetic_relativistic), intent(inout) :: p
+        class(fields_base),                   intent(in)    :: fields
+        real*8,                               intent(in)    :: mass, time, dt
+        integer*4,                            intent(inout) :: ifail
+      end subroutine i_re_push
+
+      subroutine i_re_ccoll(dat, p, fields, mass, time, dt, rng, i_rng)
+        !use mod_particle_types, only: particle_kinetic_relativistic
+        !use mod_fields, only: fields_base
+        !use mod_ccoll_relativistic, only: ccoll_data
+        !use mod_pcg32_rng
+        import :: particle_kinetic_relativistic
+        import :: fields_base 
+        import :: ccoll_data
+        import :: pcg32_rng
+        class(ccoll_data),                           intent(in)    :: dat   !> <-- replace with real type of "dat"
+        class(particle_kinetic_relativistic),       intent(inout) :: p
+        class(fields_base),                         intent(in)    :: fields
+        real*8,                                     intent(in)    :: mass, time, dt
+        type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
+        integer*4,                                  intent(in)    :: i_rng
+      end subroutine i_re_ccoll
+    end interface
 contains
 
   !> For each particle group, this function does the following:
@@ -148,6 +183,7 @@ contains
     use mod_particle_types, only: copy_particle_kinetic_leapfrog
     use mod_sampling, only: boxmueller_transform,sample_chi_squared_3
     use mod_pcg32_rng
+    use mod_ccoll_relativistic
     
     implicit none
     class(particle_sim), target, intent(inout)                :: sim
@@ -160,7 +196,9 @@ contains
 
     type(pcg32_rng), dimension(:), allocatable  :: rng_ccoll !< rng for small-angle collisions
     integer*4                                   :: seed
-    integer*4                                   :: i_thread, n_threads, seq, n_streams, ierr
+    integer*4                                   :: i_thread, n_threads, seq, n_streams, i_rng, ierr
+
+    type(ccoll_data) :: dat
 
     character(len=3) :: cs
 
@@ -173,6 +211,9 @@ contains
     real*8    :: cylindrical_velocity(3), cylindrical_momentum(3)
     real*8    :: v_par, v_perp, gamma_m, proj_factor
     integer   :: j, k, m, n, ifail, i_tor, n_lost
+
+    procedure(i_re_push),  pointer :: push_re => null()
+    procedure(i_re_ccoll), pointer :: ccoll_re => null()
 
     n_norm   = CENTRAL_DENSITY * 1.d20                              ! (number) density normalisation
     rho_norm = CENTRAL_MASS * ATOMIC_MASS_UNIT * n_norm                  ! rho_SI = rho_norm * rho
@@ -195,6 +236,23 @@ contains
       end if 
     end do 
 
+    if (part_group_configs(group_num)%use_radreact) then
+      push_re => volume_preserving_radiation_push_jorek
+    else 
+      push_re => volume_preserving_push_jorek
+    end if 
+
+    if (part_group_configs(group_num)%use_ccoll) then 
+      call ccoll_init('ccolldata', dat)
+      ccoll_re => ccoll_kinetic_relativistic_push
+    elseif (part_group_configs(group_num)%use_partial_screening) then 
+      call ccoll_init('ccolldata', dat)
+      ccoll_re => ccoll_kinetic_relativistic_push_partialscreening
+    else 
+      call ccoll_init('ccolldata', dat)
+      ccoll_re => ccoll_none
+    end if 
+
     ! Loop over all particle groups
     n_lost = 0
     select type (particles => sim%groups(group_num)%particles)
@@ -204,15 +262,18 @@ contains
       else
         !$ call omp_set_schedule(omp_sched_dynamic,10)
       end if  
-      !$omp parallel do default(none) &
-      !$omp schedule(runtime)         &
+      !$omp parallel default(none) &
       !$omp private(j, k, m, n, HZ, HH, HH_s, HH_t, E, B, psi, U,  &
       !$omp B_norm2, proj_factor, v_Ppar, v_Pperp, v_jPhi, i_tor, ifail, &
-      !$omp cylindrical_velocity, cylindrical_momentum, v_par, v_perp, gamma_m ) &
+      !$omp cylindrical_velocity, cylindrical_momentum, v_par, v_perp, gamma_m, i_rng) &
       !$omp shared (nstep_part_adj, tstep_part_adj, sim, group_num, rho_norm, &
-      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin) &
+      !$omp P_par_idx_kin, P_perp_idx_kin, j_phi_idx_kin, rng_ccoll, &
+      !$omp push_re, ccoll_re, dat) &
       !$omp reduction(+:feedback_rhs)
-  
+
+      i_rng = 1
+      !$ i_rng = omp_get_thread_num()
+      !$omp do schedule(runtime)
       do j=1,size(particles,1)
         do k=1,nstep_part_adj
           if (particles(j)%i_elm .le. 0) exit
@@ -260,12 +321,14 @@ contains
             enddo
           enddo
   
-          call volume_preserving_push_jorek(particles(j),sim%fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
-  
-  
+          call push_re(particles(j),sim%fields,sim%groups(group_num)%mass,sim%time,tstep_part_adj,ifail)
+          if (particles(j)%i_elm .le. 0) exit
+          call ccoll_re(dat, particles(j), sim%fields, sim%groups(group_num)%mass, sim%time, tstep_part_adj, rng_ccoll, i_rng) 
+
         end do !< steps
       end do !< particles
-      !$omp end parallel do 
+      !$omp end do
+      !$omp end parallel 
   
     end select
 
