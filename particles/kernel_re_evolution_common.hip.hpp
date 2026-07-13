@@ -222,6 +222,15 @@ int i_elm_to_bin(int i_elm, int n_bins)
 // slot; scatter uses it as the output position.  64-bit lane masks make this correct
 // for both wave32 (Pitagora, sm_90) and wave64 (Viper, gfx942).  Must be called by all
 // lanes in the current active mask (no divergent control flow across the collectives).
+//
+// PLATFORM NOTE: this helper relies on __match_any_sync, which NVIDIA implements in
+// hardware (sm_70+).  CDNA (gfx942 / MI300A) has NO hardware match-any, so ROCm emulates
+// it as a per-lane loop over the 64-wide wavefront — making the warp-aggregated path
+// SLOWER than a plain hardware-native atomicAdd.  We therefore compile this helper (and
+// route the count/scatter kernels through it) only on the NVIDIA platform, and use plain
+// atomics on AMD.  __HIP_PLATFORM_NVIDIA__ / __HIP_PLATFORM_AMD__ are set by hipcc from
+// the compilation target, so the same source builds correctly for either backend.
+#if defined(__HIP_PLATFORM_NVIDIA__)
 __device__ __forceinline__
 int warp_aggregated_atomic_reserve(int* counter, int key)
 {
@@ -238,6 +247,7 @@ int warp_aggregated_atomic_reserve(int* counter, int key)
     base = __shfl_sync(active, base, leader);                    // broadcast reserved base
     return base + rank;
 }
+#endif  // __HIP_PLATFORM_NVIDIA__
 
 // count_i_elm_histogram_shared (contiguous-segment, warp-aggregated): each block owns a
 // contiguous slice of the (near-)sorted i_elm array and accumulates a block-local
@@ -264,9 +274,18 @@ void count_i_elm_histogram_shared(const int* __restrict__ i_elm,
         long long j = base + threadIdx.x;
         if (j < num_particles) {
             int key = i_elm_to_bin(i_elm[j], n_bins);
-            // warp-aggregate into the shared histogram (returned slot unused here):
-            // lanes sharing `key` collapse to one shared atomicAdd of the group size.
+#if defined(__HIP_PLATFORM_NVIDIA__)
+            // NVIDIA: warp-aggregate into the shared histogram (returned slot unused
+            // here) — lanes sharing `key` collapse to one shared atomicAdd of the group
+            // size, using the hardware __match_any_sync.
             warp_aggregated_atomic_reserve(&sh_hist[key], key);
+#else
+            // MI300A (gfx942): LDS atomics are hardware-native and cheap, whereas the
+            // warp-aggregation path relies on __match_any_sync, which CDNA3 emulates as
+            // a per-lane loop over the 64-wide wavefront.  A plain LDS atomicAdd is
+            // faster here and correct regardless of how many distinct bins a wave hits.
+            atomicAdd(&sh_hist[key], 1);
+#endif
         }
     }
     __syncthreads();
@@ -289,7 +308,15 @@ void count_i_elm_histogram_global(const int* __restrict__ i_elm,
     long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= num_particles) return;
     int key = i_elm_to_bin(i_elm[j], n_bins);
-    warp_aggregated_atomic_reserve(&global_hist[key], key);  // slot unused; just counts
+#if defined(__HIP_PLATFORM_NVIDIA__)
+    // NVIDIA: warp-aggregated global atomic (hardware __match_any_sync) keeps the atomic
+    // traffic low on (near-)sorted input.  slot unused; just counts.
+    warp_aggregated_atomic_reserve(&global_hist[key], key);
+#else
+    // MI300A (gfx942): plain global atomicAdd rather than the __match_any-based warp
+    // aggregation, which CDNA3 emulates as a per-lane loop over the 64-wide wavefront.
+    atomicAdd(&global_hist[key], 1);  // slot unused; just counts
+#endif
 }
 
 static __global__
@@ -457,12 +484,23 @@ void scatter_particles_by_i_elm_shared(
                          x_out, p_out, st_out, i_elm_out, weight_out);
 }
 
-// scatter_particles_by_i_elm_global: no LDS.  Each lane reserves its output slot with a
-// warp-aggregated atomic on cursors[key], so same-key lanes collapse to one global
-// atomicAdd per warp (near-sorted input) while every lane still gets a unique,
-// contiguous slot.  Correct for any mesh size — used when the shared variant would not
-// fit LDS.  Same global layout guarantees (contiguity, d_offsets semantics) as the
-// shared variant; within-run ordering differs but the consumer is order-independent.
+// scatter_particles_by_i_elm_global: no LDS.  One thread per particle reserves its output
+// slot with a single atomicAdd(&cursors[key]) (on NVIDIA, warp-aggregated to one global
+// atomicAdd per same-key warp group).  cursors[] is pre-seeded with the per-bin run starts
+// (d_offsets), so each lane lands in a unique, contiguous slot of its bin's run.  Correct
+// for any mesh size — used when the _shared histogram (2*n_bins ints) would overflow LDS.
+// Same global layout guarantees (contiguity, d_offsets semantics) as the shared variant;
+// within-run ordering differs but the consumer is order-independent.
+//
+// NOTE (MI300A/gfx942): this kernel is dominated by scatter_copy_payload (9 double loads +
+// 9 double stores of gathered/scattered SoA per particle), NOT by the atomic.  On the
+// (near-)sorted input the per-particle atomic barely contends, so eliminating it does not
+// help — a measured block-local-LDS-ranking variant here was *slower*, because its extra
+// __syncthreads / reduction cost more than the atomic it removed.  The __match_any-based
+// warp aggregation is used only on NVIDIA (hardware match-any); on CDNA3 (no hardware
+// match-any, emulated as a per-lane loop over the 64-wide wavefront) a plain global
+// atomicAdd is the cheapest correct reservation, for the same reason it wins in the
+// counting kernels above.
 static __global__
 void scatter_particles_by_i_elm_global(
     const double* __restrict__ x_in,
@@ -484,7 +522,11 @@ void scatter_particles_by_i_elm_global(
 
     int i_elm = i_elm_in[j];
     int key   = i_elm_to_bin(i_elm, n_bins);
+#if defined(__HIP_PLATFORM_NVIDIA__)
     int pos   = warp_aggregated_atomic_reserve(&cursors[key], key);
+#else
+    int pos   = atomicAdd(&cursors[key], 1);
+#endif
     scatter_copy_payload(j, pos, i_elm, num_particles,
                          x_in, p_in, st_in, weight_in,
                          x_out, p_out, st_out, i_elm_out, weight_out);

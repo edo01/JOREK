@@ -6,6 +6,18 @@
 #if USE_BATCH_KERNEL == 0
 #include "particles/kernel_re_evolution_common.hip.hpp"
 
+// Stage/push launch configuration (BLOCK_SIZE, PARTICLES_PER_THREAD from
+// optimization_defines.h).  The __launch_bounds__ min-blocks hint is derived so the
+// guaranteed resident thread count per CU stays at 512 (the historical BLOCK_SIZE=256
+// x 2 budget) independent of the swept block size — this keeps the register budget
+// per thread constant so block-size sweeps measure occupancy/latency effects, not
+// compiler register-allocation changes.
+static_assert(BLOCK_SIZE > 0 && BLOCK_SIZE % 64 == 0 && BLOCK_SIZE <= 1024,
+              "BLOCK_SIZE must be a positive multiple of the wavefront size (64), <= 1024");
+static_assert(PARTICLES_PER_THREAD >= 1,
+              "PARTICLES_PER_THREAD must be >= 1");
+#define SP_MIN_BLOCKS_PER_CU (512 / BLOCK_SIZE > 0 ? 512 / BLOCK_SIZE : 1)
+
 // ===========================================================================================
 //                                  MAIN HIP KERNEL
 // ===========================================================================================
@@ -35,7 +47,7 @@
 // (i_elm <= 0) write zero weight so phase 2 can sum them harmlessly.
 // Launched before evolve_push_kernel on the same stream, so it reads pre-push state.
 // ---------------------------------------------------------------------------
-__global__ __launch_bounds__(BLOCK_SIZE, 2)
+__global__ __launch_bounds__(BLOCK_SIZE, SP_MIN_BLOCKS_PER_CU)
 void proj_stage_kernel(
     // Particle SoA — read-only
     const double* __restrict__ p_x,
@@ -70,56 +82,59 @@ void proj_stage_kernel(
     double* __restrict__ stg_phi,
     double* __restrict__ stg_w)
 {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= num_particles) return;
+    // Grid-stride loop: consecutive threads touch consecutive particles (coalesced);
+    // with the grid shrunk by PARTICLES_PER_THREAD each thread handles up to that
+    // many particles, stride (= total threads) apart.
+    const int sp_stride = gridDim.x * blockDim.x;
+    for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < num_particles; j += sp_stride) {
+        int i_elm = p_i_elm[j];
+        if (i_elm <= 0) {
+            // Lost particle: zero weight so phase 2 adds nothing for it.
+            stg_w[j] = 0.0;
+            continue;
+        }
 
-    int i_elm = p_i_elm[j];
-    if (i_elm <= 0) {
-        // Lost particle: zero weight so phase 2 adds nothing for it.
-        stg_w[j] = 0.0;
-        return;
+        double phi  = p_x[idx2(j, 2, num_particles)];
+        double pm[3] = {p_p[idx2(j, 0, num_particles)],  p_p[idx2(j, 1, num_particles)],  p_p[idx2(j, 2, num_particles)]};
+        double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
+        double Rcyl  = p_x[idx2(j, 0, num_particles)];
+        double w     = p_weight[j];
+
+        double cyl_mom[3];
+        vector_cartesian_to_cylindrical(phi, pm, cyl_mom);
+        double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
+        double inv_denom_v = 1.0 / sqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
+        double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
+
+        double B_loc[3];
+        calc_B_only(nl_values, nl_deltas, nl_x, el_vertex, el_size,
+                    n_elements, n_nodes,
+                    F0,
+                    time_now, time_prev, t_jorek, flag_static,
+                    i_elm, st, phi, sim_time,
+                    B_loc);
+
+        double Bnorm_inv = 1.0 / sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
+        double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
+
+        double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
+        double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
+                                 cyl_vel[1] - v_par*B_hat[1],
+                                 cyl_vel[2] - v_par*B_hat[2]};
+        double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
+
+        double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
+                            + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
+                              / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
+
+        stg_vPpar[j]  = gamma_m * v_par * v_par * MU_ZERO;
+        stg_vPperp[j] = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
+        stg_vjPhi[j]  = -double(charge) * EL_CHG * cyl_vel[2] * Rcyl * MU_ZERO;
+        stg_s[j]      = st[0];
+        stg_t[j]      = st[1];
+        stg_phi[j]    = phi;
+        stg_w[j]      = w;
     }
-
-    double phi  = p_x[idx2(j, 2, num_particles)];
-    double pm[3] = {p_p[idx2(j, 0, num_particles)],  p_p[idx2(j, 1, num_particles)],  p_p[idx2(j, 2, num_particles)]};
-    double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
-    double Rcyl  = p_x[idx2(j, 0, num_particles)];
-    double w     = p_weight[j];
-
-    double cyl_mom[3];
-    vector_cartesian_to_cylindrical(phi, pm, cyl_mom);
-    double pdot_cyl = cyl_mom[0]*cyl_mom[0] + cyl_mom[1]*cyl_mom[1] + cyl_mom[2]*cyl_mom[2];
-    double inv_denom_v = 1.0 / sqrt(pdot_cyl / (SPEED_OF_LIGHT*SPEED_OF_LIGHT) + group_mass*group_mass);
-    double cyl_vel[3] = {cyl_mom[0] * inv_denom_v, cyl_mom[1] * inv_denom_v, cyl_mom[2] * inv_denom_v};
-
-    double B_loc[3];
-    calc_B_only(nl_values, nl_deltas, nl_x, el_vertex, el_size,
-                n_elements, n_nodes,
-                F0,
-                time_now, time_prev, t_jorek, flag_static,
-                i_elm, st, phi, sim_time,
-                B_loc);
-
-    double Bnorm_inv = 1.0 / sqrt(B_loc[0]*B_loc[0] + B_loc[1]*B_loc[1] + B_loc[2]*B_loc[2]);
-    double B_hat[3] = {B_loc[0]*Bnorm_inv, B_loc[1]*Bnorm_inv, B_loc[2]*Bnorm_inv};
-
-    double v_par = cyl_vel[0]*B_hat[0] + cyl_vel[1]*B_hat[1] + cyl_vel[2]*B_hat[2];
-    double v_perp_diff[3] = {cyl_vel[0] - v_par*B_hat[0],
-                             cyl_vel[1] - v_par*B_hat[1],
-                             cyl_vel[2] - v_par*B_hat[2]};
-    double v_perp_sq = v_perp_diff[0]*v_perp_diff[0] + v_perp_diff[1]*v_perp_diff[1] + v_perp_diff[2]*v_perp_diff[2];
-
-    double gamma_m = sqrt(MASS_ELECTRON*MASS_ELECTRON
-                        + pdot_cyl * ATOMIC_MASS_UNIT*ATOMIC_MASS_UNIT
-                          / (SPEED_OF_LIGHT*SPEED_OF_LIGHT));
-
-    stg_vPpar[j]  = gamma_m * v_par * v_par * MU_ZERO;
-    stg_vPperp[j] = gamma_m * v_perp_sq * 0.5 * MU_ZERO;
-    stg_vjPhi[j]  = -double(charge) * EL_CHG * cyl_vel[2] * Rcyl * MU_ZERO;
-    stg_s[j]      = st[0];
-    stg_t[j]      = st[1];
-    stg_phi[j]    = phi;
-    stg_w[j]      = w;
 }
 
 // Tile size for proj_accumulate_kernel: number of particles whose per-particle
@@ -285,8 +300,23 @@ void proj_accumulate_kernel(
 // projection kernels (proj_stage/proj_accumulate), which read the same _in
 // state on stream_proj — the separate output buffer removes the read/write
 // hazard that an in-place push would create against proj_stage's reads.
+//
+// MI300A (gfx942): evolve_push overrides the shared SP_MIN_BLOCKS_PER_CU hint with a
+// min-blocks of 1 (proj_stage keeps SP_MIN_BLOCKS_PER_CU).  volume_preserving_push is a
+// large inlined double-precision routine; the derived hint (2 at BLOCK_SIZE=256)
+// capped it at 128 VGPR and spilled ~1 KB/work-item to scratch while still only reaching
+// ~16% occupancy — the kernel is latency-bound, not occupancy-bound, so paying the spill
+// bought nothing.  A min-blocks of 1 lets the compiler use the wider CDNA3 register file,
+// cutting the scratch spill ~3x (measured 1028 -> 304 B/lane) for ~13% less runtime.
+// This override is CDNA-specific: on NVIDIA (__HIP_PLATFORM_NVIDIA__) keep the derived
+// SP_MIN_BLOCKS_PER_CU budget, since the CDNA3 register-file reasoning does not apply.
 // ---------------------------------------------------------------------------
-__global__ __launch_bounds__(BLOCK_SIZE, 2)
+#if defined(__HIP_PLATFORM_NVIDIA__)
+#define EVOLVE_PUSH_MIN_BLOCKS_PER_CU SP_MIN_BLOCKS_PER_CU
+#else
+#define EVOLVE_PUSH_MIN_BLOCKS_PER_CU 1
+#endif
+__global__ __launch_bounds__(BLOCK_SIZE, EVOLVE_PUSH_MIN_BLOCKS_PER_CU)
 void evolve_push_kernel(
     // Particle SoA — INPUT (current buffers, read-only)
     const double* __restrict__ p_x_in,
@@ -319,32 +349,33 @@ void evolve_push_kernel(
     int num_particles,
     const int* __restrict__ mode_coord)
 {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= num_particles) return;
+    // Grid-stride loop over particles (see proj_stage_kernel).
+    const int sp_stride = gridDim.x * blockDim.x;
+    for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < num_particles; j += sp_stride) {
+        double x[3]  = {p_x_in[idx2(j, 0, num_particles)],  p_x_in[idx2(j, 1, num_particles)],  p_x_in[idx2(j, 2, num_particles)]};
+        double pm[3] = {p_p_in[idx2(j, 0, num_particles)],  p_p_in[idx2(j, 1, num_particles)],  p_p_in[idx2(j, 2, num_particles)]};
+        double st[2] = {p_st_in[idx2(j, 0, num_particles)], p_st_in[idx2(j, 1, num_particles)]};
+        int    i_elm = p_i_elm_in[j];
 
-    double x[3]  = {p_x_in[idx2(j, 0, num_particles)],  p_x_in[idx2(j, 1, num_particles)],  p_x_in[idx2(j, 2, num_particles)]};
-    double pm[3] = {p_p_in[idx2(j, 0, num_particles)],  p_p_in[idx2(j, 1, num_particles)],  p_p_in[idx2(j, 2, num_particles)]};
-    double st[2] = {p_st_in[idx2(j, 0, num_particles)], p_st_in[idx2(j, 1, num_particles)]};
-    int    i_elm = p_i_elm_in[j];
+        if (i_elm > 0) {
+            int ifail = 0;
+            volume_preserving_push(x, pm, st, i_elm, charge,
+                                   nl_values, nl_deltas, nl_x,
+                                   el_vertex, el_size, el_neighbours,
+                                   n_elements, n_nodes, mode_coord,
+                                   time_now, time_prev,
+                                   flag_static, flag_zero_dpsidt,
+                                   F0, t_norm, t_jorek,
+                                   group_mass, sim_time, tstep_part_adj,
+                                   ifail);
+        }
 
-    if (i_elm > 0) {
-        int ifail = 0;
-        volume_preserving_push(x, pm, st, i_elm, charge,
-                               nl_values, nl_deltas, nl_x,
-                               el_vertex, el_size, el_neighbours,
-                               n_elements, n_nodes, mode_coord,
-                               time_now, time_prev,
-                               flag_static, flag_zero_dpsidt,
-                               F0, t_norm, t_jorek,
-                               group_mass, sim_time, tstep_part_adj,
-                               ifail);
+        // Always write to output buffers (captures lost-particle state too).
+        p_x_out[idx2(j, 0, num_particles)]  = x[0];  p_x_out[idx2(j, 1, num_particles)]  = x[1];  p_x_out[idx2(j, 2, num_particles)]  = x[2];
+        p_p_out[idx2(j, 0, num_particles)]  = pm[0]; p_p_out[idx2(j, 1, num_particles)]  = pm[1]; p_p_out[idx2(j, 2, num_particles)]  = pm[2];
+        p_st_out[idx2(j, 0, num_particles)] = st[0]; p_st_out[idx2(j, 1, num_particles)] = st[1];
+        p_i_elm_out[j] = i_elm;
     }
-
-    // Always write to output buffers (captures lost-particle state too).
-    p_x_out[idx2(j, 0, num_particles)]  = x[0];  p_x_out[idx2(j, 1, num_particles)]  = x[1];  p_x_out[idx2(j, 2, num_particles)]  = x[2];
-    p_p_out[idx2(j, 0, num_particles)]  = pm[0]; p_p_out[idx2(j, 1, num_particles)]  = pm[1]; p_p_out[idx2(j, 2, num_particles)]  = pm[2];
-    p_st_out[idx2(j, 0, num_particles)] = st[0]; p_st_out[idx2(j, 1, num_particles)] = st[1];
-    p_i_elm_out[j] = i_elm;
 }
 
 
@@ -611,7 +642,11 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // layout (d_offsets/d_hist) that proj_accumulate consumes always fresh.  The sort
     // runs on the default (legacy) stream while both streams are drained, so sort and
     // push never contend for `alt`.
-    int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    // Stage/push grid: PARTICLES_PER_THREAD particles per thread (grid-stride),
+    // so the grid shrinks by that factor; the ceil keeps full coverage (each thread
+    // then iterates at most PARTICLES_PER_THREAD times).
+    constexpr int SP_WORK_PER_BLOCK = BLOCK_SIZE * PARTICLES_PER_THREAD;
+    int grid_size = (num_particles + SP_WORK_PER_BLOCK - 1) / SP_WORK_PER_BLOCK;
     int sort_call_count = 0;
 
     // Running buffer pointers: `curr` holds the latest state, `alt` is the spare set
