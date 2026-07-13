@@ -1,0 +1,72 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "JOREK_MODEL": "model600"
+      }
+    },
+    {
+      "name": "pitagora-intel",
+      "inherits": "base",
+      "displayName": "Pitagora CPU - Intel oneAPI + MKL + STRUMPACK",
+      "description": "Requires: module load intel-oneapi-mpi intel-oneapi-compilers intel-oneapi-mkl/2024.0.0--intel-oneapi-mpi--2021.12.1 hdf5/1.14.3--intel-oneapi-mpi--2021.12.1--oneapi--2024.1.0 cmake",
+      "cacheVariables": {
+        "CMAKE_Fortran_COMPILER": "mpiifx",
+        "CMAKE_C_COMPILER": "mpiicx",
+        "CMAKE_CXX_COMPILER": "mpiicpx",
+        "CMAKE_Fortran_FLAGS": "-mcmodel=medium -march=skylake-avx512 -axCORE-AVX512",
+
+        "JOREK_USE_MKL": "ON",
+        "JOREK_USE_STRUMPACK": "ON",
+        "JOREK_USE_MUMPS": "OFF",
+        "JOREK_USE_PASTIX": "OFF",
+        "JOREK_USE_HDF5": "ON",
+        "JOREK_USE_FFTW": "ON",
+        "JOREK_USE_BLOCK": "ON",
+
+        "JOREK_LIB_DIR": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd",
+        "STRUMPACK_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/STRUMPACK/install",
+        "METIS_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/METIS/install",
+        "PARMETIS_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/ParMETIS/install",
+        "GKLIB_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/GKlib/install"
+      }
+    },
+    {
+      "name": "pitagora-intel-debug",
+      "inherits": "pitagora-intel",
+      "displayName": "Pitagora CPU - Intel oneAPI, debug build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "pitagora-intel",
+      "configurePreset": "pitagora-intel",
+      "jobs": 16
+    },
+    {
+      "name": "pitagora-intel-most",
+      "configurePreset": "pitagora-intel",
+      "displayName": "Main solver plus the regression-tested diagnostics",
+      "targets": ["most"],
+      "jobs": 16
+    },
+    {
+      "name": "pitagora-intel-debug",
+      "configurePreset": "pitagora-intel-debug",
+      "jobs": 16
+    }
+  ]
+}
