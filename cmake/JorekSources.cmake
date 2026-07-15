@@ -32,6 +32,7 @@ set(JOREK_SOURCE_DIRS
   particles/postprocessors/lights
   particles/postprocessors/spectra
   particles/postprocessors/utils
+  particles/initialisers
   particles/projection_functions
   particles/pushers
   # Not optional despite the name: the synthetic-light postprocessors in
