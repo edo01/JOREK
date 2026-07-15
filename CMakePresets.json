@@ -78,6 +78,38 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "tok-intel",
+      "inherits": "base",
+      "displayName": "TOK CPU - Intel oneAPI + MKL + STRUMPACK (IPP Garching)",
+      "description": "Requires: module purge && module load intel/2025.1 impi/2021.15 mkl fftw-mpi hdf5-mpi cmake",
+      "cacheVariables": {
+        "CMAKE_Fortran_COMPILER": "mpiifx",
+        "CMAKE_C_COMPILER": "mpiicx",
+        "CMAKE_CXX_COMPILER": "mpiicpx",
+        "CMAKE_Fortran_FLAGS": "-mcmodel=medium -march=native",
+        "JOREK_USE_MKL": "ON",
+        "JOREK_USE_STRUMPACK": "ON",
+        "JOREK_USE_MUMPS": "OFF",
+        "JOREK_USE_PASTIX": "OFF",
+        "JOREK_USE_HDF5": "ON",
+        "JOREK_USE_FFTW": "ON",
+        "JOREK_USE_BLOCK": "ON",
+        "JOREK_LIB_DIR": "/tokp/work/mhoelzl/bin-of-ihol/intel",
+        "STRUMPACK_ROOT": "/tokp/work/mhoelzl/bin-of-ihol/intel/STRUMPACK-7.1.3/install",
+        "METIS_ROOT": "/tokp/work/mhoelzl/bin-of-ihol/intel/metis_git/install",
+        "PARMETIS_ROOT": "/tokp/work/mhoelzl/bin-of-ihol/intel/ParMETIS_git/install",
+        "GKLIB_ROOT": "/tokp/work/mhoelzl/bin-of-ihol/intel/GKlib_git/install"
+      }
+    },
+    {
+      "name": "tok-intel-debug",
+      "inherits": "tok-intel",
+      "displayName": "TOK CPU - Intel oneAPI, debug build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     }
   ],
   "buildPresets": [
@@ -113,6 +145,23 @@
     {
       "name": "viper-intel-debug",
       "configurePreset": "viper-intel-debug",
+      "jobs": 16
+    },
+    {
+      "name": "tok-intel",
+      "configurePreset": "tok-intel",
+      "jobs": 16
+    },
+    {
+      "name": "tok-intel-most",
+      "configurePreset": "tok-intel",
+      "displayName": "Main solver plus the regression-tested diagnostics",
+      "targets": ["most"],
+      "jobs": 16
+    },
+    {
+      "name": "tok-intel-debug",
+      "configurePreset": "tok-intel-debug",
       "jobs": 16
     }
   ]
