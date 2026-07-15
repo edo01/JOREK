@@ -1,6 +1,8 @@
-# CMake out-of-source builds (cmake --preset <name> puts them under build/)
+# CMake
 /build/
 CMakeUserPresets.json
+/CMakeCache.txt
+/CMakeFiles/
 
 *.bck
 *.o
