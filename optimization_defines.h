@@ -1,8 +1,6 @@
 /*
  * USE_GPU:               0 = CPU-only build, 1 = enable GPU (HIP) code paths.
- * BLOCK_SIZE:            GPU threads per block for every particle-mapped kernel (split-kernel
- *                        proj_stage/evolve_push and the batch kernel) and the sort/scan helper
- *                        kernels. USE_GPU=1 only. (proj_accumulate is element-mapped: ACCUM_*.)
+ * BLOCK_SIZE:            GPU threads per block for the RE evolution kernel. USE_GPU=1 only.
  * GPU_DEBUG:             0 = off, 1 = verbose GPU debug output + hipDeviceSynchronize after each launch. USE_GPU=1 only.
  *
  * ORDERING_TYPE:         Particle ordering before the coupling scheme loop, Fortran-side.      <-- Old optimization from Edoardo's code
@@ -21,10 +19,6 @@
  *                            particle state held in registers across steps; optional shared-memory LUT (LUT_*).
  *
  * Split-kernel knobs (USE_BATCH_KERNEL=0):
- * PARTICLES_PER_THREAD:  Particles processed by each thread of proj_stage_kernel and
- *                        evolve_push_kernel via a grid-stride loop (grid is shrunk by this
- *                        factor). 1 = one thread per particle (previous behaviour).
- *                        Split-kernel only; the batch kernel is always one thread per particle.
  * PROJ_TILE:             Particles per tile in proj_accumulate_kernel.
  * ACCUM_BLOCK_SIZE:      Threads per block for proj_accumulate_kernel.
  * ACCUM_MIN_BLOCKS_PER_SM: __launch_bounds__ min-blocks hint for proj_accumulate (0 = omit hint).
@@ -56,7 +50,6 @@
 #define USE_BATCH_KERNEL 0
 
 /* SPECIALIZED KERNELS */
-#define PARTICLES_PER_THREAD 2
 #define PROJ_TILE 256
 #define ACCUM_BLOCK_SIZE 384
 #define ACCUM_MIN_BLOCKS_PER_SM 2
