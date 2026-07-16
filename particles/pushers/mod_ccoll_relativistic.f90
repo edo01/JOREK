@@ -527,16 +527,17 @@ contains
   !> Pushing is done by calling the explicit push function. This function is just a wrapper
   !> that additionally evaluates the plasma quantities and takes care of the coordinate transformation
   !> in momentum space thus simplifying the process of including collisions in simulations.
-  subroutine ccoll_gc_relativistic_push(dat, prt, fields, mass, time, dt)
+  subroutine ccoll_gc_relativistic_push(dat, prt, fields, mass, time, dt, rng, i_rng)
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_gc_relativistic), intent(inout) :: prt
     class(fields_base), intent(in) :: fields
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
+    type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
 
     real*8 :: pnorm, E(3), B(3), psi, U, Te, Ti, the, ne, rnd(2), pin, xiin, pout, xiout
     real*8, allocatable :: ni(:), thi(:)
-    integer :: ierr
+    integer :: ierr, i_rng
 
     allocate(ni(size(dat%mi)), thi(size(dat%mi)))
     call fields%calc_EBpsiU(time, prt%i_elm, prt%st, prt%x(3), E, B, psi, U)                                                                                                                                                                                                          
@@ -547,7 +548,7 @@ contains
     the = Te * K_BOLTZ / ( MASS_ELECTRON * SPEED_OF_LIGHT**2 )
     thi = Ti * K_BOLTZ / ( dat%mi * SPEED_OF_LIGHT**2 )
     
-    call random_number(rnd)
+    call rng(i_rng)%next(rnd)
     rnd = floor(2.d0*rnd)
     rnd = -1.d0 + 2.d0 * rnd
 
@@ -733,15 +734,16 @@ contains
   !> Push guiding center electron taking partial screening into account
   !> Evaluates the field and takes care of the coordinate transformation before calling the
   !> explicit pusher.
-  subroutine ccoll_gc_relativistic_push_partialscreening(dat, prt, fields, mass, time, dt)
+  subroutine ccoll_gc_relativistic_push_partialscreening(dat, prt, fields, mass, time, dt, rng, i_rng)
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_gc_relativistic), intent(inout) :: prt
     class(fields_base), intent(in) :: fields
+    type(pcg32_rng), dimension(:), allocatable, intent(inout) :: rng
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
     real*8 :: pnorm, E(3), B(3), psi, U, Te, Ti, the, ne, rnd(2), pin, xiin, pout, xiout
     real*8, allocatable :: ni(:), thi(:)
-    integer :: ierr
+    integer :: ierr, i_rng
 
     allocate(ni(size(dat%mi)), thi(size(dat%mi)))
     call fields%calc_EBpsiU(time, prt%i_elm, prt%st, prt%x(3), E, B, psi, U)
@@ -752,7 +754,7 @@ contains
     the = Te * K_BOLTZ / ( MASS_ELECTRON * SPEED_OF_LIGHT**2 )
     thi = Ti * K_BOLTZ / ( dat%mi * SPEED_OF_LIGHT**2 )
 
-    call random_number(rnd)
+    call rng(i_rng)%next(rnd)
     rnd = floor(2.d0*rnd)
     rnd = -1.d0 + 2.d0 * rnd
 
@@ -795,7 +797,7 @@ contains
     the = Te * K_BOLTZ / ( MASS_ELECTRON * SPEED_OF_LIGHT**2 )
     thi = Ti * K_BOLTZ / ( dat%mi * SPEED_OF_LIGHT**2 )
 
-    call random_number(rnd)
+    call rng(i_rng)%next(rnd)
     rnd = floor(2.d0*rnd)
     rnd = -1.d0 + 2.d0 * rnd
 
