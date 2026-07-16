@@ -31,6 +31,8 @@ static_assert(LUT_N_SLOTS * LUT_CACHE_BYTES_PER_SLOT <= 32 * 1024,
 // LUT_DEBUG: set to 1 in optimization_defines.h to instrument hit/miss counters.
 #endif
 
+static_assert(BATCH_BLOCK_SIZE > 0 && BATCH_BLOCK_SIZE % 64 == 0 && BATCH_BLOCK_SIZE <= 1024,
+              "BATCH_BLOCK_SIZE must be a positive multiple of 64 (warp/wavefront portable), <= 1024");
 static_assert(FB_LANE_FANOUT >= 1 && (FB_LANE_FANOUT & (FB_LANE_FANOUT - 1)) == 0,
               "FB_LANE_FANOUT must be a power of two");
 static_assert(32 % FB_LANE_FANOUT == 0, "FB_LANE_FANOUT must divide warp size 32");
@@ -154,16 +156,16 @@ void lut_build_cooperative(int i_elm_thread,
 
     // Phase 2 — all threads cooperatively load field data.
     // Layout: sh_cache[lid * LUT_N_SLOTS + s]  (transposed: slot is fast dim at read time).
-    // Fill strategy: iterate over (pass, s) with lid = pass*BLOCK_SIZE + threadIdx.x fixed
+    // Fill strategy: iterate over (pass, s) with lid = pass*BATCH_BLOCK_SIZE + threadIdx.x fixed
     // per warp, and loop s in the inner dim. This way each thread writes to addresses
     // lid*LUT_N_SLOTS+0, lid*LUT_N_SLOTS+1, ... which are consecutive — but across
     // threads within a warp, lid differs by 1, so addresses differ by LUT_N_SLOTS (= 4)
     // doubles = 32 bytes, hitting only 4 banks out of 32 → 8-way conflict.
     //
     // Fix: reorganise so the warp's 32 threads cover 32 consecutive flat indices.
-    // We iterate over flat index f = pass*BLOCK_SIZE + threadIdx.x and decompose
+    // We iterate over flat index f = pass*BATCH_BLOCK_SIZE + threadIdx.x and decompose
     // f = lid * LUT_N_SLOTS + s, so thread t in pass p writes to flat index
-    // f = p*BLOCK_SIZE + t, i.e. lid = f / LUT_N_SLOTS, s = f % LUT_N_SLOTS.
+    // f = p*BATCH_BLOCK_SIZE + t, i.e. lid = f / LUT_N_SLOTS, s = f % LUT_N_SLOTS.
     // Consecutive threads hit consecutive flat indices → stride-1 shared writes → no conflict.
     // The read-side index (lid * LUT_N_SLOTS + s) is identical, so reads are unchanged.
     {
@@ -176,8 +178,8 @@ void lut_build_cooperative(int i_elm_thread,
         }
 
         int total = LUT_SLOT_SIZE * LUT_N_SLOTS;
-        for (int pass = 0; pass * BLOCK_SIZE < total; ++pass) {
-            int f      = pass * BLOCK_SIZE + threadIdx.x;
+        for (int pass = 0; pass * BATCH_BLOCK_SIZE < total; ++pass) {
+            int f      = pass * BATCH_BLOCK_SIZE + threadIdx.x;
             if (f >= total) continue;
             int lid    = f / LUT_N_SLOTS;
             int s      = f % LUT_N_SLOTS;
@@ -268,7 +270,7 @@ void reduce_feedback_lanes(const double* __restrict__ fb_fat,
 // all nsteps — this is the primary motivation for batching.
 // nsteps is normally STEPS_PER_BATCH; the last batch may be smaller.
 // ---------------------------------------------------------------------------
-__global__ __launch_bounds__(BLOCK_SIZE, 2)
+__global__ __launch_bounds__(BATCH_BLOCK_SIZE, 2)
 void evolve_batch_kernel(
     // Particle SoA — in/out (read once at start, written once at end)
     double* __restrict__ p_x,
@@ -311,7 +313,7 @@ void evolve_batch_kernel(
     __shared__ int    sh_lut_keys[LUT_N_SLOTS];
     __shared__ double sh_cache_v[LUT_SLOT_SIZE * LUT_N_SLOTS];
     __shared__ double sh_cache_d[LUT_SLOT_SIZE * LUT_N_SLOTS];
-    __shared__ int    sh_scratch[BLOCK_SIZE];
+    __shared__ int    sh_scratch[BATCH_BLOCK_SIZE];
     __shared__ int    sh_base_elms[LUT_N_SLOTS];   // distinct step-0 elements (base set)
     __shared__ int    sh_n_base;                   // count of distinct elements found
 #if LUT_DEBUG == 1
@@ -707,7 +709,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     // holding particle state in registers across all steps; the LUT is built once per
     // launch so it is reused for all steps in the batch.
     // d_x / d_p / d_st / d_i_elm are updated in-place — no double-buffer swap needed.
-    int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid_size = (num_particles + BATCH_BLOCK_SIZE - 1) / BATCH_BLOCK_SIZE;
     int sort_call_count = 0;
 
 #if GPU_DEBUG == 1
@@ -758,7 +760,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         HIP_CHECK(hipEventRecord(t_evolve_start, 0));
 #endif
         hipLaunchKernelGGL(evolve_batch_kernel,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+            dim3(grid_size), dim3(BATCH_BLOCK_SIZE), 0, 0,
             d_x, d_p, d_st, d_i_elm, d_weight, charge,
             d_nl_values, d_nl_deltas, d_nl_x, n_nodes,
             d_el_vertex, d_el_neighbours, d_el_size, n_elements,

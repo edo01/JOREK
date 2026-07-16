@@ -1702,7 +1702,7 @@ static void sort_particles_by_i_elm_gpu(
     const size_t hist_bytes = (size_t)n_bins * sizeof(int);
     HIP_CHECK(hipMemset(d_hist, 0, hist_bytes));
 
-    int grid_size = (num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid_size = (num_particles + SORTING_BLOCK_SIZE - 1) / SORTING_BLOCK_SIZE;
 
     // Per-kernel dispatch: use the fast shared-memory variant when its LDS footprint
     // fits the device's per-block budget, else the warp-aggregated global variant (no
@@ -1740,11 +1740,11 @@ static void sort_particles_by_i_elm_gpu(
 
     if (count_use_shared) {
         hipLaunchKernelGGL(count_i_elm_histogram_shared,
-            dim3(grid_size), dim3(BLOCK_SIZE), count_shared_bytes, 0,
+            dim3(grid_size), dim3(SORTING_BLOCK_SIZE), count_shared_bytes, 0,
             d_i_elm, num_particles, n_bins, d_hist);
     } else {
         hipLaunchKernelGGL(count_i_elm_histogram_global,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+            dim3(grid_size), dim3(SORTING_BLOCK_SIZE), 0, 0,
             d_i_elm, num_particles, n_bins, d_hist);
     }
     HIP_CHECK(hipGetLastError());
@@ -1769,13 +1769,13 @@ static void sort_particles_by_i_elm_gpu(
 
     if (scatter_use_shared) {
         hipLaunchKernelGGL(scatter_particles_by_i_elm_shared,
-            dim3(grid_size), dim3(BLOCK_SIZE), scatter_shared_bytes, 0,
+            dim3(grid_size), dim3(SORTING_BLOCK_SIZE), scatter_shared_bytes, 0,
             d_x, d_p, d_st, d_i_elm, d_weight,
             num_particles, n_bins, d_cursors,
             d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt);
     } else {
         hipLaunchKernelGGL(scatter_particles_by_i_elm_global,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+            dim3(grid_size), dim3(SORTING_BLOCK_SIZE), 0, 0,
             d_x, d_p, d_st, d_i_elm, d_weight,
             num_particles, n_bins, d_cursors,
             d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt);
@@ -1789,7 +1789,7 @@ static void sort_particles_by_i_elm_gpu(
         HIP_CHECK(hipMalloc(&d_err, sizeof(int)));
         HIP_CHECK(hipMemset(d_err, 0, sizeof(int)));
         hipLaunchKernelGGL(check_sorted_contiguous,
-            dim3(grid_size), dim3(BLOCK_SIZE), 0, 0,
+            dim3(grid_size), dim3(SORTING_BLOCK_SIZE), 0, 0,
             d_i_elm_alt, num_particles, n_bins, d_err);
         HIP_CHECK(hipGetLastError());
         int h_err = 0;
