@@ -53,8 +53,8 @@ module mod_gmres
     call r3_info_begin (r3_info_index_0, 'gmres_driver')  ! timing
     call clck_time(t0)
     call init_dgmres(icntl,cntl)
- 
-    if (my_id .ne. 0) then 
+
+    if (my_id .ne. 0) then
       icntl(2) = 0            ! disable warning
     endif
     icntl(3) = 0            ! output unit
@@ -91,7 +91,6 @@ module mod_gmres
 
     work(Int1:n_dof)           = work_ndof(Int1:n_dof)
     work(2*n_dof+Int1:3*n_dof) = work_ndof2(Int1:n_dof)
-
 
     sum = 0.d0
     err = -1.d20
@@ -130,7 +129,6 @@ module mod_gmres
 
            if (revcom.eq.matvec) then                  ! perform the matrix vector product
                                                        ! work(colz) <-- A * work(colx)
-
              work_ndof(Int1:n_dof) = work(colx:colx+n_dof-Int1)
              work_ndof2(Int1:n_dof) = work(colz:colz+n_dof-Int1)
              call gmres_matrix_vector(n_dof,work_ndof,n_dof,work_ndof2,a_mat)
@@ -145,14 +143,12 @@ module mod_gmres
              goto 10
 
            else if (revcom.eq.precondRight) then       ! perform the right preconditioning
-
              call dcopy(n_dof,work(colx),Int1,work(colz),Int1)
 
              goto 10
 
            else if (revcom.eq.dotProd) then            ! perform the scalar product
                                                        ! work(colz) <-- work(colx) work(coly)
-
              call dgemv('C',n_dof,nbscal,ONE, work(colx),n_dof,work(coly),Int1,ZERO,work(colz),Int1)
 
              goto 10
@@ -235,7 +231,7 @@ module mod_gmres
     end if
 
     call MPI_COMM_SIZE(a_mat%comm, n_mpi, ierr)
-    call MPI_COMM_RANK(a_mat%comm, my_id, ierr) 
+    call MPI_COMM_RANK(a_mat%comm, my_id, ierr)
 
     counts = size_x
     call MPI_BCAST(x,counts,MPI_DOUBLE_PRECISION,0,a_mat%comm,ierr)
@@ -246,9 +242,9 @@ module mod_gmres
     n_blocksize  = a_mat%block_size
     n_blocks     = a_mat%nnz/n_blocksize**2
     ndof_local   = (a_mat%index_max(my_id + 1) - a_mat%index_min(my_id + 1) + 1)*n_blocksize
-    
+
     index_offset = (a_mat%index_min(my_id + 1) - 1)*n_blocksize
-    
+
     allocate(y_tmp(ndof_local))
     y_tmp        = 0.d0
     
@@ -260,9 +256,8 @@ module mod_gmres
     if ( n_tor <= 7 ) then
 
 !$omp parallel default(none) &
-!$omp   shared(a_mat, x, n_blocks, n_blocksize, index_offset) &
-!$omp   private(i, iA_start, ix_start, iy_start, ir, jc, y_tmp_block ) &
-!$omp   reduction(+:y_tmp)
+!$omp   shared(y_tmp, a_mat, x, n_blocks, n_blocksize, index_offset) &
+!$omp   private(i, iA_start, ix_start, iy_start, ir, jc, y_tmp_block)
 !$omp do schedule(guided)
       do i = 1, n_blocks
 
@@ -272,7 +267,9 @@ module mod_gmres
 
         call dgemv('T', n_blocksize, n_blocksize, 1.d0, a_mat%val(iA_start+1), n_blocksize, x(ix_start), Int1, 0.d0, y_tmp_block, Int1)
 
+!$omp critical
         y_tmp(iy_start:iy_start+n_blocksize-1) = y_tmp(iy_start:iy_start+n_blocksize-1) + y_tmp_block(1:n_blocksize)
+!$omp end critical
 
       end do
 !$omp end do
@@ -330,7 +327,7 @@ module mod_gmres
     enddo
 
     call mpi_allgatherv(y_tmp, ndof_local, MPI_DOUBLE_PRECISION, y, recv_counts, recv_disp, MPI_DOUBLE_PRECISION, a_mat%comm,ierr)
-    
+
     deallocate(y_tmp)
     deallocate(recv_counts)
     deallocate(recv_disp)

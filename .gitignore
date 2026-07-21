@@ -20,7 +20,8 @@
 *.csv
 Makefile.inc
 *.optrpt
-Makefile.inc
+algexpr2fort
+generate_code
 j302_1
 j302_3
 .fuse_hidden*
