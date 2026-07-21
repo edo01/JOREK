@@ -21,8 +21,10 @@ module jgx_api
 
   !> Bind a host array + allocate its device mirror.
   interface jgx_alloc
-    module procedure alloc_r64_1, alloc_r64_2, alloc_r64_3, alloc_r64_4
-    module procedure alloc_i32_1, alloc_i32_2, alloc_i32_3
+    module procedure alloc_r64_1, alloc_r64_2, alloc_r64_3, alloc_r64_4, &
+                     alloc_r64_5
+    module procedure alloc_i32_1, alloc_i32_2, alloc_i32_3, alloc_i32_4, &
+                     alloc_i32_5
   end interface jgx_alloc
 
 contains
@@ -150,5 +152,18 @@ contains
     integer(i32), contiguous, target, intent(in)   :: a(:,:,:)
     call fill_buf(buf, c_loc(a), shape(a), 3, JGX_I32)
   end subroutine alloc_i32_3
+
+  subroutine alloc_i32_4(buf, a)
+    type(jgx_buf),                   intent(inout) :: buf
+    integer(i32), contiguous, target, intent(in)   :: a(:,:,:,:)
+    call fill_buf(buf, c_loc(a), shape(a), 4, JGX_I32)
+  end subroutine alloc_i32_4
+
+  subroutine alloc_i32_5(buf, a)
+    type(jgx_buf),                   intent(inout) :: buf
+    integer(i32), contiguous, target, intent(in)   :: a(:,:,:,:,:)
+    call fill_buf(buf, c_loc(a), shape(a), 5, JGX_I32)
+  end subroutine alloc_i32_5
+
 
 end module jgx_api
