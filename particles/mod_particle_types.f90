@@ -37,6 +37,8 @@ module mod_particle_types
   public :: element_list_SoA_c
   public :: jorek_fields_interp_linear_c
   public :: particle_sim_c
+  public :: ccoll_data_c
+  public :: re_gpu_params_c
   public :: particles_AoS_to_SoA
   public :: particles_SoA_to_AoS
   public :: node_list_to_SoA
@@ -209,6 +211,39 @@ module mod_particle_types
     integer(c_int) :: my_id
     integer(c_int) :: n_mpi
   end type particle_sim_c
+
+  !> Tabulated L0/L1 collision data + species parameters for the GPU standard
+  !> small-angle collision operator (bind(C)). log10 grids are precomputed on the
+  !> host once (the CPU interp_L0L1 recomputes them per call). The four c_ptr
+  !> members carry HOST pointers; the launch function copies the tables to the
+  !> device and rebinds them before use.
+  type, bind(C) :: ccoll_data_c
+    integer(c_int) :: nu  = 0 !< number of u (p/mc) grid points
+    integer(c_int) :: nth = 0 !< number of theta (T/mc^2) grid points
+    type(c_ptr) :: log10_u     = c_null_ptr !< (nu)      log10 of u abscissa
+    type(c_ptr) :: log10_theta = c_null_ptr !< (nth)     log10 of theta abscissa
+    type(c_ptr) :: L0          = c_null_ptr !< (nu, nth) tabulated L0 (column-major)
+    type(c_ptr) :: L1          = c_null_ptr !< (nu, nth) tabulated L1 (column-major)
+    real(c_double) :: u_min  = 0.0_c_double !< table domain edges (linear scale)
+    real(c_double) :: u_max  = 0.0_c_double
+    real(c_double) :: th_min = 0.0_c_double
+    real(c_double) :: th_max = 0.0_c_double
+    real(c_double) :: ma     = 0.0_c_double !< test particle mass [kg]
+    real(c_double) :: qa     = 0.0_c_double !< test particle charge number
+    real(c_double) :: mb_ion = 0.0_c_double !< main ion mass [kg]
+    real(c_double) :: qb_ion = 1.0_c_double !< main ion charge number
+  end type ccoll_data_c
+
+  !> RE collision / radiation-reaction runtime parameters for the GPU kernels
+  !> (bind(C)). Member order matters: doubles and int64 first, ints last, to
+  !> mirror the C struct layout in kernel_re_collisions.hip.hpp.
+  type, bind(C) :: re_gpu_params_c
+    real(c_double)     :: central_density = 0.0_c_double !< JOREK central density [1e20 m^-3]
+    real(c_double)     :: T_norm          = 0.0_c_double !< conversion factor: P_T (JOREK units) -> Te [K]
+    integer(c_int64_t) :: rng_seed        = 0_c_int64_t  !< base seed for the per-thread pcg32 streams
+    integer(c_int)     :: re_ccoll        = 0_c_int      !< 1 = apply small-angle collisions each substep
+    integer(c_int)     :: re_radreact     = 0_c_int      !< 1 = apply the radiation-reaction force in the push
+  end type re_gpu_params_c
 
 #endif /* USE_GPU */
 
@@ -1269,30 +1304,43 @@ end subroutine deallocate_particle_arrays
   !> The caller must keep them alive until the GPU call completes and then DEALLOCATE them.
   subroutine node_list_to_SoA(node_list, nl_soa, x_flat, val_flat, del_flat)
     use mod_settings, only: n_tor, n_degrees, n_dim, n_coord_tor
+    use mod_model_settings, only: var_psi, var_u, var_rho, var_T, var_Te
     use data_structure, only: type_node_list
     implicit none
     type(type_node_list), intent(in), target :: node_list
     type(node_list_SoA_c), intent(out) :: nl_soa
     real(c_double), allocatable, intent(out), target :: x_flat(:), val_flat(:), del_flat(:)
     integer :: i, nn
-    integer :: idx, kc, kf, kd, kt
+    integer :: idx, kc, kf, kd, kt, kv_src
+
+    !> Model variables packed for the GPU, matching the C-side slots
+    !> (N_FIELD_VARS = 4): 0=psi, 1=u  (used by calc_EBpsiU),
+    !>                     2=rho, 3=T  (used by the collision operator's
+    !>                                 ne/Te interpolation, calc_neTe).
+    !> With with_TiTe var_T is 0, so the electron temperature (var_Te) is packed
+    !> instead. A source index of 0 (variable absent in the model) packs zeros.
+    integer, parameter :: n_gpu_vars = 4
+    integer :: gpu_vars(n_gpu_vars)
+
+    gpu_vars = [var_psi, var_u, var_rho, var_T]
+    if (var_T == 0) gpu_vars(4) = var_Te
 
     nn = node_list%n_nodes
     nl_soa%n_nodes = int(nn, c_int)
 
     ! Flat array sizes are the same regardless of layout.
-    ! Only 2 field vars (P_par, P_perp) are stored; j_Phi is never read on GPU.
+    ! n_gpu_vars field vars are stored: psi, u (for E/B) plus rho, T (for ne/Te).
     allocate(x_flat(n_coord_tor * n_degrees * n_dim * nn))
-    allocate(val_flat(n_tor * n_degrees * 2 * nn))
-    allocate(del_flat(n_tor * n_degrees * 2 * nn))
+    allocate(val_flat(n_tor * n_degrees * n_gpu_vars * nn))
+    allocate(del_flat(n_tor * n_degrees * n_gpu_vars * nn))
 
 #include "optimization_defines.h"
 #if NODES_FIRST == 1
     ! NODES_FIRST: n_nodes is the FIRST (fastest) dimension.
     !   x_flat layout:       (n_nodes, n_dim, n_degrees, n_coord_tor)
     !     idx = i + nn*((kd-1) + n_dim*((kf-1) + n_degrees*(kc-1)))
-    !   val/del_flat layout: (n_nodes, 2, n_degrees, n_tor)
-    !     idx = i + nn*((kd-1) + 2*((kf-1) + n_degrees*(kt-1)))
+    !   val/del_flat layout: (n_nodes, n_gpu_vars, n_degrees, n_tor)
+    !     idx = i + nn*((kd-1) + n_gpu_vars*((kf-1) + n_degrees*(kt-1)))
     !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, n_dim
@@ -1306,14 +1354,20 @@ end subroutine deallocate_particle_arrays
     end do
     !$omp end parallel do
 
-    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
+    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn, gpu_vars) private(i, kt, kf, kd, kv_src, idx) collapse(2)
     do i = 1, nn
-      do kd = 1, 2
+      do kd = 1, n_gpu_vars
         do kf = 1, n_degrees
           do kt = 1, n_tor
-            idx = i + nn * ((kd-1) + 2 * ((kf-1) + n_degrees * (kt-1)))
-            val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
-            del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
+            idx = i + nn * ((kd-1) + n_gpu_vars * ((kf-1) + n_degrees * (kt-1)))
+            kv_src = gpu_vars(kd)
+            if (kv_src > 0) then
+              val_flat(idx) = node_list%node(i)%values(kt, kf, kv_src)
+              del_flat(idx) = node_list%node(i)%deltas(kt, kf, kv_src)
+            else
+              val_flat(idx) = 0.0_c_double
+              del_flat(idx) = 0.0_c_double
+            end if
           end do
         end do
       end do
@@ -1323,8 +1377,8 @@ end subroutine deallocate_particle_arrays
     ! NODES_FIRST=0: n_nodes is the LAST (slowest) dimension.
     !   x_flat layout:       (n_dim, n_degrees, n_coord_tor, n_nodes)
     !     idx = (kd-1) + n_dim*((kf-1) + n_degrees*((kc-1) + n_coord_tor*(i-1)))
-    !   val/del_flat layout: (2, n_degrees, n_tor, n_nodes)
-    !     idx = (kd-1) + 2*((kf-1) + n_degrees*((kt-1) + n_tor*(i-1)))
+    !   val/del_flat layout: (n_gpu_vars, n_degrees, n_tor, n_nodes)
+    !     idx = (kd-1) + n_gpu_vars*((kf-1) + n_degrees*((kt-1) + n_tor*(i-1)))
     !$omp parallel do default(none) shared(node_list, x_flat, nn) private(i, kc, kf, kd, idx) collapse(2)
     do i = 1, nn
       do kd = 1, n_dim
@@ -1338,14 +1392,20 @@ end subroutine deallocate_particle_arrays
     end do
     !$omp end parallel do
 
-    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn) private(i, kt, kf, kd, idx) collapse(2)
+    !$omp parallel do default(none) shared(node_list, val_flat, del_flat, nn, gpu_vars) private(i, kt, kf, kd, kv_src, idx) collapse(2)
     do i = 1, nn
-      do kd = 1, 2
+      do kd = 1, n_gpu_vars
         do kf = 1, n_degrees
           do kt = 1, n_tor
-            idx = (kd-1) + 2 * ((kf-1) + n_degrees * ((kt-1) + n_tor * (i-1))) + 1
-            val_flat(idx) = node_list%node(i)%values(kt, kf, kd)
-            del_flat(idx) = node_list%node(i)%deltas(kt, kf, kd)
+            idx = (kd-1) + n_gpu_vars * ((kf-1) + n_degrees * ((kt-1) + n_tor * (i-1))) + 1
+            kv_src = gpu_vars(kd)
+            if (kv_src > 0) then
+              val_flat(idx) = node_list%node(i)%values(kt, kf, kv_src)
+              del_flat(idx) = node_list%node(i)%deltas(kt, kf, kv_src)
+            else
+              val_flat(idx) = 0.0_c_double
+              del_flat(idx) = 0.0_c_double
+            end if
           end do
         end do
       end do

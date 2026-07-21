@@ -332,11 +332,24 @@ void evolve_push_kernel(
     // Simulation parameters
     double sim_time, double group_mass, double tstep_part_adj,
     int num_particles,
-    const int* __restrict__ mode_coord)
+    const int* __restrict__ mode_coord,
+    // Collision / radiation-reaction physics (device pointers inside ccoll;
+    // ignored unless the corresponding params flag is set)
+    pcg32_state* __restrict__ rng_states,
+    ccoll_data_c ccoll,
+    re_gpu_params_c params)
 {
+    const int  tid      = blockIdx.x * blockDim.x + threadIdx.x;
+    const bool do_ccoll    = (params.re_ccoll    != 0);
+    const int  use_radreact = params.re_radreact;
+
+    // Load this worker's RNG stream once per kernel launch (16 B round-trip).
+    pcg32_state rng;
+    if (do_ccoll) rng = rng_states[tid];
+
     // Grid-stride loop over particles (see proj_stage_kernel).
     const int sp_stride = gridDim.x * blockDim.x;
-    for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < num_particles; j += sp_stride) {
+    for (int j = tid; j < num_particles; j += sp_stride) {
         double x[3]  = {p_x_in[idx2(j, 0, num_particles)],  p_x_in[idx2(j, 1, num_particles)],  p_x_in[idx2(j, 2, num_particles)]};
         double pm[3] = {p_p_in[idx2(j, 0, num_particles)],  p_p_in[idx2(j, 1, num_particles)],  p_p_in[idx2(j, 2, num_particles)]};
         double st[2] = {p_st_in[idx2(j, 0, num_particles)], p_st_in[idx2(j, 1, num_particles)]};
@@ -352,7 +365,24 @@ void evolve_push_kernel(
                                    flag_static, flag_zero_dpsidt,
                                    F0, t_norm, t_jorek,
                                    group_mass, sim_time, tstep_part_adj,
-                                   ifail);
+                                   ifail, use_radreact);
+
+            // Small-angle Coulomb collisions on the pushed momentum (same
+            // ordering as the CPU path: push, then collide).
+            if (do_ccoll && i_elm > 0) {
+                double ne, Te_K;
+                calc_neTe(nl_values, nl_deltas, el_vertex, el_size,
+                          n_elements, n_nodes,
+                          time_now, time_prev, t_jorek, flag_static,
+                          i_elm, st, x[2], sim_time,
+                          params.central_density, params.T_norm,
+                          ne, Te_K);
+                double the = Te_K * K_BOLTZ_VAL / (MASS_ELECTRON * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
+                double thi = Te_K * K_BOLTZ_VAL / (ccoll.mb_ion   * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
+                // Single main ion species, quasineutral: ni = ne, Ti = Te.
+                ccoll_kinetic_push_gpu(ccoll, ne, the, ne, thi,
+                                       tstep_part_adj, group_mass, pm, rng);
+            }
         }
 
         // Always write to output buffers (captures lost-particle state too).
@@ -361,6 +391,22 @@ void evolve_push_kernel(
         p_st_out[idx2(j, 0, num_particles)] = st[0]; p_st_out[idx2(j, 1, num_particles)] = st[1];
         p_i_elm_out[j] = i_elm;
     }
+
+    if (do_ccoll) rng_states[tid] = rng;
+}
+
+
+// ---------------------------------------------------------------------------
+// rng_init_kernel: seed one pcg32 stream per worker thread.  Stream ids are
+// globally unique across MPI ranks: initseq = my_id*total_threads + tid
+// (mirrors the CPU initialize(seed, n_streams, i_stream) scheme).
+// ---------------------------------------------------------------------------
+static __global__
+void rng_init_kernel(pcg32_state* __restrict__ states, int n,
+                     unsigned long long seed, unsigned long long stream_base)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < n) pcg32_srandom(states[tid], seed, stream_base + tid);
 }
 
 
@@ -374,7 +420,8 @@ void evolve_push_kernel(
 // All fields of particle_sim are already filled on the host by Fortran.
 extern "C"
 void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
-                       double tstep_part_adj, int nstep_part_adj)
+                       double tstep_part_adj, int nstep_part_adj,
+                       ccoll_data_c h_ccoll, re_gpu_params_c re_params)
 {
     // --- Unpack sim ---
     // Fields
@@ -634,6 +681,50 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int grid_size = (num_particles + SP_WORK_PER_BLOCK - 1) / SP_WORK_PER_BLOCK;
     int sort_call_count = 0;
 
+    // --- Small-angle collision / RNG setup -------------------------------
+    // do_ccoll drives both the per-thread RNG streams and the L0/L1 device
+    // table.  The radiation-reaction force needs no host-side setup (it is a
+    // pure per-particle flag threaded into the push kernel).
+    const bool do_ccoll = (re_params.re_ccoll != 0);
+
+    // One persistent pcg32 stream per grid-stride worker thread (the GPU
+    // analog of the CPU's one-stream-per-OMP-thread), with globally unique
+    // stream ids across MPI ranks.
+    const int total_threads = grid_size * SP_BLOCK_SIZE;
+    pcg32_state* d_rng = nullptr;
+    if (do_ccoll) {
+        HIP_CHECK(hipMalloc(&d_rng, (size_t)total_threads * sizeof(pcg32_state)));
+        int init_blocks = (total_threads + 255) / 256;
+        hipLaunchKernelGGL(rng_init_kernel, dim3(init_blocks), dim3(256), 0, 0,
+            d_rng, total_threads,
+            (unsigned long long)re_params.rng_seed,
+            (unsigned long long)sim.my_id * (unsigned long long)total_threads);
+        HIP_CHECK(hipGetLastError());
+    }
+
+    // Device copy of the L0/L1 table: d_ccoll keeps h_ccoll's scalars but its
+    // pointers are replaced with device buffers.  Passed by value to kernels.
+    ccoll_data_c d_ccoll = h_ccoll;
+    double *d_lut_lu = nullptr, *d_lut_lth = nullptr, *d_lut_L0 = nullptr, *d_lut_L1 = nullptr;
+    if (do_ccoll) {
+        const size_t sz_lu  = (size_t)h_ccoll.nu * sizeof(double);
+        const size_t sz_lth = (size_t)h_ccoll.nth * sizeof(double);
+        const size_t sz_tab = (size_t)h_ccoll.nu * h_ccoll.nth * sizeof(double);
+        HIP_CHECK(hipMalloc(&d_lut_lu,  sz_lu));
+        HIP_CHECK(hipMalloc(&d_lut_lth, sz_lth));
+        HIP_CHECK(hipMalloc(&d_lut_L0,  sz_tab));
+        HIP_CHECK(hipMalloc(&d_lut_L1,  sz_tab));
+        HIP_CHECK(hipMemcpy(d_lut_lu,  h_ccoll.log10_u,     sz_lu,  hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_lut_lth, h_ccoll.log10_theta, sz_lth, hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_lut_L0,  h_ccoll.L0,          sz_tab, hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_lut_L1,  h_ccoll.L1,          sz_tab, hipMemcpyHostToDevice));
+        d_ccoll.log10_u     = d_lut_lu;
+        d_ccoll.log10_theta = d_lut_lth;
+        d_ccoll.L0          = d_lut_L0;
+        d_ccoll.L1          = d_lut_L1;
+    }
+    // ---------------------------------------------------------------------
+
     // Running buffer pointers: `curr` holds the latest state, `alt` is the spare set
     // (push output / sort scratch).  Both follow the pointer swaps below.
     double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
@@ -715,7 +806,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             d_el_vertex, d_el_neighbours, d_el_size, n_elements,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, t_jorek, sim_time, group_mass, tstep_part_adj,
-            num_particles, d_mode_coord);
+            num_particles, d_mode_coord,
+            d_rng, d_ccoll, re_params);
         HIP_CHECK(hipGetLastError());
 
         // Join: stream_proj waits for push to finish before the next step's fork.
@@ -833,6 +925,11 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_stg_t));
     HIP_CHECK(hipFree(d_stg_phi));
     HIP_CHECK(hipFree(d_stg_w));
+    if (d_rng)     HIP_CHECK(hipFree(d_rng));
+    if (d_lut_lu)  HIP_CHECK(hipFree(d_lut_lu));
+    if (d_lut_lth) HIP_CHECK(hipFree(d_lut_lth));
+    if (d_lut_L0)  HIP_CHECK(hipFree(d_lut_L0));
+    if (d_lut_L1)  HIP_CHECK(hipFree(d_lut_L1));
 }
 
 #endif /* USE_BATCH_KERNEL == 0 */

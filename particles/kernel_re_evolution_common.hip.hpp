@@ -44,9 +44,15 @@ static constexpr int NDIM     = n_dim;
 static constexpr int NMODE    = (N_TOR - 1) / 2;
 
 static constexpr int NVAR = 3;
-// nl_values / nl_deltas only carry P_par and P_perp (not j_Phi), so their
-// first (fastest) dimension is 2, not NVAR. NVAR is for feedback_rhs only.
-static constexpr int N_FIELD_VARS = 2;
+// nl_values / nl_deltas carry the model field variables needed on the GPU
+// (see node_list_to_SoA): 0 = psi, 1 = u  (for calc_EBpsiU / calc_B_only),
+// 2 = rho, 3 = T  (for the collision operator's ne/Te interp, calc_neTe).
+// NVAR (=3) is for feedback_rhs only.
+static constexpr int N_FIELD_VARS = 4;
+static constexpr int FLD_PSI_IDX = 0;
+static constexpr int FLD_U_IDX   = 1;
+static constexpr int FLD_RHO_IDX = 2;
+static constexpr int FLD_T_IDX   = 3;
 static constexpr int P_PAR_IDX = 0;
 static constexpr int P_PERP_IDX = 1;
 static constexpr int J_PHI_IDX = 2;
@@ -189,6 +195,13 @@ int fb_idx_compact(int ie, int n, int m, int it, int var, int n_elements)
 #endif
 }
 
+
+// ---------------------------------------------------------------------------
+// Small-angle Coulomb collision physics + pcg32 RNG (uses the physical
+// constants defined above; defines the ccoll_data_c / re_gpu_params_c mirrors
+// and the pcg32_state type used by the evolution kernels).
+// ---------------------------------------------------------------------------
+#include "particles/kernel_re_collisions.hip.hpp"
 
 // ---------------------------------------------------------------------------
 // Sorting helpers: map i_elm to a histogram bin (n_bins = n_elements + 1).
@@ -1547,6 +1560,133 @@ void calc_B_only(const double* __restrict__ nl_values,
 }
 
 // ---------------------------------------------------------------------------
+// calc_neTe: interpolate the electron density and temperature at a point for
+// the small-angle collision operator.  Values-only version of the field
+// interpolation (no s/t derivatives, no geometry): vars FLD_RHO_IDX /
+// FLD_T_IDX of nl_values with the same value/delta linear time-interpolation
+// branch as calc_B_only / do_interp_PRZ_1.  Unit conversion mirrors the
+// no-impurity, Te=Ti branch of calc_NjTj (mod_fields.f90): ne capped at
+// 1e16 m^-3, Te at 1 K.  T_norm folds 1/(2*K_BOLTZ*MU_ZERO*n_ref*1e20).
+// ---------------------------------------------------------------------------
+static __device__ __noinline__
+void calc_neTe(const double* __restrict__ nl_values,
+               const double* __restrict__ nl_deltas,
+               const int*    __restrict__ el_vertex,
+               const double* __restrict__ el_size,
+               int n_elements, int n_nodes,
+               double time_now, double time_prev, double t_jorek,
+               int flag_static,
+               int i_elm_f, const double st[2], double phi, double time,  // i_elm_f is 1-based
+               double central_density, double T_norm,
+               double& ne, double& Te_K)
+{
+    const bool   do_interp = (t_jorek > 0.0) && (flag_static == 0)
+                           && (fabs(time_now - time_prev) > 1.0e-10);
+    const double df = do_interp ? (time_now - time) / (time_now - time_prev) : 0.0;
+
+    double cmode[NMODE + 1], smode[NMODE + 1];
+    cmode[0] = 1.0; smode[0] = 0.0;
+    sincos(double(N_PERIOD) * phi, &smode[1], &cmode[1]);
+    for (int i = 2; i <= NMODE; ++i) {
+        cmode[i] = cmode[i-1] * cmode[1] - smode[i-1] * smode[1];
+        smode[i] = smode[i-1] * cmode[1] + cmode[i-1] * smode[1];
+    }
+
+    int ie = i_elm_f - 1;
+
+    double P_rho = 0.0, Pd_rho = 0.0;
+    double P_T   = 0.0, Pd_T   = 0.0;
+
+    for (int kv = 0; kv < NV; ++kv) {
+        int iv = __ldg(&el_vertex[el_vert_idx(kv, ie, n_elements)]) - 1;
+        for (int kf = 0; kf < NDEG; ++kf) {
+            double sz = __ldg(&el_size[el_size_idx(kf, kv, ie, n_elements)]);
+            double h  = bf2D_0_scalar(st[0], st[1], kf, kv);
+
+            double v_rho = 0.0, vd_rho = 0.0;
+            double v_T   = 0.0, vd_T   = 0.0;
+            for (int it = 0; it < N_TOR; ++it) {
+                double hz_it;
+                if (it == 0) {
+                    hz_it = 1.0;
+                } else {
+                    int i = (it + 1) / 2;
+                    hz_it = (it & 1) ? cmode[i] : smode[i];
+                }
+                v_rho += __ldg(&nl_values[nl_val_idx(FLD_RHO_IDX, kf, it, iv, n_nodes)]) * hz_it;
+                v_T   += __ldg(&nl_values[nl_val_idx(FLD_T_IDX,   kf, it, iv, n_nodes)]) * hz_it;
+                if (do_interp) {
+                    vd_rho += __ldg(&nl_deltas[nl_val_idx(FLD_RHO_IDX, kf, it, iv, n_nodes)]) * hz_it;
+                    vd_T   += __ldg(&nl_deltas[nl_val_idx(FLD_T_IDX,   kf, it, iv, n_nodes)]) * hz_it;
+                }
+            }
+            double hsz = h * sz;
+            P_rho += v_rho * hsz;
+            P_T   += v_T   * hsz;
+            if (do_interp) {
+                Pd_rho += vd_rho * hsz;
+                Pd_T   += vd_T   * hsz;
+            }
+        }
+    }
+
+    if (do_interp) {
+        P_rho -= Pd_rho * df;
+        P_T   -= Pd_T   * df;
+    }
+
+    ne   = fmax(central_density * P_rho * 1.0e20, 1.0e16);
+    Te_K = fmax(P_T * T_norm, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// radreactforce_kinetic: synchrotron / radiation-reaction force, forward Euler.
+// GPU port of radreactforce_kinetic (mod_radreactforce.f90).  Assumes the test
+// particle is an electron.  p_mom is the particle SoA momentum [AMU m/s]; it is
+// updated in place.  B is the cylindrical (R,Z,phi) magnetic field at the
+// particle; phi is the toroidal angle used for the cyl->cart transform.
+// ---------------------------------------------------------------------------
+__device__ __forceinline__
+void radreactforce_kinetic(const double B_cyl[3], double phi, double dt,
+                           double mass, double charge, double p_mom[3])
+{
+    const double m = mass * ATOMIC_MASS_UNIT;
+
+    // Momentum in SI units.
+    double p[3] = { p_mom[0] * ATOMIC_MASS_UNIT,
+                    p_mom[1] * ATOMIC_MASS_UNIT,
+                    p_mom[2] * ATOMIC_MASS_UNIT };
+
+    double Bxyz[3];
+    vector_cylindrical_to_cartesian(phi, B_cyl, Bxyz);
+    double Bnorm = sqrt(B_cyl[0]*B_cyl[0] + B_cyl[1]*B_cyl[1] + B_cyl[2]*B_cyl[2]);
+
+    double pnorm2 = p[0]*p[0] + p[1]*p[1] + p[2]*p[2];
+    double mc     = m * SPEED_OF_LIGHT;
+    double gamma  = sqrt(1.0 + pnorm2 / (mc * mc));
+
+    // Characteristic time (radreactforce_chartime).
+    double qC    = charge * EL_CHG;
+    double tau   = 6.0 * PI_VAL * EPS_ZERO_VAL * gamma * (mc * mc * mc)
+                 / (qC * qC * qC * qC * Bnorm * Bnorm);
+
+    // Perpendicular momentum component.
+    double Bnorm2 = Bnorm * Bnorm;
+    double pdotB  = Bxyz[0]*p[0] + Bxyz[1]*p[1] + Bxyz[2]*p[2];
+    double pperp[3] = { p[0] - Bxyz[0] * pdotB / Bnorm2,
+                        p[1] - Bxyz[1] * pdotB / Bnorm2,
+                        p[2] - Bxyz[2] * pdotB / Bnorm2 };
+    double pperp2 = pperp[0]*pperp[0] + pperp[1]*pperp[1] + pperp[2]*pperp[2];
+
+    // Apply RR-force and convert back to JOREK (AMU) units.
+    double fac = dt / tau;
+    for (int d = 0; d < 3; ++d) {
+        p[d] = p[d] - fac * (pperp[d] + p[d] * pperp2 / (mc * mc));
+        p_mom[d] = p[d] / ATOMIC_MASS_UNIT;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // volume_preserving_push: VPA integrator for a relativistic particle
 // All position/element data is modified in-place.
 // ---------------------------------------------------------------------------
@@ -1565,7 +1705,8 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
                             int flag_static, int flag_zero_dpsidt,
                             double F0, double t_norm, double t_jorek,
                             double mass, double time, double timestep,
-                            int &ifail
+                            int &ifail,
+                            int use_radreact                 // 1 = apply radiation-reaction force
 #if LUT_ACTIVE
                             , const int*    sh_lut_keys
                             , const double* sh_cache_v_flat
@@ -1667,6 +1808,14 @@ void volume_preserving_push(double x[3], double p_mom[3], double st[2],
     p_mom[0] = pm[0] * mc;
     p_mom[1] = pm[1] * mc;
     p_mom[2] = pm[2] * mc;
+
+    // --- Radiation-reaction force (forward Euler), applied to the momentum ---
+    // Matches volume_preserving_radiation_push_jorek: same push as above plus a
+    // radreactforce_kinetic call after the second half-step, using the
+    // cylindrical B at the half-step (B_field) and the half-step toroidal angle.
+    if (use_radreact) {
+        radreactforce_kinetic(B_field, x[2], timestep, mass, charge, p_mom);
+    }
 
     // Turn back from cartesian to cylindrical coordinates
     cartesian_to_cylindrical(half_xyz, half_cyl);

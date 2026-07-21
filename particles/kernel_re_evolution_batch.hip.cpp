@@ -5,6 +5,8 @@
 // Active when USE_BATCH_KERNEL = 1 in optimization_defines.h.
 #include "optimization_defines.h"
 #if USE_BATCH_KERNEL == 1
+#include <cstdio>
+#include <cstdlib>
 #include "particles/kernel_re_evolution_common.hip.hpp"
 
 #if LUT_VALUES_DELTAS == 1
@@ -441,7 +443,8 @@ void evolve_batch_kernel(
                                    flag_static, flag_zero_dpsidt,
                                    F0, t_norm, t_jorek,
                                    group_mass, sim_time, tstep_part_adj,
-                                   ifail
+                                   ifail,
+                                   0   // use_radreact: batch kernel has no ccoll/radreact support
 #if LUT_VALUES_DELTAS == 1
                                    , sh_lut_keys, sh_cache_v, sh_cache_d
 #endif
@@ -478,12 +481,25 @@ void evolve_batch_kernel(
 //                       HOST LAUNCH FUNCTION (Fortran-callable via bind(C))
 // ===========================================================================================
 
-// Called from Fortran as:  call launch_evolve_REs(sim, feedback_rhs, tstep_part_adj, nstep_part_adj)
+// Called from Fortran as:
+//   call launch_evolve_REs(sim, feedback_rhs, tstep_part_adj, nstep_part_adj, ccoll, re_params)
 // All fields of particle_sim are already filled on the host by Fortran.
 extern "C"
 void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
-                       double tstep_part_adj, int nstep_part_adj)
+                       double tstep_part_adj, int nstep_part_adj,
+                       ccoll_data_c h_ccoll, re_gpu_params_c re_params)
 {
+    // The small-angle collision / radiation-reaction physics is only wired into
+    // the split kernel strategy (kernel_re_evolution_split.hip.cpp).
+    if (re_params.re_ccoll != 0 || re_params.re_radreact != 0) {
+        if (sim.my_id == 0)
+            fprintf(stderr, "[launch_evolve_REs] ERROR: re_ccoll / re_radreact require "
+                    "the split kernel strategy (set USE_BATCH_KERNEL=0 in "
+                    "optimization_defines.h)\n");
+        exit(1);
+    }
+    (void)h_ccoll;
+
     // --- Unpack sim ---
     // Fields
     const node_list_SoA&    nl  = sim.fields.node_list;

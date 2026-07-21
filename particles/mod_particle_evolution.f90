@@ -34,6 +34,7 @@ module mod_particle_evolution
                                   dealloc_node_list_SoA,                &
                                   dealloc_element_list_SoA
     use mod_particle_types, only: particle_kinetic_relativistic
+    use mod_particle_types, only: ccoll_data_c, re_gpu_params_c
 #endif
     !$ use omp_lib
 
@@ -75,14 +76,20 @@ module mod_particle_evolution
     end interface
 
 #if USE_GPU
-    !> Interface to the HIP C function that launches the GPU kernel
+    !> Interface to the HIP C function that launches the GPU kernel.
+    !> ccoll_c carries HOST pointers to the L0/L1 collision table (ignored unless
+    !> re_ccoll); re_params_c carries the small-angle-collision / radiation-
+    !> reaction knobs and the pcg32 RNG seed.
     interface
-      subroutine launch_evolve_REs(sim_c, h_feedback_rhs, tstep_part_adj, nstep_part_adj) bind(C, name='launch_evolve_REs')
-        import :: c_double, c_int, c_ptr, particle_sim_c
-        type(particle_sim_c), value, intent(in) :: sim_c
-        type(c_ptr), value, intent(in)          :: h_feedback_rhs   ! TODO: check if intent(in) actually is needed
-        real(c_double), value, intent(in)       :: tstep_part_adj
-        integer(c_int), value, intent(in)       :: nstep_part_adj
+      subroutine launch_evolve_REs(sim_c, h_feedback_rhs, tstep_part_adj, nstep_part_adj, &
+                                   ccoll_c, re_params_c) bind(C, name='launch_evolve_REs')
+        import :: c_double, c_int, c_ptr, particle_sim_c, ccoll_data_c, re_gpu_params_c
+        type(particle_sim_c), value, intent(in)  :: sim_c
+        type(c_ptr), value, intent(in)           :: h_feedback_rhs   ! TODO: check if intent(in) actually is needed
+        real(c_double), value, intent(in)        :: tstep_part_adj
+        integer(c_int), value, intent(in)        :: nstep_part_adj
+        type(ccoll_data_c), value, intent(in)    :: ccoll_c
+        type(re_gpu_params_c), value, intent(in) :: re_params_c
       end subroutine launch_evolve_REs
     end interface
 #endif
@@ -420,7 +427,12 @@ contains
   subroutine evolve_REs_gpu(sim, group_num, feedback_rhs, tstep_part_adj, nstep_part_adj, num_gpu_particles)
     use mod_settings, only: n_tor, n_degrees, n_vertex_max, n_coord_tor
     use phys_module, only: F0, mode_coord, tstep
+    use phys_module, only: CENTRAL_DENSITY, part_group_configs
     use mod_fields_linear, only: jorek_fields_interp_linear
+    use mod_ccoll_relativistic, only: ccoll_data, ccoll_init, ccoll_deallocate
+    use mod_random_seed, only: random_seed
+    use constants, only: K_BOLTZ, MU_ZERO, ATOMIC_MASS_UNIT
+    use mpi
     implicit none
     class(particle_sim), target, intent(inout) :: sim
     integer, intent(in) :: group_num
@@ -437,6 +449,16 @@ contains
     integer(c_int), target :: mode_coord_c(n_coord_tor)
     real(c_double) :: tstep_part_adj_c
     integer(c_int) :: nstep_part_adj_c
+
+    ! Small-angle collision / radiation-reaction parameters for the GPU kernels.
+    ! The L0/L1 table backing arrays must stay allocated until after the C call.
+    type(ccoll_data_c)    :: ccoll_c
+    type(re_gpu_params_c) :: re_params_c
+    type(ccoll_data)      :: dat
+    real(c_double), allocatable, target :: lut_log10_u(:), lut_log10_th(:), lut_L0(:), lut_L1(:)
+    integer :: lut_nu, lut_nth
+    integer :: seed, ierr
+    logical :: do_ccoll, do_radreact
 
     ! Feedback buffer; layout chosen for GPU coalescing (see allocation below).
     ! 3 vars for P_par, P_perp, j_Phi.
@@ -552,6 +574,58 @@ contains
     tstep_part_adj_c = real(tstep_part_adj, c_double)
     nstep_part_adj_c = int(nstep_part_adj, c_int)
 
+    ! --- Build small-angle-collision / radiation-reaction parameter structs ---
+    ! Flags mirror the CPU path in evolve_REs (part_group_configs). Partial
+    ! screening is not supported on GPU.
+    do_ccoll    = part_group_configs(group_num)%use_ccoll
+    do_radreact = part_group_configs(group_num)%use_radreact
+    if (part_group_configs(group_num)%use_partial_screening) then
+      if (sim%my_id .eq. 0) write(*,*) 'ERROR: use_partial_screening is not supported on GPU; ', &
+        'set frac_gpu_particles < 1 to run it on CPU, or disable it.'
+      call MPI_ABORT(MPI_COMM_WORLD, -1, ierr)
+    end if
+
+    ! Seed: draw once on rank 0 and broadcast (identical scheme to the CPU
+    ! evolve_REs rng_ccoll setup, so GPU and CPU streams are comparable).
+    if (sim%my_id .eq. 0) seed = random_seed()
+    call MPI_Bcast(seed, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+
+    re_params_c%central_density = real(CENTRAL_DENSITY, c_double)
+    ! Non-TiTe branch of calc_NjTj: Te = P_T / (2*K_BOLTZ*MU_ZERO*n_ref*1e20).
+    re_params_c%T_norm          = real(1.d0/(2.d0*K_BOLTZ*MU_ZERO*CENTRAL_DENSITY*1.d20), c_double)
+    re_params_c%rng_seed        = int(seed, c_int64_t)
+    re_params_c%re_ccoll        = merge(1_c_int, 0_c_int, do_ccoll)
+    re_params_c%re_radreact     = merge(1_c_int, 0_c_int, do_radreact)
+
+    ! Build the L0/L1 table struct only when small-angle collisions are active.
+    ! The log10 grids are precomputed here once (the CPU interp recomputes them
+    ! per call); L0/L1 are copied into contiguous TARGET arrays for c_loc.
+    if (do_ccoll) then
+      call ccoll_init('ccolldata', dat)
+      lut_nu  = size(dat%u)
+      lut_nth = size(dat%theta)
+      allocate(lut_log10_u(lut_nu), lut_log10_th(lut_nth))
+      allocate(lut_L0(lut_nu*lut_nth), lut_L1(lut_nu*lut_nth))
+      lut_log10_u  = real(log10(dat%u), c_double)
+      lut_log10_th = real(log10(dat%theta), c_double)
+      lut_L0 = real(reshape(dat%L0, [lut_nu*lut_nth]), c_double)
+      lut_L1 = real(reshape(dat%L1, [lut_nu*lut_nth]), c_double)
+      ccoll_c%nu          = int(lut_nu, c_int)
+      ccoll_c%nth         = int(lut_nth, c_int)
+      ccoll_c%log10_u     = c_loc(lut_log10_u(1))
+      ccoll_c%log10_theta = c_loc(lut_log10_th(1))
+      ccoll_c%L0          = c_loc(lut_L0(1))
+      ccoll_c%L1          = c_loc(lut_L1(1))
+      ccoll_c%u_min       = real(dat%u(1), c_double)
+      ccoll_c%u_max       = real(dat%u(lut_nu), c_double)
+      ccoll_c%th_min      = real(dat%theta(1), c_double)
+      ccoll_c%th_max      = real(dat%theta(lut_nth), c_double)
+      ccoll_c%ma          = real(sim%groups(group_num)%mass * ATOMIC_MASS_UNIT, c_double)
+      ccoll_c%qa          = sim_c%group%charge
+      ccoll_c%mb_ion      = real(dat%mi(1), c_double)
+      ccoll_c%qb_ion      = real(dat%Z0(1), c_double)
+    end if
+
     ! --- Logging Information ---
     if (sim%my_id .eq. 0) then
       write(*,*) 'INFO: REs evolution executed on     : GPU'
@@ -576,8 +650,10 @@ contains
       write(*,*) '      neighbor preload = ', LUT_NEIGHBOR_PRELOAD
 #endif
       write(*,*) 'INFO: Particle counting-sort every kinetic step'
+      write(*,*) 'INFO: RE small-angle collisions     : ', do_ccoll
+      write(*,*) 'INFO: RE radiation-reaction force   : ', do_radreact
     endif
-    
+
 
     ! --- Call GPU kernel ---
 #if GPU_DEBUG
@@ -598,7 +674,8 @@ contains
     end if
 #endif
     if (sim%my_id == 0) write(*,*) 'Launching evolve_REs on GPU...'
-    call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj_c, nstep_part_adj_c)
+    call launch_evolve_REs(sim_c, c_loc(fb_c(1,1,1,1,1)), tstep_part_adj_c, nstep_part_adj_c, &
+                           ccoll_c, re_params_c)
     if (sim%my_id == 0) write(*,*) 'GPU evolve_REs completed.'
 
 #if GPU_DEBUG
@@ -684,6 +761,11 @@ contains
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Deallocating element_list SoA backing arrays'
   #endif
     deallocate(el_vert_flat, el_neigh_flat, el_size_flat)
+    ! L0/L1 table backing arrays (kept alive until after the C call above).
+    if (do_ccoll) then
+      deallocate(lut_log10_u, lut_log10_th, lut_L0, lut_L1)
+      call ccoll_deallocate(dat)
+    end if
   #if GPU_DEBUG
     if (sim%my_id == 0) write(*,*) '[GPU_DEBUG Fortran] Cleanup done'
   #endif
