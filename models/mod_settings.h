@@ -2,12 +2,12 @@
 Setting parameters for the JOREK code.
 */
 
-#define n_tor               7           /* number of toroidal harmonics */
+#define n_tor               3           /* number of toroidal harmonics */
 #define n_coord_tor         1           /* number of toroidal harmonics in (R, Z) coordinates */
 #define l_pol_domm          0           /* highest poloidal mode in the Dommaschk potentials */
 #define n_period            1           /* periodicity in toroidal direction */
 #define n_coord_period      1           /* periodicity of the device in toroidal direction: equivalent to number of field periods */
-#define n_plane             12          /* number of toroidal angles */
+#define n_plane             4          /* number of toroidal angles */
 #define n_order             3           /* polynomial order of the finite element basis */
 #define n_nodes_max         90001       /* maximum number of nodes */
 #define n_elements_max      90001       /* maximum number of elements */

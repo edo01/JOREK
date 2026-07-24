@@ -3,6 +3,8 @@
 // kernel_re_evolution_common.hip.hpp.
 // Active when USE_BATCH_KERNEL = 0 in optimization_defines.h.
 #include "optimization_defines.h"
+#include <cstdio>   // ccoll MODE-B debug dump (CCOLL_DUMP==1)
+#include <vector>   // ccoll MODE-B debug dump host buffer (CCOLL_DUMP==1)
 #if USE_BATCH_KERNEL == 0
 #include "particles/kernel_re_evolution_common.hip.hpp"
 
@@ -337,7 +339,10 @@ void evolve_push_kernel(
     // ignored unless the corresponding params flag is set)
     pcg32_state* __restrict__ rng_states,
     ccoll_data_c ccoll,
-    re_gpu_params_c params)
+    re_gpu_params_c params,
+    // DEBUG (ccoll validation, MODE B): per-particle uin/uout dump buffer,
+    // 6 doubles per particle. Null in production runs -> no effect.
+    double* __restrict__ du_dump)
 {
     const int  tid      = blockIdx.x * blockDim.x + threadIdx.x;
     const bool do_ccoll    = (params.re_ccoll    != 0);
@@ -381,7 +386,8 @@ void evolve_push_kernel(
                 double thi = Te_K * K_BOLTZ_VAL / (ccoll.mb_ion   * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
                 // Single main ion species, quasineutral: ni = ne, Ti = Te.
                 ccoll_kinetic_push_gpu(ccoll, ne, the, ne, thi,
-                                       tstep_part_adj, group_mass, pm, rng);
+                                       tstep_part_adj, group_mass, pm, rng,
+                                       du_dump ? du_dump + 6 * (size_t)j : nullptr);
             }
         }
 
@@ -725,6 +731,22 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     }
     // ---------------------------------------------------------------------
 
+    // DEBUG (ccoll validation, MODE B): when CCOLL_DUMP==1 and collisions are on,
+    // allocate a uin/uout buffer (6 doubles per particle) for EVERY kinetic step
+    // -- step k writes slice [k*num_particles .. (k+1)*num_particles) -- so the
+    // dump appends across steps, matching the CPU path (which appends per step).
+    // Dumped to CCOLL_DUMP_GPU_FILE".rank<id>" after the run.  Null (no effect)
+    // in production builds.
+    double* d_du_dump = nullptr;
+#if CCOLL_DUMP == 1
+    if (do_ccoll && nstep_particles > 0 && num_particles > 0) {
+        const size_t sz_du =
+            (size_t)num_particles * (size_t)nstep_particles * 6 * sizeof(double);
+        HIP_CHECK(hipMalloc(&d_du_dump, sz_du));
+        HIP_CHECK(hipMemset(d_du_dump, 0, sz_du));  // untouched rows stay zero -> filtered
+    }
+#endif
+
     // Running buffer pointers: `curr` holds the latest state, `alt` is the spare set
     // (push output / sort scratch).  Both follow the pointer swaps below.
     double *d_x_curr = d_x, *d_p_curr = d_p, *d_st_curr = d_st, *d_weight_curr = d_weight;
@@ -807,7 +829,9 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, t_jorek, sim_time, group_mass, tstep_part_adj,
             num_particles, d_mode_coord,
-            d_rng, d_ccoll, re_params);
+            d_rng, d_ccoll, re_params,
+            // MODE-B dump: step k writes its own slice so steps don't overwrite.
+            d_du_dump ? d_du_dump + (size_t)6 * k * num_particles : nullptr);
         HIP_CHECK(hipGetLastError());
 
         // Join: stream_proj waits for push to finish before the next step's fork.
@@ -854,6 +878,36 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipMemcpy(part->i_elm,   d_i_elm_curr,   sz_i_elm,    hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(part->weight,  d_weight_curr,  sz_weight,   hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_feedback_rhs,d_feedback_rhs,    sz_feedback, hipMemcpyDeviceToHost));
+
+    // DEBUG (ccoll validation, MODE B): dump per-particle uin/uout to a text file
+    // that benchmarks/small_angle_collision/compare_ccoll_moments.py consumes.
+#if CCOLL_DUMP == 1
+    if (d_du_dump) {
+        // Full buffer = all nstep_particles steps, each num_particles*6 doubles.
+        const size_t nrows = (size_t)num_particles * (size_t)nstep_particles;
+        std::vector<double> h_du(nrows * 6);
+        HIP_CHECK(hipMemcpy(h_du.data(), d_du_dump,
+                            h_du.size() * sizeof(double), hipMemcpyDeviceToHost));
+        char fn[1200];
+        snprintf(fn, sizeof(fn), "%s.rank%d", CCOLL_DUMP_GPU_FILE, sim.my_id);
+        FILE* fp = fopen(fn, "w");
+        if (fp) {
+            for (size_t i = 0; i < nrows; ++i) {
+                const double* r = &h_du[i * 6];
+                // Skip untouched rows (lost/inactive particles never written by
+                // the push leave their uin==uout==0; a genuine null collision is
+                // astronomically unlikely, so this is a safe filter).
+                if (r[0]==0.0 && r[1]==0.0 && r[2]==0.0 &&
+                    r[3]==0.0 && r[4]==0.0 && r[5]==0.0) continue;
+                fprintf(fp, "%24.16E %24.16E %24.16E %24.16E %24.16E %24.16E\n",
+                        r[0], r[1], r[2], r[3], r[4], r[5]);
+            }
+            fclose(fp);
+        } else {
+            fprintf(stderr, "[ccoll dump] rank %d: cannot open %s\n", sim.my_id, fn);
+        }
+    }
+#endif
 #if GPU_DEBUG == 1
     HIP_CHECK(hipEventRecord(t_stop, 0));
     HIP_CHECK(hipEventSynchronize(t_stop));
@@ -925,6 +979,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_stg_t));
     HIP_CHECK(hipFree(d_stg_phi));
     HIP_CHECK(hipFree(d_stg_w));
+    if (d_du_dump) HIP_CHECK(hipFree(d_du_dump));
     if (d_rng)     HIP_CHECK(hipFree(d_rng));
     if (d_lut_lu)  HIP_CHECK(hipFree(d_lut_lu));
     if (d_lut_lth) HIP_CHECK(hipFree(d_lut_lth));

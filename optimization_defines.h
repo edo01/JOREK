@@ -46,6 +46,11 @@
  * LUT_NEIGHBOR_PRELOAD:  0 = cache base (step-0) elements only; 1 = also fill leftover slots with mesh neighbours
  *                        to capture step-1 particle drift. Boundary edges (neighbour=0) are skipped.
  * LUT_DEBUG:             0 = off, 1 = print hit/miss counters per batch (PROJ + PUSH).
+ *
+ * CCOLL_DUMP:            0 = off, 1 = dump per-particle small-angle-collision uin/uout for
+ *                        CPU-vs-GPU statistical validation (benchmarks/small_angle_collision/
+ *                        compare_ccoll_moments.py). CPU writes CCOLL_DUMP_CPU_FILE; GPU writes
+ *                        CCOLL_DUMP_GPU_FILE".rank<id>". Debug/validation only -- keep 0 for production.
  */
 
 #define USE_GPU 1
@@ -75,3 +80,8 @@
 #define LUT_DEBUG            0
 #define LUT_N_SLOTS          8
 #define LUT_NEIGHBOR_PRELOAD 1
+
+/* CCOLL VALIDATION DUMP (debug only) */
+#define CCOLL_DUMP 0
+#define CCOLL_DUMP_CPU_FILE "ccoll_du.cpu"
+#define CCOLL_DUMP_GPU_FILE "ccoll_du.gpu"

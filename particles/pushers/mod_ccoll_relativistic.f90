@@ -5,6 +5,7 @@
 !> Comp. Phys. Comm.
 !> For the partial screening operator, see PhD thesis by Linnea Hesslow.
 !<
+#include "optimization_defines.h"
 module mod_ccoll_relativistic
   use data_structure
   use constants
@@ -36,6 +37,15 @@ module mod_ccoll_relativistic
      real*8 :: m_i_over_m_imp                      !< Main ion mass / impurity species mass
   end type ccoll_data
 
+#if CCOLL_DUMP == 1
+  ! DEBUG (ccoll validation, MODE B): per-particle uin/uout dump.
+  ! newunit= always returns a NEGATIVE unit number, so we track "opened" with a
+  ! separate logical rather than the sign of the unit.
+  integer, save :: ccoll_dump_unit = 0
+  logical, save :: ccoll_dump_ready = .false.  ! .true. once the file is open
+  logical, save :: ccoll_dump_failed = .false. ! .true. if the open failed once
+#endif
+
   private
 
   public :: ccoll_data, ccoll_compute_L0L1table, ccoll_write_L0L1table, ccoll_read_L0L1table, &
@@ -45,6 +55,38 @@ module mod_ccoll_relativistic
        ccoll_kinetic_relativistic_push_partialscreening, ccoll_none
 
 contains
+
+  !> DEBUG helper (ccoll validation, MODE B): append one "uin(3) uout(3)" row
+  !> per particle to CCOLL_DUMP_CPU_FILE.  Compiled out entirely unless
+  !> CCOLL_DUMP==1 in optimization_defines.h (then it is a no-op stub, removed by
+  !> the compiler).  Writes one file PER MPI RANK -- CCOLL_DUMP_CPU_FILE//".rank<id>"
+  !> -- mirroring the GPU path, so ranks never race on a shared file.  Intended for
+  !> a short run (e.g. one kinetic step); OpenMP threads within a rank interleave
+  !> (serialized by the critical), but row order is irrelevant to the moment test.
+  subroutine ccoll_dump_du(uin, uout)
+    use mpi, only: MPI_Comm_rank, MPI_COMM_WORLD
+    real*8, intent(in) :: uin(3), uout(3)
+#if CCOLL_DUMP == 1
+    integer :: ios, my_rank, ierr
+    character(len=256) :: fname
+
+    !$omp critical (ccoll_dump)
+    if (.not. ccoll_dump_ready .and. .not. ccoll_dump_failed) then  ! first call: open
+       call MPI_Comm_rank(MPI_COMM_WORLD, my_rank, ierr)
+       write(fname, '(A,".rank",I0)') CCOLL_DUMP_CPU_FILE, my_rank
+       open(newunit=ccoll_dump_unit, file=trim(fname), status="unknown", &
+            position="append", action="write", iostat=ios)
+       if (ios == 0) then
+          ccoll_dump_ready = .true.
+       else
+          ccoll_dump_failed = .true.       ! open failed -> stay disabled
+       end if
+    end if
+    if (ccoll_dump_ready) &
+       write(ccoll_dump_unit, '(6ES24.16)') uin, uout
+    !$omp end critical (ccoll_dump)
+#endif
+  end subroutine ccoll_dump_du
 
   !> Initializes data for collision evaluation
   !> Parameters and tabulated values are stored in the returned struct.
@@ -460,9 +502,16 @@ contains
 
     call ccoll_kinetic_relativistic_explicitpush(dat, mass * ATOMIC_MASS_UNIT, prt%q, &
          ne, the, ni, thi, dt, rnd, prt%p / (mass * SPEED_OF_LIGHT), pout)
+
+    ! DEBUG (ccoll validation, MODE B): dump per-particle uin/uout of the
+    ! collision push so benchmarks/small_angle_collision/compare_ccoll_moments.py
+    ! can compare CPU vs GPU distributions.  Enabled only when the environment
+    ! variable JOREK_CCOLL_DUMP is set to a filename; otherwise zero overhead.
+    call ccoll_dump_du(prt%p / (mass * SPEED_OF_LIGHT), pout)
+
     prt%p = pout * (mass * SPEED_OF_LIGHT)
     deallocate(ni, thi)
-    
+
   end subroutine ccoll_kinetic_relativistic_push
   
   !> Computes the value for particle momentum after collisions with
