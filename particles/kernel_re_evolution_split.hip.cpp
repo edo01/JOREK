@@ -302,7 +302,7 @@ void proj_accumulate_kernel(
 // state on stream_proj — the separate output buffer removes the read/write
 // hazard that an in-place push would create against proj_stage's reads.
 // ---------------------------------------------------------------------------
-__global__
+__global__ __launch_bounds__(SP_BLOCK_SIZE, 2)
 void evolve_push_kernel(
     // Particle SoA — INPUT (current buffers, read-only)
     const double* __restrict__ p_x_in,
@@ -334,22 +334,12 @@ void evolve_push_kernel(
     double sim_time, double group_mass, double tstep_part_adj,
     int num_particles,
     const int* __restrict__ mode_coord,
-    // Collision / radiation-reaction physics (device pointers inside ccoll;
-    // ignored unless the corresponding params flag is set)
-    pcg32_state* __restrict__ rng_states,
-    ccoll_data_c ccoll,
-    re_gpu_params_c params,
-    // DEBUG (ccoll validation, MODE B): per-particle uin/uout dump buffer,
-    // 6 doubles per particle. Null in production runs -> no effect.
-    double* __restrict__ du_dump)
+    // Radiation-reaction flag (the small-angle Coulomb collisions are applied by
+    // the separate evolve_collision_kernel below, on the push output buffers).
+    re_gpu_params_c params)
 {
     const int  tid      = blockIdx.x * blockDim.x + threadIdx.x;
-    const bool do_ccoll    = (params.re_ccoll    != 0);
     const int  use_radreact = params.re_radreact;
-
-    // Load this worker's RNG stream once per kernel launch (16 B round-trip).
-    pcg32_state rng;
-    if (do_ccoll) rng = rng_states[tid];
 
     // Grid-stride loop over particles (see proj_stage_kernel).
     const int sp_stride = gridDim.x * blockDim.x;
@@ -370,34 +360,110 @@ void evolve_push_kernel(
                                    F0, t_norm, t_jorek,
                                    group_mass, sim_time, tstep_part_adj,
                                    ifail, use_radreact);
-
-            // Small-angle Coulomb collisions on the pushed momentum (same
-            // ordering as the CPU path: push, then collide).
-            if (do_ccoll && i_elm > 0) {
-                double ne, Te_K;
-                calc_neTe(nl_values, nl_deltas, el_vertex, el_size,
-                          n_elements, n_nodes,
-                          time_now, time_prev, t_jorek, flag_static,
-                          i_elm, st, x[2], sim_time,
-                          params.central_density, params.T_norm,
-                          ne, Te_K);
-                double the = Te_K * K_BOLTZ_VAL / (MASS_ELECTRON * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
-                double thi = Te_K * K_BOLTZ_VAL / (ccoll.mb_ion   * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
-                // Single main ion species, quasineutral: ni = ne, Ti = Te.
-                ccoll_kinetic_push_gpu(ccoll, ne, the, ne, thi,
-                                       tstep_part_adj, group_mass, pm, rng,
-                                       du_dump ? du_dump + 6 * (size_t)j : nullptr);
-            }
         }
 
         // Always write to output buffers (captures lost-particle state too).
+        // The small-angle Coulomb collision then updates p in place on these
+        // buffers (evolve_collision_kernel), so the momentum written here is the
+        // post-push, pre-collision value.
         p_x_out[idx2(j, 0, num_particles)]  = x[0];  p_x_out[idx2(j, 1, num_particles)]  = x[1];  p_x_out[idx2(j, 2, num_particles)]  = x[2];
         p_p_out[idx2(j, 0, num_particles)]  = pm[0]; p_p_out[idx2(j, 1, num_particles)]  = pm[1]; p_p_out[idx2(j, 2, num_particles)]  = pm[2];
         p_st_out[idx2(j, 0, num_particles)] = st[0]; p_st_out[idx2(j, 1, num_particles)] = st[1];
         p_i_elm_out[j] = i_elm;
     }
+}
 
-    if (do_ccoll) rng_states[tid] = rng;
+
+// ---------------------------------------------------------------------------
+// evolve_collision_kernel: small-angle Coulomb collisions, split out of the
+// push so the push keeps its lean (baseline) register footprint and this
+// register-heavy ccoll math (Bessel/L0-L1/coeffs + pcg32) runs as its own
+// kernel at its own occupancy.
+//
+// Runs AFTER evolve_push_kernel on the SAME buffers the push just wrote (the
+// _alt buffers, which become _curr after the step's swap).  It reads the
+// post-push momentum, collides it, and writes the momentum back IN PLACE.  It
+// touches ONLY p (read+write); x/st/i_elm are read-only inputs (st + x[2]=phi +
+// i_elm feed calc_neTe's ne/Te interpolation) and are left exactly as the push
+// wrote them.  Lost particles (i_elm <= 0) are skipped, leaving the push's
+// output untouched — same effect as the fused kernel's `if (i_elm > 0)` guard.
+//
+// Data dependency on the push: p (read/write), st (read), x[2]=phi (read),
+// i_elm (read).  Added global traffic vs. the fused kernel ~= p read + st read +
+// phi read + i_elm read + p write per live particle.
+// ---------------------------------------------------------------------------
+__global__ __launch_bounds__(SP_BLOCK_SIZE, 2)
+void evolve_collision_kernel(
+    // Particle SoA — post-push buffers.  p is updated in place; x/st/i_elm read-only.
+    const double* __restrict__ p_x,
+    double*       __restrict__ p_p,
+    const double* __restrict__ p_st,
+    const int*    __restrict__ p_i_elm,
+    // Field node list SoA (for calc_neTe)
+    const double* __restrict__ nl_values,
+    const double* __restrict__ nl_deltas,
+    int n_nodes,
+    // Field element list SoA (for calc_neTe)
+    const int*    __restrict__ el_vertex,
+    const double* __restrict__ el_size,
+    int n_elements,
+    // Field time parameters
+    double time_now, double time_prev,
+    int flag_static,
+    // Physics / simulation parameters
+    double t_jorek, double sim_time, double group_mass, double tstep_part_adj,
+    int num_particles,
+    // Collision physics: per-thread RNG streams + L0/L1 table + runtime params.
+    pcg32_state* __restrict__ rng_states,
+    ccoll_data_c ccoll,
+    re_gpu_params_c params
+#if CCOLL_DUMP == 1
+    // DEBUG (ccoll validation, MODE B): per-particle uin/uout dump buffer.
+    // Present only when CCOLL_DUMP==1 so production carries no extra arg.
+    , double* __restrict__ du_dump
+#endif
+    )
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Load this worker's RNG stream once per kernel launch (16 B round-trip).
+    pcg32_state rng = rng_states[tid];
+
+    const int sp_stride = gridDim.x * blockDim.x;
+    for (int j = tid; j < num_particles; j += sp_stride) {
+        int i_elm = p_i_elm[j];
+        if (i_elm <= 0) continue;   // lost particle: leave push output as is
+
+        double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
+        double phi   =  p_x[idx2(j, 2, num_particles)];   // only x[2]=phi is needed
+        double pm[3] = {p_p[idx2(j, 0, num_particles)],
+                        p_p[idx2(j, 1, num_particles)],
+                        p_p[idx2(j, 2, num_particles)]};
+
+        double ne, Te_K;
+        calc_neTe(nl_values, nl_deltas, el_vertex, el_size,
+                  n_elements, n_nodes,
+                  time_now, time_prev, t_jorek, flag_static,
+                  i_elm, st, phi, sim_time,
+                  params.central_density, params.T_norm,
+                  ne, Te_K);
+        double the = Te_K * K_BOLTZ_VAL / (MASS_ELECTRON * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
+        double thi = Te_K * K_BOLTZ_VAL / (ccoll.mb_ion   * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
+        // Single main ion species, quasineutral: ni = ne, Ti = Te.
+        ccoll_kinetic_push_gpu(ccoll, ne, the, ne, thi,
+                               tstep_part_adj, group_mass, pm, rng
+#if CCOLL_DUMP == 1
+                               , du_dump ? du_dump + 6 * (size_t)j : nullptr
+#endif
+                               );
+
+        // Write the collided momentum back in place (only p is modified).
+        p_p[idx2(j, 0, num_particles)] = pm[0];
+        p_p[idx2(j, 1, num_particles)] = pm[1];
+        p_p[idx2(j, 2, num_particles)] = pm[2];
+    }
+
+    rng_states[tid] = rng;
 }
 
 
@@ -828,10 +894,31 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             time_now, time_prev, flag_static, flag_zero_dp,
             F0, t_norm, t_jorek, sim_time, group_mass, tstep_part_adj,
             num_particles, d_mode_coord,
-            d_rng, d_ccoll, re_params,
-            // MODE-B dump: step k writes its own slice so steps don't overwrite.
-            d_du_dump ? d_du_dump + (size_t)6 * k * num_particles : nullptr);
+            re_params);
         HIP_CHECK(hipGetLastError());
+
+        // Collision kernel: small-angle Coulomb collisions on the push output.
+        // Runs on stream_push after the push (same stream => ordered, reads the
+        // just-written momentum), updating p in place on the alt buffers before
+        // the swap.  Split out of the push so the push keeps its lean register
+        // footprint and this register-heavy ccoll math runs at its own occupancy.
+        if (do_ccoll) {
+            hipLaunchKernelGGL(evolve_collision_kernel,
+                dim3(grid_size), dim3(SP_BLOCK_SIZE), 0, stream_push,
+                d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt,
+                d_nl_values, d_nl_deltas, n_nodes,
+                d_el_vertex, d_el_size, n_elements,
+                time_now, time_prev, flag_static,
+                t_jorek, sim_time, group_mass, tstep_part_adj,
+                num_particles,
+                d_rng, d_ccoll, re_params
+#if CCOLL_DUMP == 1
+                // MODE-B dump: step k writes its own slice so steps don't overwrite.
+                , d_du_dump ? d_du_dump + (size_t)6 * k * num_particles : nullptr
+#endif
+                );
+            HIP_CHECK(hipGetLastError());
+        }
 
         // Join: stream_proj waits for push to finish before the next step's fork.
         HIP_CHECK(hipEventRecord(join_event, stream_push));

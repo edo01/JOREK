@@ -346,11 +346,14 @@ __device__
 void ccoll_kinetic_push_gpu(const ccoll_data_c& dat,
                             double ne, double the, double ni, double thi,
                             double dt, double group_mass, double pm[3],
-                            pcg32_state& rng,
-                            // DEBUG (ccoll validation, MODE B): when non-null,
-                            // write uin(3),uout(3) of this collision to
-                            // du_dump[0..5]. Null in production -> no effect.
-                            double* du_dump = nullptr)
+                            pcg32_state& rng
+#if CCOLL_DUMP == 1
+                            // DEBUG (ccoll validation, MODE B): per-particle
+                            // uin/uout dump buffer. Present only when
+                            // CCOLL_DUMP==1 so production carries no extra arg.
+                            , double* du_dump
+#endif
+                            )
 {
     double mc = group_mass * SPEED_OF_LIGHT;
     double uin[3] = { pm[0] / mc, pm[1] / mc, pm[2] / mc };
@@ -396,8 +399,10 @@ void ccoll_kinetic_push_gpu(const ccoll_data_c& dat,
     pm[1] = uout[1] * mc;
     pm[2] = uout[2] * mc;
 
+#if CCOLL_DUMP == 1
     if (du_dump) {
         du_dump[0] = uin[0];  du_dump[1] = uin[1];  du_dump[2] = uin[2];
         du_dump[3] = uout[0]; du_dump[4] = uout[1]; du_dump[5] = uout[2];
     }
+#endif
 }
