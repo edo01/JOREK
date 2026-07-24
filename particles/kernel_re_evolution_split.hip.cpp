@@ -18,7 +18,6 @@ static_assert(SP_BLOCK_SIZE > 0 && SP_BLOCK_SIZE % 64 == 0 && SP_BLOCK_SIZE <= 1
               "SP_BLOCK_SIZE must be a positive multiple of 64 (warp/wavefront portable), <= 1024");
 static_assert(PARTICLES_PER_THREAD >= 1,
               "PARTICLES_PER_THREAD must be >= 1");
-#define SP_MIN_BLOCKS_PER_CU (512 / SP_BLOCK_SIZE > 0 ? 512 / SP_BLOCK_SIZE : 1)
 
 // ===========================================================================================
 //                                  MAIN HIP KERNEL
@@ -49,7 +48,7 @@ static_assert(PARTICLES_PER_THREAD >= 1,
 // (i_elm <= 0) write zero weight so phase 2 can sum them harmlessly.
 // Launched before evolve_push_kernel on the same stream, so it reads pre-push state.
 // ---------------------------------------------------------------------------
-__global__ __launch_bounds__(SP_BLOCK_SIZE, SP_MIN_BLOCKS_PER_CU)
+__global__ __launch_bounds__(SP_BLOCK_SIZE, S_MIN_BLOCKS_PER_CU)
 void proj_stage_kernel(
     // Particle SoA — read-only
     const double* __restrict__ p_x,
@@ -303,7 +302,7 @@ void proj_accumulate_kernel(
 // state on stream_proj — the separate output buffer removes the read/write
 // hazard that an in-place push would create against proj_stage's reads.
 // ---------------------------------------------------------------------------
-__global__ __launch_bounds__(SP_BLOCK_SIZE, SP_MIN_BLOCKS_PER_CU)
+__global__
 void evolve_push_kernel(
     // Particle SoA — INPUT (current buffers, read-only)
     const double* __restrict__ p_x_in,

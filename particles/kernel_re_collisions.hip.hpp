@@ -361,7 +361,6 @@ void ccoll_kinetic_push_gpu(const ccoll_data_c& dat,
     double dW[3] = { sqrt(dt) * pcg32_next_pm1(rng),
                      sqrt(dt) * pcg32_next_pm1(rng),
                      sqrt(dt) * pcg32_next_pm1(rng) };
-    // double dW[3] = { sqrt(dt), -sqrt(dt), sqrt(dt) };
 
     double u = sqrt(uin[0]*uin[0] + uin[1]*uin[1] + uin[2]*uin[2]);
     if (u <= 0.0) return;
