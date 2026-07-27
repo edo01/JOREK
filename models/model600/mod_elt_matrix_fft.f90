@@ -2084,7 +2084,7 @@ do i=1,n_vertex_max
                   Bgrad_rhoimp_rhoimp   = ( rhoimp_x * ps0_y - rhoimp_y * ps0_x ) / BigR
                   Bgrad_rhoimp_rhoimp_n = ( F0 / BigR * rhoimp_p ) / BigR
                   Bgrad_vpar_psi      = ( vpar0_x  * psi_y - vpar0_y  * psi_x ) / BigR
-                  Bgrad_vpar_vpar       = ( vpar_x * ps0_y - vpar_y * ps0_y ) / BigR
+                  Bgrad_vpar_vpar       = ( vpar_x * ps0_y - vpar_y * ps0_x ) / BigR
 
                   BB2_psi            = 2.d0 * (psi_x * ps0_x + psi_y * ps0_y ) /BigR**2
 
