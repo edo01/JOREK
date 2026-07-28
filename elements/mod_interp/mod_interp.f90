@@ -4,6 +4,7 @@ use data_structure
 use mod_basisfunctions
 use mod_parameters, only: n_period, n_coord_period, n_tor, n_coord_tor, n_degrees
 use phys_module, only: mode, mode_coord
+use, intrinsic :: iso_c_binding, only: c_double
 implicit none
 private
 public :: interp !< interp a specific harmonic in finite elements
@@ -17,6 +18,19 @@ public :: interp_PRZP !< interp variable + pos at values or deltas at a given (s
 public :: interp_gvec !< interpolate equilibrium parameters imported from GVEC
 public :: sincosperiod_moivre, mode_moivre !< public for regtesting, used by interp_PRZ
 public :: interp_PRZ_combined !< same as interp, but for any variable, including R and Z
+
+!> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
+!> Scalars are passed by value, as in ::basisfunctions_2D_1_T.
+interface
+  pure subroutine sincosperiod_moivre_explicit(phi,HZ,dHZ,n_tor_in,n_period_in) &
+      bind(C, name="jgx_host_sincosperiod_moivre_explicit")
+    import :: c_double, c_int
+    implicit none
+    real(c_double), value, intent(in) :: phi
+    integer(c_int), value, intent(in) :: n_tor_in,n_period_in
+    real(c_double), intent(out)       :: HZ(n_tor_in), dHZ(n_tor_in)
+  end subroutine
+end interface
 
 interface interp
   module procedure interp_2,interp_1,interp_0_single_harmonic
@@ -37,6 +51,17 @@ end interface interp_PRZ
 interface interp_PRZP
   module procedure interp_PRZP_0, interp_PRZP_1, interp_PRZP_2
 end interface interp_PRZP
+
+!> Moivre series: the default versions use the module parameters n_tor/n_period,
+!> the explicit versions take them as arguments (used by the unit tests)
+interface sincosperiod_moivre
+  procedure sincosperiod_moivre_explicit
+  module procedure sincosperiod_moivre_default
+end interface sincosperiod_moivre
+
+interface mode_moivre
+  module procedure mode_moivre_default, mode_moivre_explicit
+end interface mode_moivre
 
 interface interp_RZP
   module procedure interp_RZP_0, interp_RZP_1, interp_RZP_2
@@ -579,51 +604,13 @@ end subroutine interp_PRZP_2
 ! This is roughly 3-4 times faster in my tests than just calculating the sines
 ! and cosines (even when that is vectorized). Perhaps that changes for n_tor >> 10
 ! I tested n_tor = 17.
-#ifdef UNIT_TESTS
-pure subroutine sincosperiod_moivre(phi,HZ,dHZ,n_tor_in,n_period_in)
-  real*8, intent(out) :: HZ(:), dHZ(:)
-  integer,intent(in),optional :: n_tor_in,n_period_in
-#else
-pure subroutine sincosperiod_moivre(phi,HZ,dHZ)
-  integer, parameter  :: n_mode = (n_tor-1)/2 ! number of modes excluding 0
-  real*8, intent(out) :: HZ(n_tor), dHZ(n_tor)
-#endif
+!> Default version: uses the module parameters n_tor and n_period
+pure subroutine sincosperiod_moivre_default(phi,HZ,dHZ)
   real*8, intent(in)  :: phi
-#ifdef UNIT_TESTS
-  integer :: n_tor_loc,n_period_loc,n_mode
-#endif
-  integer    :: i
-  real*8     :: phase
-  complex*16 :: H_complex
+  real*8, intent(out) :: HZ(n_tor), dHZ(n_tor)
 
-  HZ(1) = 1.d0
-  dHZ(1) = 0.d0
-
-#ifdef UNIT_TESTS
-  n_tor_loc    = n_tor;    if(present(n_tor_in)) n_tor_loc       = n_tor_in
-  n_period_loc = n_period; if(present(n_period_in)) n_period_loc = n_period_in
-  n_mode       = (n_tor_loc-1)/2
-#endif
-  
-  do i=1,n_mode
-#ifdef UNIT_TESTS
-    phase      = real(n_period_loc*i,8)*phi
-#else
-    phase      = real(n_period*i,8)*phi
-#endif
-    H_complex  = exp(cmplx(0.d0,1.d0)*phase)
-    HZ(2*i)    = real(H_complex)
-    HZ(2*i+1)  = aimag(H_complex)
-#ifdef UNIT_TESTS
-    dHZ(2*i)   = HZ(2*i+1)*(-n_period_loc*i)
-    dHZ(2*i+1) = HZ(2*i)  *( n_period_loc*i)
-#else
-    dHZ(2*i)   = HZ(2*i+1)*(-n_period*i)
-    dHZ(2*i+1) = HZ(2*i)  *( n_period*i)
-#endif
-  end do
-
-end subroutine sincosperiod_moivre
+  call sincosperiod_moivre_explicit(phi,HZ,dHZ,n_tor,n_period)
+end subroutine sincosperiod_moivre_default
 
 pure subroutine sincosperiod_moivre_ncoord(phi,HZ_coord,dHZ_coord)
   integer, parameter  :: n_mode = (n_coord_tor-1)/2 ! number of modes excluding 0
@@ -658,37 +645,29 @@ end subroutine moivre
 ! Assumes that mode is of the form [0 1 1 2 2 3 3 4 4] ([0 4 4 8 8 12 12])
 ! This is roughly 3-4 times faster in my tests than just calculating the sines
 ! and cosines (even when that is vectorized).
-#ifdef UNIT_TESTS 
-pure subroutine mode_moivre(phi,HZ,n_tor_in,n_period_in)
-  integer,intent(in),optional :: n_tor_in,n_period_in
-  real*8, intent(out) :: HZ(:)
-#else
-pure subroutine mode_moivre(phi,HZ)
-  integer, parameter  :: n_mode = (n_tor-1)/2 ! number of modes excluding 0
-  real*8, intent(out) :: HZ(n_tor)
-#endif
+!> Default version: uses the module parameters n_tor and n_period
+pure subroutine mode_moivre_default(phi,HZ)
   real*8, intent(in)  :: phi
-#ifdef UNIT_TESTS
-  integer :: n_tor_loc,n_period_loc,n_mode
-#endif
+  real*8, intent(out) :: HZ(n_tor)
+
+  call mode_moivre_explicit(phi,HZ,n_tor,n_period)
+end subroutine mode_moivre_default
+
+!> Explicit version: n_tor and n_period are passed in (used by the unit tests)
+pure subroutine mode_moivre_explicit(phi,HZ,n_tor_in,n_period_in)
+  real*8, intent(in)  :: phi
+  integer,intent(in)  :: n_tor_in,n_period_in
+  real*8, intent(out) :: HZ(n_tor_in)
   real*8     :: phase
   complex*16 :: H_complex
-  integer    :: i
+  integer    :: i, n_mode
+
+  n_mode = (n_tor_in-1)/2 ! number of modes excluding 0
 
   HZ(1) = 1.d0
 
-#ifdef UNIT_TESTS
-  n_tor_loc    = n_tor;    if(present(n_tor_in)) n_tor_loc       = n_tor_in
-  n_period_loc = n_period; if(present(n_period_in)) n_period_loc = n_period_in
-  n_mode       = (n_tor_loc-1)/2
-#endif 
-
   do i=1, n_mode
-#ifdef UNIT_TESTS
-    phase     = real(n_period_loc*i,8)*phi
-#else
-    phase     = real(n_period*i,8)*phi
-#endif
+    phase     = real(n_period_in*i,8)*phi
     H_complex = exp(cmplx(0.d0,1.d0)*phase)
     HZ(2*i)   = real(H_complex)
     HZ(2*i+1) = aimag(H_complex)
@@ -702,7 +681,7 @@ pure subroutine mode_moivre(phi,HZ)
 !      call moivre(HZ(2),HZ(3), HZ(2*i-2),HZ(2*i-1), HZ(2*i),HZ(2*i+1))
 !    end do
 !  end if
-end subroutine mode_moivre
+end subroutine mode_moivre_explicit
 
 
 

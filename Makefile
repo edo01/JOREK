@@ -82,6 +82,7 @@ DIRS := diagnostics				\
 	particles/benchmarks/projection		\
 	elements				\
 	elements/mod_basisfunctions		\
+	elements/mod_interp			\
 	elements/tests				\
 	grids					\
 	plots					\
