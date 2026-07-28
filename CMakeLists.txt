@@ -35,6 +35,10 @@ add_library(jorek_common INTERFACE)
 target_include_directories(jorek_common INTERFACE
   "${CMAKE_BINARY_DIR}/generated"        # version.h
   "${JOREK_GENERATED_INCLUDE_DIR}"       # rhs/amat/aux_automatic.h
+  # The C++ shims include their headers by path from the source root, e.g.
+  # "elements/mod_basisfunctions/basisfunctions.h".
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/include"  # jgx/view.h, jgx/macros.h
   "${CMAKE_CURRENT_SOURCE_DIR}/tools"    # r3_info.h
   "${CMAKE_CURRENT_SOURCE_DIR}/models"
   ${JOREK_INCLUDE_DIRS})
