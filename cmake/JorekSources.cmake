@@ -393,6 +393,19 @@ if(JOREK_SEMIANALYTICAL)
   message(STATUS "JOREK: algexpr2fort code generator needs ${_n_codegen} source(s)")
 endif()
 
+# The .f sources take the relaxed diagnostics from JorekCompilerFlags. Source
+# properties are scoped to the directory rather than to a target, so this one
+# pass covers every target -- they are all defined in the top-level scope.
+if(JOREK_Fortran_FIXED_FORM_OPTIONS)
+  set(_fixed_form ${JOREK_LIB_SOURCES} ${JOREK_PROGRAM_SOURCES} ${JOREK_CODEGEN_SOURCES})
+  list(FILTER _fixed_form INCLUDE REGEX "\\.f$")
+  if(_fixed_form)
+    list(REMOVE_DUPLICATES _fixed_form)
+    set_source_files_properties(${_fixed_form} PROPERTIES
+      COMPILE_OPTIONS "${JOREK_Fortran_FIXED_FORM_OPTIONS}")
+  endif()
+endif()
+
 list(LENGTH JOREK_LIB_SOURCES _n_lib)
 list(LENGTH JOREK_PROGRAM_SOURCES _n_prog)
 message(STATUS "JOREK sources: ${_n_lib} library, ${_n_prog} program(s)")

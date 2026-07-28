@@ -16,6 +16,11 @@ endif()
 set(_common "")   # applied to every Fortran source
 set(_debug "")    # applied to Fortran sources in Debug builds only
 
+# Relaxes the implicit-typing diagnostics for the vendored fixed-form .f sources,
+# which declare nothing explicitly; the Make build had the same carve-out in
+# F77FLAGS. Applied per source file by JorekSources.
+set(JOREK_Fortran_FIXED_FORM_OPTIONS "")
+
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
 
   list(APPEND _common
@@ -33,21 +38,34 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     -finit-real=snan -finit-integer=12345678
     -fimplicit-none)
 
+  # gfortran makes -fimplicit-none an error, so without this the fixed-form
+  # sources do not compile at all in a Debug build.
+  set(JOREK_Fortran_FIXED_FORM_OPTIONS -fno-implicit-none)
+
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "^Intel")
 
-  # Use the single-token `-opt=value` forms throughout. CMake de-duplicates
-  # repeated entries in COMPILE_OPTIONS, so a `-warn all -warn nointerfaces`
-  # spelling collapses to `-warn all nointerfaces` and the compiler then treats
-  # the orphaned keywords as input filenames.
+  # -warn and -check take their keyword list as a separate argument -- ifx warns
+  # (#10158) and drops the option for a `-warn=...` spelling -- so keep the two
+  # tokens together in a `SHELL:` group, which is also what stops CMake from
+  # de-duplicating them apart. -init is the opposite case and wants `-init=`.
   list(APPEND _common
     -fpp -r8 -align
-    -warn=all,nointerfaces,nounused,noexternal)
+    "SHELL:-warn all,nointerfaces,nounused,noexternal"
+    # #5462 "global name too long" fires all over the tree: ifx truncates mangled
+    # symbols, keeping the distinguishing tail, and the only fix would be
+    # renaming modules. No -warn keyword covers it short of -warn nogeneral.
+    -diag-disable=5462)
 
   list(APPEND _debug
     -traceback
-    -check=all,noarg_temp_created
+    "SHELL:-check all,noarg_temp_created"
     -ftrapuv -fpe0 -init=snan
     -implicitnone)
+
+  # Kills #6717 from both -warn all and -implicitnone. Two plain list elements,
+  # not a `SHELL:` group: source-file COMPILE_OPTIONS pass `SHELL:` through to
+  # the compiler verbatim, and are not de-duplicated anyway.
+  set(JOREK_Fortran_FIXED_FORM_OPTIONS -warn nodeclarations)
 
   # The semianalytical models build very large automatic arrays in the element
   # matrix routines and overflow the stack without this.
@@ -73,5 +91,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   list(APPEND _record ${_debug})
 endif()
 string(REPLACE ";" " " JOREK_Fortran_FLAGS_RECORD "${_record}")
+# `SHELL:` is a CMake marker, not something the compiler ever sees.
+string(REPLACE "SHELL:" "" JOREK_Fortran_FLAGS_RECORD "${JOREK_Fortran_FLAGS_RECORD}")
 
 find_package(OpenMP REQUIRED COMPONENTS Fortran C CXX)
