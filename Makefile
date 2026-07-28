@@ -179,6 +179,8 @@ generate_code: algexpr2fort
 # Add here: Global includes (as the line below)
 INCLUDES += -Itools # for r3_info.h
 INCLUDES += -Imodels
+INCLUDES += -I. # C++ shims include their headers by path from the source root
+INCLUDES += -Ijgx/cpp/include # jgx/view.h, jgx/macros.h
 # C++ support
 LIBS += -lstdc++ 
 CXXFLAGS += -pedantic -Wall
