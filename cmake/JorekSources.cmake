@@ -18,6 +18,7 @@ set(JOREK_SOURCE_DIRS
   diagnostics/new_diag
   diagnostics/postproc
   elements
+  elements/mod_basisfunctions
   grids
   grids/grid_utils
   matrix
