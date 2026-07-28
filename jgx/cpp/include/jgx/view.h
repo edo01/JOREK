@@ -90,6 +90,18 @@ struct view {
   }
 };
 
+/**
+ * Optimized view for rank 1 data structures,
+ */
+template <class T, class Layout>
+struct view<T, 1, Layout> {
+  T*          data = nullptr;
+  std::size_t extent[1] = {};
+  view() = default;
+  JGX_HD view(T* p, const std::size_t ext[1]) : data(p) { extent[0] = ext[0]; }
+  JGX_HD T& operator()(std::size_t i0) const { return data[i0]; }
+};
+
 template <class T, int Rank, class Layout = layout_left>
 JGX_HD inline view<T, Rank, Layout> make_view(void* p,
                                               std::array<std::size_t, Rank> ext) {
