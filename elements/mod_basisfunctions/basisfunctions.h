@@ -12,7 +12,9 @@
 namespace basisfunctions{
 
     template<class BasisFunctionsView>
-    JGX_HD inline void basisfunctions_2D_1_T(const double s, const double t, BasisFunctionsView H, BasisFunctionsView H_s, BasisFunctionsView H_t){
+    JGX_HD inline void basisfunctions_2D_1_T(const double s, const double t, 
+                                            BasisFunctionsView H, BasisFunctionsView H_s, 
+                                            BasisFunctionsView H_t) {
         // --- CUBIC
         //if (n_order .eq. 3) then
         const double sm  = s - 1.0;
@@ -78,7 +80,7 @@ namespace basisfunctions{
             //  QUINTIC MISSING
         }*/
 
-    }
+    } // basisfunctions_2D_1_T
 }
 
 #endif /*BASISFUNCTIONS_H*/
