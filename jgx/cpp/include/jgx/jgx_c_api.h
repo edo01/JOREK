@@ -15,28 +15,30 @@
 extern "C" {
 #endif
 
-#define JGX_ABI_VERSION 1
-#define JGX_MAX_RANK    5
+#include "jgx/jgx_abi.def"   /* JGX_ABI_VERSION, JGX_MAX_RANK */
 
-/* elem_kind tags (mirror jgx_kinds.f90). */
-enum {
-  JGX_F64 = 0,
-  JGX_F32 = 1,
-  JGX_I32 = 2,
-  JGX_I64 = 3
+/* The tag values are not restated here -- the .def files are the single source
+ * the Fortran side reads too, so C and Fortran cannot drift apart. */
+
+enum {   /* elem_kind tags */
+#define JGX_ELEM_KIND(name, tag, bytes) name = tag,
+#include "jgx/enums/elem_kind.def"
+#undef JGX_ELEM_KIND
+  JGX_ELEM_KIND_COUNT
 };
 
-/* layout_tag values (mirror jgx_kinds.f90). */
-enum {
-  JGX_LAYOUT_COLMAJOR = 0,   /* Fortran / layout_left */
-  JGX_LAYOUT_ROWMAJOR = 1    /* C / layout_right      */
+enum {   /* layout_tag values */
+#define JGX_ENUM_ENTRY(name, value) name = value,
+#include "jgx/enums/layout_tag.def"
+#undef JGX_ENUM_ENTRY
+  JGX_LAYOUT_COUNT
 };
 
-/* flags bits (mirror jgx_kinds.f90). */
-enum {
-  JGX_FLAG_DIRTY_HOST   = 1,
-  JGX_FLAG_DIRTY_DEVICE = 2,
-  JGX_FLAG_ON_DEVICE    = 4
+enum {   /* flags bits -- disjoint, so no COUNT */
+#define JGX_ENUM_ENTRY(name, value) name = value,
+#include "jgx/enums/flags.def"
+#undef JGX_ENUM_ENTRY
+  JGX_FLAG_NONE = 0
 };
 
 /* This POD layout must match the

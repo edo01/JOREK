@@ -1,0 +1,7 @@
+/* jgx/enums/elem_kind.def -- the element-kind tags.
+ *
+ */
+JGX_ELEM_KIND(JGX_F64, 0, 8)
+JGX_ELEM_KIND(JGX_F32, 1, 4)
+JGX_ELEM_KIND(JGX_I32, 2, 4)
+JGX_ELEM_KIND(JGX_I64, 3, 8)

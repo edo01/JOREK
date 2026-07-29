@@ -1,0 +1,7 @@
+/* jgx/enums/flags.def -- dirty-bit flags packed into jgx_buf_desc%flags.
+ *
+ * Values are disjoint bits, not an ordinal sequence.
+ */
+JGX_ENUM_ENTRY(JGX_FLAG_DIRTY_HOST,   1)
+JGX_ENUM_ENTRY(JGX_FLAG_DIRTY_DEVICE, 2)
+JGX_ENUM_ENTRY(JGX_FLAG_ON_DEVICE,    4)

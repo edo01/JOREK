@@ -5,6 +5,9 @@ module jgx_types
   implicit none
   public
 
+  !> JGX_MAX_RANK is a macro, not a parameter -- see the note in jgx_kinds.f90.
+#include "jgx/jgx_abi.def"
+
   !> A wrapper to the raw memory and its description.
   !> For example an integer(8) a(100,3) becomes:
   !> rank = 2, extents = [100,3,0,0,0] 
@@ -14,7 +17,7 @@ module jgx_types
     type(c_ptr)       :: device_ptr = c_null_ptr  !< device memory (aliases host on cpu backend)
     type(c_ptr)       :: host_ptr   = c_null_ptr  !< associated host array (may be null)
     integer(c_size_t) :: n_bytes    = 0
-    integer(c_int)    :: elem_kind  = JGX_F64.    !< buffer type (see jgx_kinds.f90)
+    integer(c_int)    :: elem_kind  = JGX_F64     !< buffer type (see jgx_kinds.f90)
     integer(c_int)    :: rank       = 0           
     integer(c_size_t) :: extents(JGX_MAX_RANK) = 0   !< array specifing the dimensions of the buffer
     integer(c_int)    :: layout_tag = JGX_LAYOUT_COLMAJOR !< which data layout is the buffer using

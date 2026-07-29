@@ -10,36 +10,39 @@ module jgx_kinds
   integer, parameter :: i32 = c_int32_t  !< integer(4) <-> C int32_t
   integer, parameter :: i64 = c_int64_t  !< integer(8) <-> C int64_t
 
-  !> Element-kind tags for jgx_buf%elem_kind (mirror JGX_* in jgx_c_api.h).
-  integer(c_int), parameter :: JGX_F64 = 0
-  integer(c_int), parameter :: JGX_F32 = 1
-  integer(c_int), parameter :: JGX_I32 = 2
-  integer(c_int), parameter :: JGX_I64 = 3
+  !> Everything below comes from the .def files the C headers expand.
+  !> Only the Fortran kind is chosen here.
+#include "jgx/jgx_abi.def"
+
+  !> Element-kind tags for jgx_buf%elem_kind.
+#define JGX_ELEM_KIND(name, tag, bytes) integer(c_int), parameter :: name = tag
+#include "jgx/enums/elem_kind.def"
+#undef JGX_ELEM_KIND
 
   !> Layout tags for jgx_buf%layout_tag (see design §4).
-  integer(c_int), parameter :: JGX_LAYOUT_COLMAJOR = 0  !< Fortran / layout_left
-  integer(c_int), parameter :: JGX_LAYOUT_ROWMAJOR = 1  !< C / layout_right
-
-  !> Maximum logical rank a jgx_buf can describe.
-  integer, parameter :: JGX_MAX_RANK = 5
-
   !> dirty-bit flags packed into jgx_buf_desc%flags across the C ABI.
-  integer(c_int), parameter :: JGX_FLAG_DIRTY_HOST   = 1
-  integer(c_int), parameter :: JGX_FLAG_DIRTY_DEVICE = 2
-  integer(c_int), parameter :: JGX_FLAG_ON_DEVICE    = 4
+#define JGX_ENUM_ENTRY(name, value) integer(c_int), parameter :: name = value
+#include "jgx/enums/layout_tag.def"
+#include "jgx/enums/flags.def"
+#undef JGX_ENUM_ENTRY
+
+  !> JGX_MAX_RANK is deliberately left as the macro from jgx_abi.def rather than
+  !> re-declared as a parameter here: cpp is case-sensitive and Fortran is not,
+  !> so a parameter of that name would be shadowed by the macro at every
+  !> uppercase use site.
 
 contains
 
-  !> Bytes occupied by one element of the given kind.
+  !> Bytes occupied by one element of the given kind. Generated from the same
+  !> list as the tags, so a new kind cannot arrive without its size.
   pure function jgx_kind_size(kind_tag) result(nb)
     integer(c_int), intent(in) :: kind_tag
     integer(c_size_t)          :: nb
     select case (kind_tag)
-    case (JGX_F64); nb = 8_c_size_t
-    case (JGX_F32); nb = 4_c_size_t
-    case (JGX_I32); nb = 4_c_size_t
-    case (JGX_I64); nb = 8_c_size_t
-    case default;   nb = 0_c_size_t
+#define JGX_ELEM_KIND(name, tag, bytes) case (name); nb = int(bytes, c_size_t)
+#include "jgx/enums/elem_kind.def"
+#undef JGX_ELEM_KIND
+    case default; nb = 0_c_size_t
     end select
   end function jgx_kind_size
 
