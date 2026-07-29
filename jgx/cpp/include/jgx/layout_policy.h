@@ -51,10 +51,6 @@
 
 namespace jgx {
 
-/* Read arrays: physical == Fortran column-major. */
-using node_layout = layout_left;
-using elem_layout = layout_left;
-
 /* Feedback: switchable, sum-invariant -- any axis permutation is legal. */
 using feedback_layout = layout_perm<JGX_FEEDBACK_PERM>;
 
