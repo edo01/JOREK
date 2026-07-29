@@ -9,11 +9,29 @@ module data_structure
   use mod_sparse_matrix, only: type_SP_MATRIX
   implicit none
 
-  type type_node                                  !< type definition of a node (i.e. a vertex)
+  ! The third extent of type_node%values / %deltas is fixed at compile time to
+  ! n_values_max (models/mod_settings.f90) rather than allocated per node list.
+  ! Three different node lists share type_node and each needs a different number
+  ! of variables, so n_values_max must be at least
+  !   * n_var                  -- the solution node_list,
+  !   * n_aux_var              -- the aux_node_list, sized at run time by
+  !                               determine_coupling_variables() from the active
+  !                               kinetic coupling schemes,
+  !   * n_rhs + n_rhs_f        -- the projection node lists.
+  ! Only the first is known at compile time and is asserted below; the other two
+  ! are checked in init_node. Slots beyond the number a given list actually uses
+  ! are padding: they are zeroed and never read, which costs
+  ! 2 * n_tor * n_degrees * 8 bytes per node per unused slot.
   
+  !> Compile-time assertion n_values_max >= n_var.
+  integer, parameter, private :: assert_n_values_max = &
+    1 / merge(1, 0, n_values_max >= n_var)
+
+  type type_node                                  !< type definition of a node (i.e. a vertex)
+
   real*8     :: x(n_coord_tor,n_degrees,n_dim)        !< x,y,z coordinates of points and additional nodal geometry
-  real*8, dimension(:,:,:), allocatable  :: values   !< Variable values and derivatives
-  real*8, dimension(:,:,:), allocatable  :: deltas   !< Change of variable values and derivatives in last timestep
+  real*8     :: values(n_tor,n_degrees,n_values_max) !< Variable values and derivatives
+  real*8     :: deltas(n_tor,n_degrees,n_values_max) !< Change of variable values and derivatives in last timestep
 #if STELLARATOR_MODEL
   real*8     :: r_tor_eq(n_degrees)                     !< radial coordinate from GVEC (square root of normalised toroidal flux)
 #if JOREK_MODEL == 180
@@ -225,12 +243,16 @@ contains
     implicit none
     type(type_node), intent(inout)    :: node       !< the node to be initialized
     integer, intent(in)               :: n_values   !< number of values to be stored in node
-    
-    if (allocated(node%values)) deallocate(node%values)
-    if (allocated(node%deltas)) deallocate(node%deltas)
 
-    allocate(node%values(n_tor, n_degrees, n_values))
-    allocate(node%deltas(n_tor, n_degrees, n_values))
+    if (n_values > n_values_max) then
+      write(*,*) 'FATAL init_node: ', n_values, ' values per node requested, but only', &
+                 n_values_max, ' are available.'
+      write(*,*) '  Raise n_values_max in models/mod_settings.f90 and recompile.'
+      stop
+    endif
+
+    node%values = 0.d0
+    node%deltas = 0.d0
 
   end subroutine init_node
 
@@ -256,14 +278,12 @@ contains
   end subroutine init_node_list
 
   !> wrapper function for correctly deallocating a node object
+  !!
+  !! %values and %deltas are fixed-size components now, so there is nothing left
+  !! to free. Kept so the existing call sites do not all have to be touched.
   subroutine dealloc_node(node)
     implicit none
-    type(type_node), intent(inout)    :: node       !< the node to have its values array deallocated
-
-    if (allocated(node%values)) then
-      deallocate(node%values)
-      deallocate(node%deltas)
-    endif
+    type(type_node), intent(inout)    :: node       !< the node to be released
 
   end subroutine dealloc_node
 
@@ -282,11 +302,9 @@ contains
     type(type_node), intent(in)      :: node_to_copy
     type(type_node), intent(inout)   :: node_copied_to
 
-    call init_node(node_copied_to, size(node_to_copy%values, 3))
-
+    ! type_node has no allocatable components left, so intrinsic assignment
+    ! already copies %values and %deltas element by element.
     node_copied_to = node_to_copy
-    node_copied_to%values = node_to_copy%values
-    node_copied_to%deltas = node_to_copy%deltas
 
   end subroutine make_deep_copy_node
 

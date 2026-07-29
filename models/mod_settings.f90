@@ -13,13 +13,14 @@ integer, parameter :: n_nodes_max       = 60001  !< maximum number of nodes
 integer, parameter :: n_elements_max    = 60001  !< maximum number of elements
 integer, parameter :: n_boundary_max    = 1001   !< maximum number of boundary elements
 integer, parameter :: n_pieces_max      = 6001   !< maximum number of line pieces describing a flux surface
+integer, parameter :: n_values_max      = 11     !< maximum number of variables stored per node
 
 ! ##################################################################################################
 ! ####  @USERS: Please do not change below this line ###############################################
 ! ##################################################################################################
 
 ! The following line is needed by ./util/config.sh:
-! #SETTINGS# n_tor n_coord_tor l_pol_domm n_period n_coord_period n_plane n_order n_nodes_max n_elements_max n_boundary_max n_pieces_max
+! #SETTINGS# n_tor n_coord_tor l_pol_domm n_period n_coord_period n_plane n_order n_nodes_max n_elements_max n_boundary_max n_pieces_max n_values_max
 
 ! --- a few constants that should not be touched
 integer, parameter :: n_dim             = 2                !< number of dimensions

@@ -542,7 +542,7 @@ subroutine merge_restart(node_list,element_list, restart_file, format_rst,my_id,
   allocate(values(n_tor,n_degrees,n_var,node_list%n_nodes))
   !$omp parallel do default(shared) private(inode)
   do inode=1,node_list%n_nodes
-    values(:,:,:,inode) = node_list%node(inode)%values(:,:,:)
+    values(:,:,:,inode) = node_list%node(inode)%values(:,:,1:n_var)
   enddo
   !$omp end parallel do
   tstart_old = t_start
@@ -553,7 +553,7 @@ subroutine merge_restart(node_list,element_list, restart_file, format_rst,my_id,
   ! Calculate deltas as values_new - values_old
   !$omp parallel do default(shared) private(inode)
   do inode=1,node_list%n_nodes
-    node_list%node(inode)%deltas = node_list%node(inode)%values - values(:,:,:,inode)
+    node_list%node(inode)%deltas(:,:,1:n_var) = node_list%node(inode)%values(:,:,1:n_var) - values(:,:,:,inode)
   enddo
   !$omp end parallel do
 

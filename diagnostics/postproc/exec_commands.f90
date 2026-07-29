@@ -1105,7 +1105,7 @@ module exec_commands
     prev_index = index_now
     
     do i = 1, node_list%n_nodes
-      values(:,1,:,i) = values(:,1,:,i) + abs(node_list%node(i)%values(:,1,:)) * weight
+      values(:,1,:,i) = values(:,1,:,i) + abs(node_list%node(i)%values(:,1,1:n_var)) * weight
       ! Since the purpose of this postproc command is to visualize the localization of a
       ! particular mode activity, we take the time average over the absolute value. In the
       ! Bezier representation, this we have to throw away the degrees of freedomn 2,3,4 in
@@ -1145,7 +1145,7 @@ module exec_commands
     
     ! copy back for writing out
     do i = 1, node_list%n_nodes
-      node_list%node(i)%values(:,:,:) = values(:,:,:,i) / total_weight
+      node_list%node(i)%values(:,:,1:n_var) = values(:,:,:,i) / total_weight
     end do
     call export_restart(node_list, element_list, 'jorek_average', aux_node_list)
     deallocate(values)
