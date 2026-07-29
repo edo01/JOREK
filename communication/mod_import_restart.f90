@@ -222,13 +222,13 @@ subroutine import_binary_restart(node_list, element_list, filename, format_rst, 
       do k=1, n_tor,2
         if (mode_tmp(m) .eq. mode(k)) then
           if ((m .eq. 1) .and. (k.eq.1)) then
-            node_list%node(i)%values(k,:,:)     = values_tmp(m,:,:)
-            node_list%node(i)%deltas(k,:,:)     = deltas_tmp(m,:,:)
+            node_list%node(i)%values(k,:,1:n_var)     = values_tmp(m,:,:)
+            node_list%node(i)%deltas(k,:,1:n_var)     = deltas_tmp(m,:,:)
           else
-            node_list%node(i)%values(k-1,:,:)     = values_tmp(m-1,:,:)
-            node_list%node(i)%deltas(k-1,:,:)     = deltas_tmp(m-1,:,:)
-            node_list%node(i)%values(k,:,:)       = values_tmp(m,:,:)
-            node_list%node(i)%deltas(k,:,:)       = deltas_tmp(m,:,:)
+            node_list%node(i)%values(k-1,:,1:n_var)     = values_tmp(m-1,:,:)
+            node_list%node(i)%deltas(k-1,:,1:n_var)     = deltas_tmp(m-1,:,:)
+            node_list%node(i)%values(k,:,1:n_var)       = values_tmp(m,:,:)
+            node_list%node(i)%deltas(k,:,1:n_var)       = deltas_tmp(m,:,:)
           endif
         endif
       enddo
@@ -880,13 +880,13 @@ endif
    	  do k=1, n_tor,2
    	    if (mode_tmp_perturbation(m) .eq. mode(k)) then
    	      if ((m .eq. 1) .and. (k.eq.1)) then
-   		node_list_perturbation%node(i)%values(k,:,:)   = values_tmp_perturbation(m,:,:)
-   		node_list_perturbation%node(i)%deltas(k,:,:)   = deltas_tmp_perturbation(m,:,:)
+   		node_list_perturbation%node(i)%values(k,:,1:n_var)   = values_tmp_perturbation(m,:,:)
+   		node_list_perturbation%node(i)%deltas(k,:,1:n_var)   = deltas_tmp_perturbation(m,:,:)
    	      else
-   		node_list_perturbation%node(i)%values(k-1,:,:) = values_tmp_perturbation(m-1,:,:)
-   		node_list_perturbation%node(i)%deltas(k-1,:,:) = deltas_tmp_perturbation(m-1,:,:)
-   		node_list_perturbation%node(i)%values(k,:,:)   = values_tmp_perturbation(m,:,:)
-   		node_list_perturbation%node(i)%deltas(k,:,:)   = deltas_tmp_perturbation(m,:,:)
+   		node_list_perturbation%node(i)%values(k-1,:,1:n_var) = values_tmp_perturbation(m-1,:,:)
+   		node_list_perturbation%node(i)%deltas(k-1,:,1:n_var) = deltas_tmp_perturbation(m-1,:,:)
+   		node_list_perturbation%node(i)%values(k,:,1:n_var)   = values_tmp_perturbation(m,:,:)
+   		node_list_perturbation%node(i)%deltas(k,:,1:n_var)   = deltas_tmp_perturbation(m,:,:)
    	      endif
    	    endif
    	  enddo
