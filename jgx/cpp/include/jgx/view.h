@@ -24,6 +24,12 @@ struct layout_right {};   /* row-major:    last index fastest  (C)         */
  */
 template <int... P> struct layout_perm {};
 
+/* Strides given by the caller: an AoS component (fortran default)
+ * carries the stride of the enclosing record. Deliberately no fill_strides
+ * overload, so the extent-only constructor is a compile error here.
+ */
+struct layout_stride {};
+
 /*
  *  One util function for each layout_left, layout_right and layout_perm
  *  to fill the data following the right axis order. 
@@ -54,15 +60,42 @@ namespace detail {
 
 template <class T, int Rank, class Layout = layout_left>
 struct view {
+  static_assert(Rank >= 1, "jgx::view: Rank must be >= 1");
+
   T*          data = nullptr;
   std::size_t extent[Rank] = {};
   std::size_t stride[Rank] = {};
 
   view() = default;
 
+  /* Extents only: strides follow from Layout. */
   JGX_HD view(T* p, const std::size_t ext[Rank]) : data(p) {
     for (int d = 0; d < Rank; ++d) extent[d] = ext[d];
     detail::fill_strides<Rank>(extent, stride, Layout{});
+  }
+
+  /* Explicit strides, in units of T. Required for layout_stride, legal for any
+   * layout: AoS and SoA differ only in this vector. */
+  JGX_HD view(T* p, const std::size_t ext[Rank], const std::size_t str[Rank])
+      : data(p) {
+    for (int d = 0; d < Rank; ++d) { extent[d] = ext[d]; stride[d] = str[d]; }
+  }
+
+  /* Fix axis 0, so an inner loop sees only the intra-record map. Always
+   * layout_stride: the remaining strides are no longer a dense order.
+   *
+   * Member template so view<T,R-1,...> is instantiated only where slice() is
+   * called; a plain member would need view<T,0,...> for every rank-1 view.
+   */
+  template <int R = Rank>
+  JGX_HD view<T, R - 1, layout_stride> slice(std::size_t i0) const {
+    static_assert(R == Rank, "jgx::view::slice: do not pass a template argument");
+    static_assert(Rank >= 2, "jgx::view::slice: index count must be < Rank");
+    constexpr int N = (R > 1 ? R - 1 : 1);
+    std::size_t ext[N] = {};
+    std::size_t str[N] = {};
+    for (int d = 1; d < R; ++d) { ext[d - 1] = extent[d]; str[d - 1] = stride[d]; }
+    return view<T, R - 1, layout_stride>(data + i0 * stride[0], ext, str);
   }
 
   JGX_HD T& operator()(std::size_t i0) const {
@@ -90,17 +123,6 @@ struct view {
   }
 };
 
-/**
- * Optimized view for rank 1 data structures,
- */
-template <class T, class Layout>
-struct view<T, 1, Layout> {
-  T*          data = nullptr;
-  std::size_t extent[1] = {};
-  view() = default;
-  JGX_HD view(T* p, const std::size_t ext[1]) : data(p) { extent[0] = ext[0]; }
-  JGX_HD T& operator()(std::size_t i0) const { return data[i0]; }
-};
 
 template <class T, int Rank, class Layout = layout_left>
 JGX_HD inline view<T, Rank, Layout> make_view(void* p,
