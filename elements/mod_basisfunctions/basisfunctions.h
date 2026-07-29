@@ -11,10 +11,10 @@
 
 namespace basisfunctions{
 
-    template<class BasisFunctionsView>
+    template<class BasisFunctionsZView>
     JGX_HD inline void basisfunctions_2D_1_T(const double s, const double t, 
-                                            BasisFunctionsView H_view, BasisFunctionsView H_s_view, 
-                                            BasisFunctionsView H_t_view) {
+                                            BasisFunctionsZView H_view, BasisFunctionsZView H_s_view, 
+                                            BasisFunctionsZView H_t_view) {
         // --- CUBIC
         //if (n_order .eq. 3) then
         const double sm  = s - 1.0;
