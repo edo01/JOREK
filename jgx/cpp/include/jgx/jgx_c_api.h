@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#include "jgx/jgx_abi.def"   /* JGX_ABI_VERSION, JGX_MAX_RANK */
+#include "jgx/jgx_abi.def"   /* JGX_MAX_RANK, the record limits */
 
 /* The tag values are not restated here -- the .def files are the single source
  * the Fortran side reads too, so C and Fortran cannot drift apart. */
@@ -55,7 +55,6 @@ typedef struct {
 } jgx_buf_desc;
 
 /* ---- runtime / memory management (raw pointers + sizes) ---------------- */
-int         jgx_c_abi_version(void);
 const char* jgx_c_backend_name(void);
 const char* jgx_c_layout_tag(void);   /* compile-time layout policy string */
 void        jgx_c_init(int device_id);
@@ -66,9 +65,6 @@ void        jgx_c_free(void* device_ptr);
 void        jgx_c_push(void* device_ptr, const void* host_ptr, size_t n_bytes);  /* H2D */
 void        jgx_c_pull(void* host_ptr, const void* device_ptr, size_t n_bytes);  /* D2H */
 void        jgx_c_synchronize(void);
-
-/* Introspection for the ABI struct-size cross-check. */
-size_t      jgx_c_sizeof_buf_desc(void);
 
 #ifdef __cplusplus
 }  /* extern "C" */

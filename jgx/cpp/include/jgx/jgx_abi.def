@@ -1,22 +1,17 @@
 /* jgx/jgx_abi.def -- the ABI's scalar constants, for both languages.
  *
- * Plain object-like macros, so this file needs no expansion contract: C, C++
- * and fpp all read it the same way. Fortran turns them into parameters where it
- * wants a typed name, and uses them directly where it wants an array bound.
+ * Plain object-like macros for C, C++ and Fortran. Fortran turns them
+ * into parameters where it wants a typed name, and uses them directly
+ * where it wants an array bound.
  *
- * These are the numbers that must not drift between the two sides. The version
- * checks stay useful even though both sides now compile the same literal: what
- * they catch is a stale object file linked against a newer header, which is the
- * failure they were written for.
+ * These are the numbers that must not drift between the two sides.
  *
  * Raising JGX_MAX_RECORD_FIELDS or JGX_MAX_RECORD_TYPES is free -- Fortran
  * never mirrors jgx_record_desc, only the calls. Raising JGX_MAX_INTRA_RANK
- * resizes jgx_field_desc and needs an ABI bump.
+ * resizes jgx_field_desc, so every object that touches it must be rebuilt.
  */
-#define JGX_ABI_VERSION         1
 #define JGX_MAX_RANK            5
 
-#define JGX_RECORD_ABI_VERSION  1
 #define JGX_MAX_INTRA_RANK      3
 #define JGX_MAX_RECORD_FIELDS  16
 #define JGX_MAX_RECORD_TYPES    8
