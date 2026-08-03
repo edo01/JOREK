@@ -29,6 +29,7 @@ use mod_jorek_timestepping
 use mod_random_seed
 use mod_basisfunctions
 use nodes_elements
+use mod_jgx_jorek_records, only: jgx_register_jorek_records
 use constants,   only: MU_ZERO, ATOMIC_MASS_UNIT, K_BOLTZ, EL_CHG
 use mod_particle_wall_interaction
 use mod_neutral_collision, only: neutral_collisions_from_config, type_neutral_collision, gcd_neutral_collisions
@@ -108,6 +109,11 @@ character(len=100) :: header_line
 
 ! Start up MPI, jorek
 call sim%initialize()
+
+! Hand type_element / type_node layouts to jgx. Measured from local records, so
+! this has no ordering constraint against grid construction -- it only has to
+! precede the first interpolation.
+call jgx_register_jorek_records()
 
 ! Loading the jorek fields
 if (restart) then
