@@ -14,6 +14,7 @@ set(JOREK_SOURCE_DIRS
   communication
   core
   datatypes
+  datatypes/data_structure
   diagnostics
   diagnostics/new_diag
   diagnostics/postproc
