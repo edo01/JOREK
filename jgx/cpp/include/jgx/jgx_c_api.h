@@ -27,6 +27,16 @@ enum {   /* elem_kind tags */
   JGX_ELEM_KIND_COUNT
 };
 
+/* It returns the size of a jgx kind*/
+static inline size_t jgx_kind_size(int32_t elem_kind) {
+  switch (elem_kind) {
+#define JGX_ELEM_KIND(name, tag, bytes) case name: return bytes;
+#include "jgx/enums/elem_kind.def"
+#undef JGX_ELEM_KIND
+    default: return 0;
+  }
+}
+
 enum {   /* layout_tag values */
 #define JGX_ENUM_ENTRY(name, value) name = value,
 #include "jgx/enums/layout_tag.def"
