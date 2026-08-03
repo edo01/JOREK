@@ -4,7 +4,7 @@ use data_structure
 use mod_basisfunctions
 use mod_parameters, only: n_period, n_coord_period, n_tor, n_coord_tor, n_degrees
 use phys_module, only: mode, mode_coord
-use, intrinsic :: iso_c_binding, only: c_double
+use, intrinsic :: iso_c_binding, only: c_double, c_int, c_int32_t, c_ptr, c_loc
 implicit none
 private
 public :: interp !< interp a specific harmonic in finite elements
@@ -29,6 +29,32 @@ interface
     real(c_double), value, intent(in) :: phi
     integer(c_int), value, intent(in) :: n_tor_in,n_period_in
     real(c_double), intent(out)       :: HZ(n_tor_in), dHZ(n_tor_in)
+  end subroutine
+end interface
+
+!> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
+!> The mesh crosses as a base pointer plus a record count; the component layout
+!> comes from the jgx registry, filled once by mod_jgx_jorek_records.
+interface
+  pure subroutine jgx_host_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,  &
+                                        i_elm0, i_v0, n_v, s, t, phi, n_period, &
+                                        use_deltas, P, P_s, P_t, P_phi,         &
+                                        R, R_s, R_t, Z, Z_s, Z_t,               &
+                                        w_values, w_xR, w_xZ, w_H, w_H_s, w_H_t,&
+                                        w_HZ, w_dHZ)                            &
+      bind(C, name="jgx_host_interp_PRZ_1")
+    import :: c_double, c_int32_t, c_ptr
+    implicit none
+    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
+    integer(c_int32_t), value, intent(in) :: n_period, use_deltas
+    real(c_double),     value, intent(in) :: s, t, phi
+    integer(c_int32_t),        intent(in) :: i_v0(n_v)
+    real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
+    real(c_double),           intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
+    real(c_double),         intent(inout) :: w_values(*), w_xR(*), w_xZ(*)
+    real(c_double),         intent(inout) :: w_H(*), w_H_s(*), w_H_t(*)
+    real(c_double),         intent(inout) :: w_HZ(*), w_dHZ(*)
   end subroutine
 end interface
 
@@ -137,9 +163,10 @@ enddo
 end subroutine interp_PRZ_0
 
 !> This subroutine interpolates some variables at a specific position within one element at a given position (s,t)
+!> Facade only -- the body is in C++ (mod_interp/interp_shim.cpp).
 pure subroutine interp_PRZ_1(node_list, element_list, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t, deltas)
-type (type_node_list),    intent(in)  :: node_list
-type (type_element_list), intent(in)  :: element_list
+type (type_node_list),    target, intent(in)  :: node_list
+type (type_element_list), target, intent(in)  :: element_list
 integer,                  intent(in)  :: i_elm
 integer,                  intent(in)  :: n_v, i_v(n_v)
 real*8,                   intent(in)  :: s, t, phi
@@ -147,71 +174,30 @@ real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
 real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
 logical, optional, intent(in)         :: deltas
 
-! --- Local variables
-real*8  :: H(n_degrees,4), H_s(n_degrees,4), H_t(n_degrees,4), HZ(n_tor), dHZ(n_tor)
-integer :: kv, iv, kf, i
-real*8  :: values(n_tor,n_degrees,n_v,n_vertex_max)
-real*8  :: xR(n_degrees,n_vertex_max), xZ(n_degrees,n_vertex_max)
-real*8  :: sizes(n_degrees), v, vp
-logical :: my_deltas
+! --- Workspace: Fortran owns the temporaries, as before.
+real*8  :: w_values(n_tor,n_degrees,n_v,n_vertex_max)
+real*8  :: w_xR(n_degrees,n_vertex_max), w_xZ(n_degrees,n_vertex_max)
+real*8  :: w_H(n_degrees,n_vertex_max), w_H_s(n_degrees,n_vertex_max)
+real*8  :: w_H_t(n_degrees,n_vertex_max)
+real*8  :: w_HZ(n_tor), w_dHZ(n_tor)
+integer(c_int32_t) :: c_deltas, iv0(n_v)
 
-! 7% exec time
-call basisfunctions_T(s,t,H,H_s,H_t)
-
-P = 0.d0; P_s = 0.d0; P_t = 0.d0; P_phi = 0.d0
-
-! 7% exec time
-call sincosperiod_moivre(phi, HZ, dHZ)
-
-my_deltas = .false.
+c_deltas = 0
 if (present(deltas)) then
-  if (deltas) my_deltas = .true.
+  if (deltas) c_deltas = 1
 end if
+iv0 = int(i_v - 1, c_int32_t)
 
-! 30% exec time
-! Preload values and premultiply with sizes(:,kv)
-do kv = 1,n_vertex_max  ! 4 vertices
-  iv = element_list%element(i_elm)%vertex(kv)
-  sizes(:) = element_list%element(i_elm)%size(kv,:)
-
-  if (my_deltas) then
-    do i = 1, n_v
-      do kf=1,n_degrees
-        values(1:n_tor,kf,i,kv) = node_list%node(iv)%deltas(1:n_tor,kf,i_v(i)) * sizes(kf)
-      end do
-    end do
-  else
-    do i = 1, n_v
-      do kf=1,n_degrees
-        values(1:n_tor,kf,i,kv) = node_list%node(iv)%values(1:n_tor,kf,i_v(i)) * sizes(kf)
-      end do
-    end do
-  end if
-  xR(:,kv) = node_list%node(iv)%x(1,:,1) * sizes(:)
-  xZ(:,kv) = node_list%node(iv)%x(1,:,2) * sizes(:)
-end do
-
-! together 7%
-R   = sum(xR*H)
-R_s = sum(xR*H_s)
-R_t = sum(xR*H_t)
-Z   = sum(xZ*H)
-Z_s = sum(xZ*H_s)
-Z_t = sum(xZ*H_t)
-
-! 40% exec time
-do kv = 1, n_vertex_max
-  do i = 1, n_v
-    do kf = 1, n_degrees
-      v = dot_product(values(1:n_tor,kf,i,kv),HZ(1:n_tor))
-      P(i)     = P(i)     + v * H(kf, kv)
-      P_s(i)   = P_s(i)   + v * H_s(kf, kv)
-      P_t(i)   = P_t(i)   + v * H_t(kf, kv)
-      vp = dot_product(values(1:n_tor,kf,i,kv),dHZ(1:n_tor))
-      P_phi(i) = P_phi(i) + vp * H(kf, kv)
-    enddo
-  enddo
-enddo
+call jgx_host_interp_PRZ_1(c_loc(element_list%element(1)),               &
+                           int(element_list%n_elements, c_int32_t),      &
+                           c_loc(node_list%node(1)),                     &
+                           int(node_list%n_nodes, c_int32_t),            &
+                           int(i_elm - 1, c_int32_t), iv0,               &
+                           int(n_v, c_int32_t), s, t, phi,               &
+                           int(n_period, c_int32_t), c_deltas,           &
+                           P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t, &
+                           w_values, w_xR, w_xZ, w_H, w_H_s, w_H_t,      &
+                           w_HZ, w_dHZ)
 end subroutine interp_PRZ_1
 
 
