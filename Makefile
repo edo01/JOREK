@@ -83,6 +83,10 @@ DIRS := diagnostics				\
 	elements				\
 	elements/mod_basisfunctions		\
 	elements/mod_interp			\
+	datatypes/data_structure		\
+	jgx/cpp/src				\
+	jgx/fortran/record			\
+	jgx/jorek				\
 	elements/tests				\
 	grids					\
 	plots					\
