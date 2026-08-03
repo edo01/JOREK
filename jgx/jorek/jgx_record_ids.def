@@ -1,0 +1,10 @@
+/* jgx/jorek/jgx_record_ids.def -- JOREK's record_id allocation.
+ *
+ * jgx/jorek/ is JOREK's side of the library -- the only part of jgx/ that names
+ * JOREK types, and the only part a physicist edits. The rest of the library
+ * stay application-agnostic.
+ *
+ * Ids must stay below JGX_MAX_RECORD_TYPES (jgx_record_api.h).
+ */
+JGX_RECORD_ID(JGX_REC_ELEMENT, 0)
+JGX_RECORD_ID(JGX_REC_NODE,    1)
