@@ -24,6 +24,7 @@ set(JOREK_SOURCE_DIRS
   grids/grid_utils
   jgx/cpp/src
   jgx/fortran/record
+  jgx/jorek
   matrix
   models
   models/${JOREK_MODEL}
