@@ -9,46 +9,60 @@
 
 #include <cstddef>
 #include "jgx/macros.h"
+#include "jgx/jgx_record_api.h"
 #include "jgx/view.h"
 
 namespace jgx {
 
-/* Component of a Fortran derived-type array, addressed where it lies.
- * ext[0] is the record count, ext[1..] the intra-record extents.
+namespace detail {
+
+/* The extents of a view over one component: the record count, then the
+ * component's own extents in Fortran order. A rank-Rank view takes the first
+ * Rank-1 of those; a scalar component takes none. */
+template <int Rank>
+JGX_HD inline void record_extents(const jgx_field_desc& fd, std::size_t n_records,
+                                  std::size_t ext[Rank]) {
+  static_assert(Rank >= 1 && Rank - 1 <= JGX_MAX_INTRA_RANK,
+                "view rank exceeds JGX_MAX_INTRA_RANK + 1");
+  ext[0] = n_records;
+  for (int d = 1; d < Rank; ++d) ext[d] = fd.intra_extents[d - 1];
+}
+
+} /* namespace detail */
+
+/* Component of a Fortran derived-type array, addressed where it lies. Its
+ * offset and extents come from the registration, so the caller passes only
+ * what varies per array: the base pointer and the record count.
  *
- * offset_bytes and record_stride_bytes are measured on the Fortran side; both
- * must be whole multiples of sizeof(T), which holds for naturally aligned
- * components.
+ * The offset and the record stride are whole multiples of sizeof(T);
+ * jgx_c_record_add_field refuses a registration where they are not.
  */
 template <class T, int Rank>
 JGX_HD inline view<T, Rank, layout_stride>
-aos_field(void* record_base, std::size_t offset_bytes,
-          std::size_t record_stride_bytes, const std::size_t ext[Rank]) {
+aos_field(void* record_base, const jgx_field_desc& fd,
+          std::size_t record_stride_bytes, std::size_t n_records) {
+  std::size_t ext[Rank];
+  detail::record_extents<Rank>(fd, n_records, ext);
+
   std::size_t str[Rank];
   str[0] = record_stride_bytes / sizeof(T);
   for (int d = 1; d < Rank; ++d) str[d] = (d == 1) ? 1 : str[d - 1] * ext[d - 1];
 
   T* const p = reinterpret_cast<T*>(
-      static_cast<char*>(record_base) + offset_bytes);
+      static_cast<char*>(record_base) + fd.offset_bytes);
   return view<T, Rank, layout_stride>(p, ext, str);
 }
 
-/* The same component after packing (on the device), one buffer per field. layout_left over
- * {n_records, intra...} is exactly the pack's j*n_records + rec, so the two
- * cannot drift.
+/* The same component after packing (on the device), one buffer per field.
+ * layout_left over {n_records, intra...} is exactly the pack's
+ * j*n_records + rec, so the two cannot drift.
  */
 template <class T, int Rank>
 JGX_HD inline view<T, Rank, layout_left>
-soa_field(void* field_base, const std::size_t ext[Rank]) {
+soa_field(void* field_base, const jgx_field_desc& fd, std::size_t n_records) {
+  std::size_t ext[Rank];
+  detail::record_extents<Rank>(fd, n_records, ext);
   return view<T, Rank, layout_left>(static_cast<T*>(field_base), ext);
-}
-
-/* Whether a component can be addressed by whole-T strides at all. Checked by
- * the caller; the builders above assume it. */
-template <class T>
-inline bool field_is_addressable(std::size_t offset_bytes,
-                                 std::size_t record_stride_bytes) {
-  return offset_bytes % sizeof(T) == 0 && record_stride_bytes % sizeof(T) == 0;
 }
 
 } /* namespace jgx */

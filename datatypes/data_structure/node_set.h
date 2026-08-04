@@ -66,148 +66,58 @@ struct node_set {
 using node_set_aos = node_set<layout_stride>;
 using node_set_soa = node_set<layout_left>;
 
-/* Fortran parameters, passed in rather than hardcoded. */
-struct node_dims {
-  std::size_t n_nodes      = 0;
-  std::size_t n_coord_tor  = 0;
-  std::size_t n_degrees    = 0;
-  std::size_t n_dim        = 0;
-  std::size_t n_tor        = 0;
-  std::size_t n_values_max = 0;
-  std::size_t n_parents    = 2;   /* type_node%parents(2) */
-};
-
-/* Byte offsets within one record, measured on the Fortran side. */
-struct node_offsets {
-  std::size_t record_stride  = 0;
-  std::size_t x              = 0;
-  std::size_t values         = 0;
-  std::size_t deltas         = 0;
-  std::size_t index          = 0;
-  std::size_t parents        = 0;
-  std::size_t boundary       = 0;
-  std::size_t boundary_index = 0;
-  std::size_t axis_dof       = 0;
-  std::size_t parent_elem    = 0;
-  std::size_t ref_lambda     = 0;
-  std::size_t ref_mu         = 0;
-};
-
-/* One packed buffer per field. */
+/* One packed buffer per field, indexed by node_field. */
 struct node_soa_ptrs {
-  void* x              = nullptr;
-  void* values         = nullptr;
-  void* deltas         = nullptr;
-  void* index          = nullptr;
-  void* parents        = nullptr;
-  void* boundary       = nullptr;
-  void* boundary_index = nullptr;
-  void* axis_dof       = nullptr;
-  void* parent_elem    = nullptr;
-  void* ref_lambda     = nullptr;
-  void* ref_mu         = nullptr;
+  void* field[JGX_NF_COUNT] = {};
 };
-
-template <class Real = double, class Int = int>
-inline bool node_offsets_are_addressable(const node_offsets& off) {
-  const std::size_t rs = off.record_stride;
-  return jgx::field_is_addressable<Real>(off.x,              rs)
-      && jgx::field_is_addressable<Real>(off.values,         rs)
-      && jgx::field_is_addressable<Real>(off.deltas,         rs)
-      && jgx::field_is_addressable<Int >(off.index,          rs)
-      && jgx::field_is_addressable<Int >(off.parents,        rs)
-      && jgx::field_is_addressable<Int >(off.boundary,       rs)
-      && jgx::field_is_addressable<Int >(off.boundary_index, rs)
-      && jgx::field_is_addressable<Int >(off.axis_dof,       rs)
-      && jgx::field_is_addressable<Int >(off.parent_elem,    rs)
-      && jgx::field_is_addressable<Real>(off.ref_lambda,     rs)
-      && jgx::field_is_addressable<Real>(off.ref_mu,         rs);
-}
 
 template <class Real = double, class Int = int>
 JGX_HD inline node_set<layout_stride, Real, Int>
-make_node_set_aos(void* record_base, const node_offsets& off,
-                  const node_dims& d) {
-  const std::size_t nn = d.n_nodes;
-  const std::size_t e1[1] = { nn };
-  const std::size_t ef[2] = { nn, d.n_degrees };
-  const std::size_t ep[2] = { nn, d.n_parents };
-  const std::size_t ex[4] = { nn, d.n_coord_tor, d.n_degrees, d.n_dim };
-  const std::size_t ev[4] = { nn, d.n_tor, d.n_degrees, d.n_values_max };
-  const std::size_t rs = off.record_stride;
+make_node_set_aos(void* record_base, const jgx_record_desc& r,
+                  std::size_t n_nodes) {
+  const std::size_t rs = r.record_stride_bytes;
 
   node_set<layout_stride, Real, Int> s;
-  s.n_nodes        = nn;
-  s.x              = jgx::aos_field<Real, 4>(record_base, off.x,              rs, ex);
-  s.values         = jgx::aos_field<Real, 4>(record_base, off.values,         rs, ev);
-  s.deltas         = jgx::aos_field<Real, 4>(record_base, off.deltas,         rs, ev);
-  s.index          = jgx::aos_field<Int , 2>(record_base, off.index,          rs, ef);
-  s.parents        = jgx::aos_field<Int , 2>(record_base, off.parents,        rs, ep);
-  s.boundary       = jgx::aos_field<Int , 1>(record_base, off.boundary,       rs, e1);
-  s.boundary_index = jgx::aos_field<Int , 1>(record_base, off.boundary_index, rs, e1);
-  s.axis_dof       = jgx::aos_field<Int , 1>(record_base, off.axis_dof,       rs, e1);
-  s.parent_elem    = jgx::aos_field<Int , 1>(record_base, off.parent_elem,    rs, e1);
-  s.ref_lambda     = jgx::aos_field<Real, 1>(record_base, off.ref_lambda,     rs, e1);
-  s.ref_mu         = jgx::aos_field<Real, 1>(record_base, off.ref_mu,         rs, e1);
+  s.n_nodes        = n_nodes;
+  s.x              = jgx::aos_field<Real, 4>(record_base, r.field[JGX_NF_X             ], rs, n_nodes);
+  s.values         = jgx::aos_field<Real, 4>(record_base, r.field[JGX_NF_VALUES        ], rs, n_nodes);
+  s.deltas         = jgx::aos_field<Real, 4>(record_base, r.field[JGX_NF_DELTAS        ], rs, n_nodes);
+  s.index          = jgx::aos_field<Int , 2>(record_base, r.field[JGX_NF_INDEX         ], rs, n_nodes);
+  s.parents        = jgx::aos_field<Int , 2>(record_base, r.field[JGX_NF_PARENTS       ], rs, n_nodes);
+  s.boundary       = jgx::aos_field<Int , 1>(record_base, r.field[JGX_NF_BOUNDARY      ], rs, n_nodes);
+  s.boundary_index = jgx::aos_field<Int , 1>(record_base, r.field[JGX_NF_BOUNDARY_INDEX], rs, n_nodes);
+  s.axis_dof       = jgx::aos_field<Int , 1>(record_base, r.field[JGX_NF_AXIS_DOF      ], rs, n_nodes);
+  s.parent_elem    = jgx::aos_field<Int , 1>(record_base, r.field[JGX_NF_PARENT_ELEM   ], rs, n_nodes);
+  s.ref_lambda     = jgx::aos_field<Real, 1>(record_base, r.field[JGX_NF_REF_LAMBDA    ], rs, n_nodes);
+  s.ref_mu         = jgx::aos_field<Real, 1>(record_base, r.field[JGX_NF_REF_MU        ], rs, n_nodes);
   return s;
 }
 
 template <class Real = double, class Int = int>
 JGX_HD inline node_set<layout_left, Real, Int>
-make_node_set_soa(const node_soa_ptrs& p, const node_dims& d) {
-  const std::size_t nn = d.n_nodes;
-  const std::size_t e1[1] = { nn };
-  const std::size_t ef[2] = { nn, d.n_degrees };
-  const std::size_t ep[2] = { nn, d.n_parents };
-  const std::size_t ex[4] = { nn, d.n_coord_tor, d.n_degrees, d.n_dim };
-  const std::size_t ev[4] = { nn, d.n_tor, d.n_degrees, d.n_values_max };
-
+make_node_set_soa(const node_soa_ptrs& p, const jgx_record_desc& r,
+                  std::size_t n_nodes) {
   node_set<layout_left, Real, Int> s;
-  s.n_nodes        = nn;
-  s.x              = jgx::soa_field<Real, 4>(p.x,              ex);
-  s.values         = jgx::soa_field<Real, 4>(p.values,         ev);
-  s.deltas         = jgx::soa_field<Real, 4>(p.deltas,         ev);
-  s.index          = jgx::soa_field<Int , 2>(p.index,          ef);
-  s.parents        = jgx::soa_field<Int , 2>(p.parents,        ep);
-  s.boundary       = jgx::soa_field<Int , 1>(p.boundary,       e1);
-  s.boundary_index = jgx::soa_field<Int , 1>(p.boundary_index, e1);
-  s.axis_dof       = jgx::soa_field<Int , 1>(p.axis_dof,       e1);
-  s.parent_elem    = jgx::soa_field<Int , 1>(p.parent_elem,    e1);
-  s.ref_lambda     = jgx::soa_field<Real, 1>(p.ref_lambda,     e1);
-  s.ref_mu         = jgx::soa_field<Real, 1>(p.ref_mu,         e1);
+  s.n_nodes        = n_nodes;
+  s.x              = jgx::soa_field<Real, 4>(p.field[JGX_NF_X             ], r.field[JGX_NF_X             ], n_nodes);
+  s.values         = jgx::soa_field<Real, 4>(p.field[JGX_NF_VALUES        ], r.field[JGX_NF_VALUES        ], n_nodes);
+  s.deltas         = jgx::soa_field<Real, 4>(p.field[JGX_NF_DELTAS        ], r.field[JGX_NF_DELTAS        ], n_nodes);
+  s.index          = jgx::soa_field<Int , 2>(p.field[JGX_NF_INDEX         ], r.field[JGX_NF_INDEX         ], n_nodes);
+  s.parents        = jgx::soa_field<Int , 2>(p.field[JGX_NF_PARENTS       ], r.field[JGX_NF_PARENTS       ], n_nodes);
+  s.boundary       = jgx::soa_field<Int , 1>(p.field[JGX_NF_BOUNDARY      ], r.field[JGX_NF_BOUNDARY      ], n_nodes);
+  s.boundary_index = jgx::soa_field<Int , 1>(p.field[JGX_NF_BOUNDARY_INDEX], r.field[JGX_NF_BOUNDARY_INDEX], n_nodes);
+  s.axis_dof       = jgx::soa_field<Int , 1>(p.field[JGX_NF_AXIS_DOF      ], r.field[JGX_NF_AXIS_DOF      ], n_nodes);
+  s.parent_elem    = jgx::soa_field<Int , 1>(p.field[JGX_NF_PARENT_ELEM   ], r.field[JGX_NF_PARENT_ELEM   ], n_nodes);
+  s.ref_lambda     = jgx::soa_field<Real, 1>(p.field[JGX_NF_REF_LAMBDA    ], r.field[JGX_NF_REF_LAMBDA    ], n_nodes);
+  s.ref_mu         = jgx::soa_field<Real, 1>(p.field[JGX_NF_REF_MU        ], r.field[JGX_NF_REF_MU        ], n_nodes);
   return s;
 }
 
-/* Address an existing Fortran node array in place. Nothing here assumes an
- * offset or an extent -- both come from the registry, which
- * mod_jgx_node_record.f90 filled with c_loc measurements. */
+/* Address an existing Fortran node array in place. Offset or extent come
+ * from the registry which mod_jgx_node_record.f90 filled with c_loc measurements. */
 inline node_set_aos node_set_from_registry(void* base, std::size_t n_nodes) {
-  const jgx_record_desc& r = jgx::registered_record(JGX_REC_NODE, JGX_NF_COUNT);
-
-  node_offsets off;
-  off.record_stride  = r.record_stride_bytes;
-  off.x              = r.field[JGX_NF_X             ].offset_bytes;
-  off.values         = r.field[JGX_NF_VALUES        ].offset_bytes;
-  off.deltas         = r.field[JGX_NF_DELTAS        ].offset_bytes;
-  off.index          = r.field[JGX_NF_INDEX         ].offset_bytes;
-  off.parents        = r.field[JGX_NF_PARENTS       ].offset_bytes;
-  off.boundary       = r.field[JGX_NF_BOUNDARY      ].offset_bytes;
-  off.boundary_index = r.field[JGX_NF_BOUNDARY_INDEX].offset_bytes;
-  off.axis_dof       = r.field[JGX_NF_AXIS_DOF      ].offset_bytes;
-  off.parent_elem    = r.field[JGX_NF_PARENT_ELEM   ].offset_bytes;
-  off.ref_lambda     = r.field[JGX_NF_REF_LAMBDA    ].offset_bytes;
-  off.ref_mu         = r.field[JGX_NF_REF_MU        ].offset_bytes;
-
-  node_dims d;
-  d.n_nodes      = n_nodes;
-  d.n_coord_tor  = r.field[JGX_NF_X      ].intra_extents[0];
-  d.n_degrees    = r.field[JGX_NF_X      ].intra_extents[1];
-  d.n_dim        = r.field[JGX_NF_X      ].intra_extents[2];
-  d.n_tor        = r.field[JGX_NF_VALUES ].intra_extents[0];
-  d.n_values_max = r.field[JGX_NF_VALUES ].intra_extents[2];
-  d.n_parents    = r.field[JGX_NF_PARENTS].intra_extents[0];
-
-  return make_node_set_aos<>(base, off, d);
+  return make_node_set_aos<>(base, jgx::registered_record(JGX_REC_NODE, JGX_NF_COUNT),
+                             n_nodes);
 }
 
 } /* namespace jorek */
