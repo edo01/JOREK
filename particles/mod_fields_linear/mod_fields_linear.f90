@@ -6,9 +6,57 @@ use mod_particle_sim
 use mod_event
 use mod_fields
 use mod_interp
+use, intrinsic :: iso_c_binding, only: c_double, c_int32_t, c_ptr, c_loc
 implicit none
 private
 public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_before_time
+
+!> Interfaces only -- the bodies are in C++ (mod_fields_linear/fields_linear_shim.cpp).
+!> The symbols carry the module name: mod_fields_hermite_birkhoff declares routines
+!> of the same name and the C symbol namespace is flat.
+interface
+  pure subroutine jgx_host_do_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,   &
+                                           is_static, flag_zero_dpsidt,             &
+                                           time_now, time_prev,                     &
+                                           i_elm0, i_v0, n_v, s, t, phi, n_period,  &
+                                           time, t_jorek, P, P_s, P_t, P_phi,       &
+                                           P_time, R, R_s, R_t, Z, Z_s, Z_t)        &
+      bind(C, name="jgx_host_fields_linear_do_interp_PRZ_1")
+    import :: c_double, c_int32_t, c_ptr
+    implicit none
+    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
+    integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt, n_period
+    real(c_double),     value, intent(in) :: time_now, time_prev
+    real(c_double),     value, intent(in) :: s, t, phi, time, t_jorek
+    integer(c_int32_t),        intent(in) :: i_v0(n_v)
+    real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
+    real(c_double),           intent(out) :: P_time(n_v)
+    real(c_double),           intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
+  end subroutine
+
+  pure subroutine jgx_host_do_interp_PRZP_1(el_base, n_elements, nd_base, n_nodes,  &
+                                            is_static, flag_zero_dpsidt,            &
+                                            time_now, time_prev,                    &
+                                            i_elm0, i_v0, n_v, s, t, phi, n_period, &
+                                            n_coord_period, time, t_jorek,          &
+                                            P, P_s, P_t, P_phi, P_time,             &
+                                            R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi) &
+      bind(C, name="jgx_host_fields_linear_do_interp_PRZP_1")
+    import :: c_double, c_int32_t, c_ptr
+    implicit none
+    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
+    integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
+    integer(c_int32_t), value, intent(in) :: n_period, n_coord_period
+    real(c_double),     value, intent(in) :: time_now, time_prev
+    real(c_double),     value, intent(in) :: s, t, phi, time, t_jorek
+    integer(c_int32_t),        intent(in) :: i_v0(n_v)
+    real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
+    real(c_double),           intent(out) :: P_time(n_v)
+    real(c_double),           intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
+  end subroutine
+end interface
 
 !> Action to read in the fields into sim%fields
 type, extends(action) :: read_jorek_fields_interp_linear
@@ -43,12 +91,11 @@ end type jorek_fields_interp_linear
 contains
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
+!> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  use mod_interp
   use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep, central_mass, central_density
-  use mod_linear, only: linear_interp_differentials
-  use mod_linear, only: linear_interp_differentials_dt
+  use mod_parameters, only: n_period
   class(jorek_fields_interp_linear),  intent(in)  :: this
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
@@ -57,38 +104,30 @@ pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, 
   real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
   real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
 
-  real*8                 :: df, dt
-  real*8, dimension(n_v) :: Pd, Pd_s, Pd_t, Pd_phi
-  real*8                 :: t_jorek
-  
+  integer(c_int32_t) :: c_static, c_zero_dpsidt, iv0(n_v)
+  real*8             :: t_jorek
+
   ! JOREK time step in seconds
   t_jorek = tstep*sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
 
-  P_time = 0.d0
-  
-  !> interpolate values
-  call interp_PRZ(this%node_list,this%element_list,i_elm,i_v,n_v,s,t,phi,P, P_s, P_t, P_phi, R,R_s,R_t,Z,Z_s,Z_t)
+  ! default logicals are not interoperable
+  c_static = 0
+  if (this%static) c_static = 1
+  c_zero_dpsidt = 0
+  if (this%flag_zero_dpsidt) c_zero_dpsidt = 1
+  iv0 = int(i_v - 1, c_int32_t)
 
-  !> interpolate differentials
-  if(t_jorek .gt. 0.d0) then
-    call interp_PRZ(this%node_list,this%element_list,i_elm,i_v,n_v,s,t,phi, &
-      Pd,Pd_s,Pd_t,Pd_phi,R,R_s,R_t,Z,Z_s,Z_t,deltas=.true.)
-    if(abs(this%time_now-this%time_prev) .gt. 1d-10 .and. .not. this%static) then
-      !> compute time fraction df
-      dt = 1.d0/(this%time_now - this%time_prev)
-      df = (this%time_now - time)*dt
-      !> apply linear interpolation
-      P     = linear_interp_differentials(n_v,P,Pd,df)
-      P_s   = linear_interp_differentials(n_v,P_s,Pd_s,df)
-      P_t   = linear_interp_differentials(n_v,P_t,Pd_t,df)
-      P_phi = linear_interp_differentials(n_v,P_phi,Pd_phi,df)
-    else
-      dt = 1.d0/t_jorek
-    endif
-    !> compute time derivative
-    P_time = linear_interp_differentials_dt(n_v,Pd,dt) 
-  endif
-
+  call jgx_host_do_interp_PRZ_1(c_loc(this%element_list%element(1)),          &
+                                int(this%element_list%n_elements, c_int32_t), &
+                                c_loc(this%node_list%node(1)),                &
+                                int(this%node_list%n_nodes, c_int32_t),       &
+                                c_static, c_zero_dpsidt,                      &
+                                this%time_now, this%time_prev,                &
+                                int(i_elm - 1, c_int32_t), iv0,               &
+                                int(n_v, c_int32_t), s, t, phi,               &
+                                int(n_period, c_int32_t), time, t_jorek,      &
+                                P, P_s, P_t, P_phi, P_time,                   &
+                                R, R_s, R_t, Z, Z_s, Z_t)
 end subroutine do_interp_PRZ_1
 
 !> This procedure interpolates a variable, its first and second order derivatives in space
@@ -188,12 +227,11 @@ end subroutine do_interp_PRZ_2
 
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only, including phi derivatives
+!> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
 pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-  use mod_interp
   use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep, central_mass, central_density
-  use mod_linear, only: linear_interp_differentials
-  use mod_linear, only: linear_interp_differentials_dt
+  use mod_parameters, only: n_period, n_coord_period
   class(jorek_fields_interp_linear),  intent(in)  :: this
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
@@ -202,38 +240,32 @@ pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s,
   real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
   real*8,                   intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
 
-  real*8                 :: df, dt
-  real*8, dimension(n_v) :: Pd, Pd_s, Pd_t, Pd_phi
-  real*8                 :: t_jorek
-  
+  integer(c_int32_t) :: c_static, c_zero_dpsidt, iv0(n_v)
+  real*8             :: t_jorek
+
   ! JOREK time step in seconds
   t_jorek = tstep*sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
 
-  P_time = 0.d0
-  
-  !> interpolate values
-  call interp_PRZP(this%node_list,this%element_list,i_elm,i_v,n_v,s,t,phi,P,P_s,P_t,P_phi,R,R_s,R_t,R_phi,Z,Z_s,Z_t,Z_phi)
+  ! default logicals are not interoperable
+  c_static = 0
+  if (this%static) c_static = 1
+  c_zero_dpsidt = 0
+  if (this%flag_zero_dpsidt) c_zero_dpsidt = 1
+  iv0 = int(i_v - 1, c_int32_t)
 
-  !> interpolate differentials
-  if(t_jorek .gt. 0.d0) then
-    call interp_PRZP(this%node_list,this%element_list,i_elm,i_v,n_v,s,t,phi, &
-      Pd,Pd_s,Pd_t,Pd_phi,R,R_s,R_t,R_phi,Z,Z_s,Z_t,Z_phi,deltas=.true.)
-    if(abs(this%time_now-this%time_prev) .gt. 1d-10 .and. .not. this%static) then
-      !> compute time fraction df
-      dt = 1.d0/(this%time_now - this%time_prev)
-      df = (this%time_now - time)*dt
-      !> apply linear interpolation
-      P     = linear_interp_differentials(n_v,P,Pd,df)
-      P_s   = linear_interp_differentials(n_v,P_s,Pd_s,df)
-      P_t   = linear_interp_differentials(n_v,P_t,Pd_t,df)
-      P_phi = linear_interp_differentials(n_v,P_phi,Pd_phi,df)
-    else
-      dt = 1.d0/t_jorek
-    endif
-    !> compute time derivative
-    P_time = linear_interp_differentials_dt(n_v,Pd,dt) 
-  endif
-
+  call jgx_host_do_interp_PRZP_1(c_loc(this%element_list%element(1)),         &
+                                int(this%element_list%n_elements, c_int32_t), &
+                                c_loc(this%node_list%node(1)),                &
+                                int(this%node_list%n_nodes, c_int32_t),       &
+                                c_static, c_zero_dpsidt,                      &
+                                this%time_now, this%time_prev,                &
+                                int(i_elm - 1, c_int32_t), iv0,               &
+                                int(n_v, c_int32_t), s, t, phi,               &
+                                int(n_period, c_int32_t),                     &
+                                int(n_coord_period, c_int32_t),               &
+                                time, t_jorek,                                &
+                                P, P_s, P_t, P_phi, P_time,                   &
+                                R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
 end subroutine do_interp_PRZP_1
 
 !> Constructor to allow for optional and default variables
