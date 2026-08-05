@@ -226,6 +226,16 @@ ifneq (3, $(N_ORDER_PARAMETER))
   DEFINES  := $(DEFINES) -DGAUSS_ORDER=8
 endif
 
+# Array extents for the C++ side, see jgx/jorek/jorek_settings.h. Read from
+# models/mod_settings.f90 so they cannot drift from the Fortran parameters.
+# Mirrors cmake/JorekModelConfig.cmake.
+JGX_N_DEGREES_PARAMETER = $(shell echo $$(( (($(N_ORDER_PARAMETER)+1)/2)*(($(N_ORDER_PARAMETER)+1)/2) )))
+DEFINES := $(DEFINES) -DJGX_N_DEGREES=$(JGX_N_DEGREES_PARAMETER)
+DEFINES := $(DEFINES) -DJGX_N_TOR=$(shell ./util/config.sh -p n_tor)
+DEFINES := $(DEFINES) -DJGX_N_COORD_TOR=$(shell ./util/config.sh -p n_coord_tor)
+DEFINES := $(DEFINES) -DJGX_N_VERTEX_MAX=$(shell ./util/config.sh -p n_vertex_max)
+DEFINES := $(DEFINES) -DJGX_N_VALUES_MAX=$(shell ./util/config.sh -p n_values_max)
+
 
 ifeq (1, $(USE_PASTIX_MURGE))
   LIBS     := $(LIBS) $(LIB_PASTIX_MURGE) $(LIB_PASTIX_BLAS)
