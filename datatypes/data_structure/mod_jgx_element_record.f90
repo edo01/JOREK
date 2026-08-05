@@ -4,8 +4,7 @@
 !> stay in the same order.
 !>
 !> Offsets are measured from a local array of the record type, not from the real
-!> mesh, because they are properties of the type. That makes this callable at
-!> any point in startup, with no ordering constraint against grid construction.
+!> mesh, because they are properties of the type.
 module mod_jgx_element_record
   use, intrinsic :: iso_c_binding
   use data_structure,     only: type_element
