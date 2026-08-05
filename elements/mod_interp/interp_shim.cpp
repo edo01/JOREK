@@ -60,4 +60,31 @@ extern "C" {
                              i_v, n_v, s, t, phi, n_period, use_deltas != 0,
                              Pv, Psv, Ptv, Ppv, *R, *R_s, *R_t, *Z, *Z_s, *Z_t);
     }
+
+    /* mod_interp::interp_PRZP_1. As jgx_host_interp_PRZ_1, plus the toroidal
+     * periodicity of the (R,Z) coordinates and their phi derivatives. */
+    void jgx_host_interp_PRZP_1(void* el_base, const int32_t n_elements,
+                                void* nd_base, const int32_t n_nodes,
+                                const int32_t i_elm0, const int32_t* i_v0,
+                                const int32_t n_v,
+                                const double s, const double t, const double phi,
+                                const int32_t n_period, const int32_t n_coord_period,
+                                const int32_t use_deltas,
+                                double* P, double* P_s, double* P_t, double* P_phi,
+                                double* R, double* R_s, double* R_t, double* R_phi,
+                                double* Z, double* Z_s, double* Z_t, double* Z_phi) {
+
+        const auto el = jorek::element_set_from_registry(el_base, static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+
+        const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
+
+        const jgx::view<const int32_t, 1> i_v(i_v0, pe);
+        jgx::view<double, 1> Pv(P, pe), Psv(P_s, pe), Ptv(P_t, pe), Ppv(P_phi, pe);
+
+        interp::interp_PRZP_1(el, nd, static_cast<std::size_t>(i_elm0),
+                              i_v, n_v, s, t, phi, n_period, n_coord_period,
+                              use_deltas != 0, Pv, Psv, Ptv, Ppv,
+                              *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);
+    }
 }

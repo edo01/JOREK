@@ -63,6 +63,26 @@ interface
   end subroutine
 end interface
 
+!> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
+interface
+  pure subroutine jgx_host_interp_PRZP_1(el_base, n_elements, nd_base, n_nodes,   &
+                                         i_elm0, i_v0, n_v, s, t, phi, n_period,  &
+                                         n_coord_period, use_deltas,              &
+                                         P, P_s, P_t, P_phi,                      &
+                                         R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)  &
+      bind(C, name="jgx_host_interp_PRZP_1")
+    import :: c_double, c_int32_t, c_ptr
+    implicit none
+    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
+    integer(c_int32_t), value, intent(in) :: n_period, n_coord_period, use_deltas
+    real(c_double),     value, intent(in) :: s, t, phi
+    integer(c_int32_t),        intent(in) :: i_v0(n_v)
+    real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
+    real(c_double),           intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
+  end subroutine
+end interface
+
 interface interp
   module procedure interp_2,interp_1,interp_0_single_harmonic
 end interface interp
@@ -368,10 +388,11 @@ end subroutine interp_PRZP_0
 
 !> This subroutine interpolates some variables at a specific position within one element at a given position (s,t,phi)
 !> including up to first order R, Z phi derivatives
-pure subroutine interp_PRZP_1(node_list, element_list, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi,  & 
+!> Facade only -- the body is in C++ (mod_interp/interp_shim.cpp).
+pure subroutine interp_PRZP_1(node_list, element_list, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi,  &
                              R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi, deltas)
-type (type_node_list),    intent(in)  :: node_list
-type (type_element_list), intent(in)  :: element_list
+type (type_node_list),    target, intent(in)  :: node_list
+type (type_element_list), target, intent(in)  :: element_list
 integer,                  intent(in)  :: i_elm
 integer,                  intent(in)  :: n_v, i_v(n_v)
 real*8,                   intent(in)  :: s, t, phi
@@ -379,81 +400,25 @@ real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
 real*8,                   intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
 logical, optional, intent(in)         :: deltas
 
-! --- Local variables
-real*8  :: H(n_degrees,4), H_s(n_degrees,4), H_t(n_degrees,4), HZ(n_tor), dHZ(n_tor), HZ_coord(n_coord_tor), dHZ_coord(n_coord_tor)
-integer :: kv, iv, kf, i
-real*8  :: values(n_tor,n_degrees,n_v,n_vertex_max)
-real*8  :: xR(n_coord_tor,n_degrees,n_vertex_max), xZ(n_coord_tor,n_degrees,n_vertex_max)
-real*8  :: sizes(n_degrees), v, vp
-logical :: my_deltas
+integer(c_int32_t) :: c_deltas, iv0(n_v)
 
-! 7% exec time
-call basisfunctions_T(s,t,H,H_s,H_t)
-
-P = 0.d0; P_s = 0.d0; P_t = 0.d0; P_phi = 0.d0
-R = 0.d0; R_s = 0.d0; R_t = 0.d0; R_phi = 0.d0
-Z = 0.d0; Z_s = 0.d0; Z_t = 0.d0; Z_phi = 0.d0
-
-! 7% exec time
-call sincosperiod_moivre(phi, HZ, dHZ)
-call sincosperiod_moivre_ncoord(phi, HZ_coord, dHZ_coord)
-
-my_deltas = .false.
+! optionals are not handled by the c_binding
+c_deltas = 0
 if (present(deltas)) then
-  if (deltas) my_deltas = .true.
+  if (deltas) c_deltas = 1
 end if
+iv0 = int(i_v - 1, c_int32_t)
 
-! Preload values and premultiply with sizes(:,kv)
-do kv = 1,n_vertex_max  ! 4 vertices
-  iv = element_list%element(i_elm)%vertex(kv)
-  sizes(:) = element_list%element(i_elm)%size(kv,:)
-
-  if (my_deltas) then
-    do i = 1, n_v
-      do kf=1,n_degrees
-        values(1:n_tor,kf,i,kv) = node_list%node(iv)%deltas(1:n_tor,kf,i_v(i)) * sizes(kf)
-      end do
-    end do
-  else
-    do i = 1, n_v
-      do kf=1,n_degrees
-        values(1:n_tor,kf,i,kv) = node_list%node(iv)%values(1:n_tor,kf,i_v(i)) * sizes(kf)
-      end do
-    end do
-  end if
-  do kf=1,n_degrees
-    xR(1:n_coord_tor,kf,kv) = node_list%node(iv)%x(1:n_coord_tor,kf,1) * sizes(kf)
-    xZ(1:n_coord_tor,kf,kv) = node_list%node(iv)%x(1:n_coord_tor,kf,2) * sizes(kf)
-  enddo
-end do
-
-do kv = 1, n_vertex_max
-  do i = 1, n_v
-    do kf = 1, n_degrees
-      v = dot_product(values(1:n_tor,kf,i,kv),HZ(1:n_tor))
-      P(i)     = P(i)     + v * H(kf, kv)
-      P_s(i)   = P_s(i)   + v * H_s(kf, kv)
-      P_t(i)   = P_t(i)   + v * H_t(kf, kv)
-      vp = dot_product(values(1:n_tor,kf,i,kv),dHZ(1:n_tor))
-      P_phi(i) = P_phi(i) + vp * H(kf, kv)
-    enddo
-  enddo
-  do kf = 1, n_degrees
-    v = dot_product(xR(1:n_coord_tor,kf,kv),HZ_coord(1:n_coord_tor))
-    R = R + v * H(kf,kv)
-    R_s = R_s + v * H_s(kf,kv)
-    R_t = R_t + v * H_t(kf,kv)
-    vp = dot_product(xR(1:n_coord_tor,kf,kv),dHZ_coord(1:n_coord_tor))
-    R_phi = R_phi + vp * H(kf,kv)
-
-    v = dot_product(xZ(1:n_coord_tor,kf,kv),HZ_coord(1:n_coord_tor))
-    Z = Z + v * H(kf,kv)
-    Z_s = Z_s + v * H_s(kf,kv)
-    Z_t = Z_t + v * H_t(kf,kv)
-    vp = dot_product(xZ(1:n_coord_tor,kf,kv),dHZ_coord(1:n_coord_tor))
-    Z_phi = Z_phi + vp * H(kf,kv)
-  enddo
-enddo
+call jgx_host_interp_PRZP_1(c_loc(element_list%element(1)),               &
+                            int(element_list%n_elements, c_int32_t),      &
+                            c_loc(node_list%node(1)),                     &
+                            int(node_list%n_nodes, c_int32_t),            &
+                            int(i_elm - 1, c_int32_t), iv0,               &
+                            int(n_v, c_int32_t), s, t, phi,               &
+                            int(n_period, c_int32_t),                     &
+                            int(n_coord_period, c_int32_t), c_deltas,     &
+                            P, P_s, P_t, P_phi,                           &
+                            R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
 end subroutine interp_PRZP_1
 
 
@@ -596,6 +561,7 @@ pure subroutine sincosperiod_moivre_default(phi,HZ,dHZ)
   call sincosperiod_moivre_explicit(phi,HZ,dHZ,n_tor,n_period)
 end subroutine sincosperiod_moivre_default
 
+!> Facade only -- the body is in C++ (mod_interp/interp_shim.cpp).
 pure subroutine sincosperiod_moivre_ncoord(phi,HZ_coord,dHZ_coord)
   real*8, intent(out) :: HZ_coord(n_coord_tor), dHZ_coord(n_coord_tor)
   real*8, intent(in)  :: phi
