@@ -62,6 +62,8 @@ DIRS := diagnostics				\
 	refinement				\
 	matrix					\
 	particles				\
+	particles/mod_fields			\
+	particles/mod_fields_linear		\
 	particles/particle_types		\
 	particles/pushers			\
 	particles/examples			\

@@ -33,6 +33,19 @@ end interface
 
 !> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
 interface
+  pure subroutine jgx_host_sincosperiod_moivre_ncoord(phi,HZ_coord,dHZ_coord, &
+                                                      n_coord_tor_in,n_coord_period_in) &
+      bind(C, name="jgx_host_sincosperiod_moivre_ncoord")
+    import :: c_double, c_int
+    implicit none
+    real(c_double), value, intent(in) :: phi
+    integer(c_int), value, intent(in) :: n_coord_tor_in,n_coord_period_in
+    real(c_double), intent(out)       :: HZ_coord(n_coord_tor_in), dHZ_coord(n_coord_tor_in)
+  end subroutine
+end interface
+
+!> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
+interface
   pure subroutine jgx_host_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,  &
                                         i_elm0, i_v0, n_v, s, t, phi, n_period, &
                                         use_deltas, P, P_s, P_t, P_phi,         &
@@ -584,24 +597,10 @@ pure subroutine sincosperiod_moivre_default(phi,HZ,dHZ)
 end subroutine sincosperiod_moivre_default
 
 pure subroutine sincosperiod_moivre_ncoord(phi,HZ_coord,dHZ_coord)
-  integer, parameter  :: n_mode = (n_coord_tor-1)/2 ! number of modes excluding 0
   real*8, intent(out) :: HZ_coord(n_coord_tor), dHZ_coord(n_coord_tor)
   real*8, intent(in)  :: phi
-  integer    :: i
-  real*8     :: phase
-  complex*16 :: H_complex
 
-  HZ_coord(1) = 1.d0
-  dHZ_coord(1) = 0.d0
-
-  do i=1,n_mode
-    phase            = real(n_coord_period*i,8)*-1*phi  ! note -1 factor because the basis of physics and coordinates have opposite signs
-    H_complex        = exp(cmplx(0.d0,1.d0)*phase)
-    HZ_coord(2*i)    = real(H_complex)
-    HZ_coord(2*i+1)  = aimag(H_complex)
-    dHZ_coord(2*i)   = HZ_coord(2*i+1)*(-n_coord_period*i)
-    dHZ_coord(2*i+1) = HZ_coord(2*i)  *( n_coord_period*i)
-  end do
+  call jgx_host_sincosperiod_moivre_ncoord(phi,HZ_coord,dHZ_coord,n_coord_tor,n_coord_period)
 end subroutine sincosperiod_moivre_ncoord
 
 pure subroutine moivre(ar,ai,br,bi,or,oi)

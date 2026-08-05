@@ -9,13 +9,6 @@
 #include "jgx/macros.h"
 #include "jgx/view.h"
 
-/**
- * @todo: Fix parameters definitions -- mirrors mod_settings.f90 (n_order = 3).
- */
-#define JGX_N_DEGREES     4
-#define JGX_N_VERTEX_MAX  4
-#define JGX_N_TOR         3
-
 namespace interp
 {
     template<class BasisFunctionsView>
@@ -39,6 +32,35 @@ namespace interp
             dHZ_view(2*i    ) =  n*re;
         }
     } // sincosperiod_moivre_explicit
+
+    /**
+     * @todo: dHZ_coord is not the phi derivative of HZ_coord. The phase carries
+     * the -1 factor but the derivative reuses the formula of
+     * sincosperiod_moivre_explicit, so both entries come out with the opposite
+     * sign. Reproduced here as in the Fortran, pending a decision on the
+     * intended convention.
+     */
+    template<class BasisFunctionsView>
+    JGX_HD inline void sincosperiod_moivre_ncoord(const double phi,
+                                                  BasisFunctionsView HZ_view, BasisFunctionsView dHZ_view,
+                                                  const int n_coord_tor_in, const int n_coord_period_in) {
+        const int n_mode = (n_coord_tor_in - 1)/2; // number of modes excluding 0
+
+        HZ_view (0) = 1.0;
+        dHZ_view(0) = 0.0;
+
+        for (int i = 1; i <= n_mode; ++i) {
+            const double n = static_cast<double>(n_coord_period_in*i);
+            // the coordinate basis runs against the physics basis
+            const double phase = -n*phi;
+            const double re    = cos(phase);
+            const double im    = sin(phase);
+            HZ_view (2*i - 1) =    re;
+            HZ_view (2*i    ) =    im;
+            dHZ_view(2*i - 1) = -n*im;
+            dHZ_view(2*i    ) =  n*re;
+        }
+    } // sincosperiod_moivre_ncoord
 
     /**
      * mod_interp::interp_PRZ_1 -- interpolate n_v variables and the geometry (R,Z)

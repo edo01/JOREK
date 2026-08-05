@@ -19,6 +19,18 @@ extern "C" {
         interp::sincosperiod_moivre_explicit(phi, HZ_view, dHZ_view, n_tor_in, n_period_in);
     }
 
+    void jgx_host_sincosperiod_moivre_ncoord(const double phi,
+                                             double* HZ_coord, double* dHZ_coord,
+                                             const int n_coord_tor_in, const int n_coord_period_in) {
+
+        const std::size_t ext[1] = { static_cast<std::size_t>(n_coord_tor_in) };
+        const jgx::view<double, 1> HZ_view (HZ_coord,  ext);
+        const jgx::view<double, 1> dHZ_view(dHZ_coord, ext);
+
+        interp::sincosperiod_moivre_ncoord(phi, HZ_view, dHZ_view,
+                                           n_coord_tor_in, n_coord_period_in);
+    }
+
     /* mod_interp::interp_PRZ_1.
      *
      * The mesh crosses the seam as a base pointer plus a record count; the
