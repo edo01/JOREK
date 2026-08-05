@@ -62,6 +62,7 @@ DIRS := diagnostics				\
 	refinement				\
 	matrix					\
 	particles				\
+	particles/particle_types		\
 	particles/pushers			\
 	particles/examples			\
 	particles/diagnostics			\
