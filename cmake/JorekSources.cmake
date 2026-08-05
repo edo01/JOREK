@@ -30,6 +30,7 @@ set(JOREK_SOURCE_DIRS
   models
   models/${JOREK_MODEL}
   particles
+  particles/mod_fields
   particles/particle_types
   particles/diagnostics
   particles/postprocessors
