@@ -5,6 +5,7 @@
 #include <cstddef>
 
 #include "elements/mod_basisfunctions/basisfunctions.h"
+#include "jgx/jorek/jorek_settings.h"
 #include "jgx/macros.h"
 #include "jgx/view.h"
 
