@@ -230,6 +230,7 @@ endif
 # models/mod_settings.f90 so they cannot drift from the Fortran parameters.
 # Mirrors cmake/JorekModelConfig.cmake.
 JGX_N_DEGREES_PARAMETER = $(shell echo $$(( (($(N_ORDER_PARAMETER)+1)/2)*(($(N_ORDER_PARAMETER)+1)/2) )))
+DEFINES := $(DEFINES) -DJGX_N_ORDER=$(N_ORDER_PARAMETER)
 DEFINES := $(DEFINES) -DJGX_N_DEGREES=$(JGX_N_DEGREES_PARAMETER)
 DEFINES := $(DEFINES) -DJGX_N_TOR=$(shell ./util/config.sh -p n_tor)
 DEFINES := $(DEFINES) -DJGX_N_COORD_TOR=$(shell ./util/config.sh -p n_coord_tor)

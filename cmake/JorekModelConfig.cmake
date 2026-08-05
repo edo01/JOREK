@@ -90,7 +90,7 @@ endif()
 # The ported kernels size their scratch with these, where the Fortran uses the
 # mod_settings.f90 parameters directly.
 math(EXPR JOREK_N_DEGREES "((${JOREK_N_ORDER} + 1) / 2) * ((${JOREK_N_ORDER} + 1) / 2)")
-set(JGX_SETTINGS_DEFINES "JGX_N_DEGREES=${JOREK_N_DEGREES}")
+set(JGX_SETTINGS_DEFINES "JGX_N_ORDER=${JOREK_N_ORDER}" "JGX_N_DEGREES=${JOREK_N_DEGREES}")
 
 foreach(_key n_tor n_coord_tor n_vertex_max n_values_max)
   _jorek_read_setting(_value "${JOREK_GLOBAL_SETTINGS}" "${_key}")

@@ -7,8 +7,8 @@
 #ifndef JOREK_SETTINGS_H
 #define JOREK_SETTINGS_H
 
-#if !defined(JGX_N_TOR) || !defined(JGX_N_COORD_TOR) || !defined(JGX_N_DEGREES) \
-    || !defined(JGX_N_VERTEX_MAX) || !defined(JGX_N_VALUES_MAX)
+#if !defined(JGX_N_TOR) || !defined(JGX_N_COORD_TOR) || !defined(JGX_N_ORDER) \
+    || !defined(JGX_N_DEGREES) || !defined(JGX_N_VERTEX_MAX) || !defined(JGX_N_VALUES_MAX)
 #error "mod_settings.f90 extents missing; compile through the CMake or Makefile build"
 #endif
 
