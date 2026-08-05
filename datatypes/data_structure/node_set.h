@@ -1,10 +1,7 @@
 /* datatypes/data_structure/node_set.h -- the node container, in AoS and SoA form.
  *
  * Covers **ONLY the unconditional components** of type_node
- * (datatypes/data_structure/data_structure.f90). The model-guarded ones (psi_eq, Fprof_eq and
- * the STELLARATOR_MODEL block) are out of scope here by design and get their
- * own set when a model needs them. (one offset table cannot describe a field
- * list that moves with a preprocessor switch)
+ * (datatypes/data_structure/data_structure.f90).
  *
  * axis_node and constrained are also absent: default `logical` has no
  * interoperable kind, so they need logical(c_bool) on the Fortran side first.
@@ -29,6 +26,13 @@ namespace jorek {
 using jgx::layout_left;
 using jgx::layout_stride;
 using jgx::view;
+
+/**
+ * @todo: The model-guarded ones (psi_eq, Fprof_eq and
+ * the STELLARATOR_MODEL block) are out of scope here by design and get their
+ * own set when a model needs them. (one offset table cannot describe a field
+ * list that moves with a preprocessor switch)
+ */
 
 /* type_node, unconditional components only */
 enum node_field {
