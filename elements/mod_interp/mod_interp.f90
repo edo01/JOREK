@@ -20,7 +20,6 @@ public :: sincosperiod_moivre, mode_moivre !< public for regtesting, used by int
 public :: interp_PRZ_combined !< same as interp, but for any variable, including R and Z
 
 !> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
-!> Scalars are passed by value, as in ::basisfunctions_2D_1_T.
 interface
   pure subroutine sincosperiod_moivre_explicit(phi,HZ,dHZ,n_tor_in,n_period_in) &
       bind(C, name="jgx_host_sincosperiod_moivre_explicit")
@@ -33,15 +32,11 @@ interface
 end interface
 
 !> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
-!> The mesh crosses as a base pointer plus a record count; the component layout
-!> comes from the jgx registry, filled once by mod_jgx_jorek_records.
 interface
   pure subroutine jgx_host_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,  &
                                         i_elm0, i_v0, n_v, s, t, phi, n_period, &
                                         use_deltas, P, P_s, P_t, P_phi,         &
-                                        R, R_s, R_t, Z, Z_s, Z_t,               &
-                                        w_values, w_xR, w_xZ, w_H, w_H_s, w_H_t,&
-                                        w_HZ, w_dHZ)                            &
+                                        R, R_s, R_t, Z, Z_s, Z_t)               &
       bind(C, name="jgx_host_interp_PRZ_1")
     import :: c_double, c_int32_t, c_ptr
     implicit none
@@ -52,9 +47,6 @@ interface
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
     real(c_double),           intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
-    real(c_double),         intent(inout) :: w_values(*), w_xR(*), w_xZ(*)
-    real(c_double),         intent(inout) :: w_H(*), w_H_s(*), w_H_t(*)
-    real(c_double),         intent(inout) :: w_HZ(*), w_dHZ(*)
   end subroutine
 end interface
 
@@ -174,14 +166,9 @@ real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
 real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
 logical, optional, intent(in)         :: deltas
 
-! --- Workspace: Fortran owns the temporaries, as before.
-real*8  :: w_values(n_tor,n_degrees,n_v,n_vertex_max)
-real*8  :: w_xR(n_degrees,n_vertex_max), w_xZ(n_degrees,n_vertex_max)
-real*8  :: w_H(n_degrees,n_vertex_max), w_H_s(n_degrees,n_vertex_max)
-real*8  :: w_H_t(n_degrees,n_vertex_max)
-real*8  :: w_HZ(n_tor), w_dHZ(n_tor)
 integer(c_int32_t) :: c_deltas, iv0(n_v)
 
+! optionals are not handled by the c_binding
 c_deltas = 0
 if (present(deltas)) then
   if (deltas) c_deltas = 1
@@ -195,9 +182,7 @@ call jgx_host_interp_PRZ_1(c_loc(element_list%element(1)),               &
                            int(i_elm - 1, c_int32_t), iv0,               &
                            int(n_v, c_int32_t), s, t, phi,               &
                            int(n_period, c_int32_t), c_deltas,           &
-                           P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t, &
-                           w_values, w_xR, w_xZ, w_H, w_H_s, w_H_t,      &
-                           w_HZ, w_dHZ)
+                           P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t)
 end subroutine interp_PRZ_1
 
 
