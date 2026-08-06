@@ -123,6 +123,20 @@ else()
   set(JOREK_STELLARATOR FALSE)
 endif()
 
+# type_node ends with a #if chain, and the arm the model takes decides which
+# components the node actually has. Rather than repeat that chain in the jgx
+# sources, the arm selects a directory under
+# datatypes/data_structure/node_variants/ -- each holds one implementation of
+# mod_jgx_node_variant_record and the matching node_*_set.h. Same idea as
+# jgx/fortran/backends/: one name, several interchangeable providers.
+if(JOREK_STELLARATOR)
+  set(JOREK_NODE_VARIANT stellarator)
+elseif(JOREK_MODEL_NUMBER IN_LIST _fullmhd_models)
+  set(JOREK_NODE_VARIANT fullmhd)
+else()
+  set(JOREK_NODE_VARIANT reduced)
+endif()
+
 # --- Feature switches (JorekOptions) ---------------------------------------
 if(JOREK_USE_DOMM)
   list(APPEND JOREK_DEFINES "USE_DOMM")

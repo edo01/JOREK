@@ -11,6 +11,7 @@ module mod_jgx_node_record
   use, intrinsic :: iso_c_binding
   use data_structure,     only: type_node
   use mod_jgx_record_ids, only: JGX_REC_NODE
+  use mod_jgx_node_variant_record, only: jgx_register_node_variant_record
   use jgx_record
   implicit none
   private
@@ -78,6 +79,10 @@ contains
          jgx_offset_of(c_loc(n(1)%ref_mu), c_loc(n(1))), JGX_F64, 1, ext)
 
     call jgx_c_record_end(JGX_REC_NODE)
+
+    !> Register the node extensions (reduced, fullmhd, stellarator)
+    call jgx_register_node_variant_record()
+    
   end subroutine jgx_register_node_record
 
 end module mod_jgx_node_record

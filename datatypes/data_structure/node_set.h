@@ -1,7 +1,13 @@
 /* datatypes/data_structure/node_set.h -- the node container, in AoS and SoA form.
  *
  * Covers **ONLY the unconditional components** of type_node
- * (datatypes/data_structure/data_structure.f90).
+ * (datatypes/data_structure/data_structure.f90). The type ends with a #if chain
+ * depending on the model, and each arm is a *derived* set in
+ * datatypes/data_structure/node_variants/<variant>/ -- node_fullmhd_set and
+ * friends extend node_set the way particle_kin_rel_set extends
+ * particle_base_set (particles/particle_types/particle_set.h). Which one exists
+ * is a build-time choice: the variant directory is selected by the model in the
+ * CMakeLists.txt.
  *
  * axis_node and constrained are also absent: default `logical` has no
  * interoperable kind, so they need logical(c_bool) on the Fortran side first.
@@ -26,13 +32,6 @@ namespace jorek {
 using jgx::layout_left;
 using jgx::layout_stride;
 using jgx::view;
-
-/**
- * @todo: The model-guarded ones (psi_eq, Fprof_eq and
- * the STELLARATOR_MODEL block) are out of scope here by design and get their
- * own set when a model needs them. (one offset table cannot describe a field
- * list that moves with a preprocessor switch)
- */
 
 /* type_node, unconditional components only */
 enum node_field {
@@ -75,13 +74,13 @@ struct node_soa_ptrs {
   void* field[JGX_NF_COUNT] = {};
 };
 
-template <class Real = double, class Int = int>
-JGX_HD inline node_set<layout_stride, Real, Int>
-make_node_set_aos(void* record_base, const jgx_record_desc& r,
-                  std::size_t n_nodes) {
+/* The inherited half, filled the same way for any node variant. */
+template <class Real, class Int>
+JGX_HD inline void
+fill_node_base_aos(node_set<layout_stride, Real, Int>& s, void* record_base,
+                   const jgx_record_desc& r, std::size_t n_nodes) {
   const std::size_t rs = r.record_stride_bytes;
 
-  node_set<layout_stride, Real, Int> s;
   s.n_nodes        = n_nodes;
   s.x              = jgx::aos_field<Real, 4>(record_base, r.field[JGX_NF_X             ], rs, n_nodes);
   s.values         = jgx::aos_field<Real, 4>(record_base, r.field[JGX_NF_VALUES        ], rs, n_nodes);
@@ -94,6 +93,32 @@ make_node_set_aos(void* record_base, const jgx_record_desc& r,
   s.parent_elem    = jgx::aos_field<Int , 1>(record_base, r.field[JGX_NF_PARENT_ELEM   ], rs, n_nodes);
   s.ref_lambda     = jgx::aos_field<Real, 1>(record_base, r.field[JGX_NF_REF_LAMBDA    ], rs, n_nodes);
   s.ref_mu         = jgx::aos_field<Real, 1>(record_base, r.field[JGX_NF_REF_MU        ], rs, n_nodes);
+}
+
+template <class Real, class Int>
+JGX_HD inline void
+fill_node_base_soa(node_set<layout_left, Real, Int>& s, void* const* p,
+                   const jgx_record_desc& r, std::size_t n_nodes) {
+  s.n_nodes        = n_nodes;
+  s.x              = jgx::soa_field<Real, 4>(p[JGX_NF_X             ], r.field[JGX_NF_X             ], n_nodes);
+  s.values         = jgx::soa_field<Real, 4>(p[JGX_NF_VALUES        ], r.field[JGX_NF_VALUES        ], n_nodes);
+  s.deltas         = jgx::soa_field<Real, 4>(p[JGX_NF_DELTAS        ], r.field[JGX_NF_DELTAS        ], n_nodes);
+  s.index          = jgx::soa_field<Int , 2>(p[JGX_NF_INDEX         ], r.field[JGX_NF_INDEX         ], n_nodes);
+  s.parents        = jgx::soa_field<Int , 2>(p[JGX_NF_PARENTS       ], r.field[JGX_NF_PARENTS       ], n_nodes);
+  s.boundary       = jgx::soa_field<Int , 1>(p[JGX_NF_BOUNDARY      ], r.field[JGX_NF_BOUNDARY      ], n_nodes);
+  s.boundary_index = jgx::soa_field<Int , 1>(p[JGX_NF_BOUNDARY_INDEX], r.field[JGX_NF_BOUNDARY_INDEX], n_nodes);
+  s.axis_dof       = jgx::soa_field<Int , 1>(p[JGX_NF_AXIS_DOF      ], r.field[JGX_NF_AXIS_DOF      ], n_nodes);
+  s.parent_elem    = jgx::soa_field<Int , 1>(p[JGX_NF_PARENT_ELEM   ], r.field[JGX_NF_PARENT_ELEM   ], n_nodes);
+  s.ref_lambda     = jgx::soa_field<Real, 1>(p[JGX_NF_REF_LAMBDA    ], r.field[JGX_NF_REF_LAMBDA    ], n_nodes);
+  s.ref_mu         = jgx::soa_field<Real, 1>(p[JGX_NF_REF_MU        ], r.field[JGX_NF_REF_MU        ], n_nodes);
+}
+
+template <class Real = double, class Int = int>
+JGX_HD inline node_set<layout_stride, Real, Int>
+make_node_set_aos(void* record_base, const jgx_record_desc& r,
+                  std::size_t n_nodes) {
+  node_set<layout_stride, Real, Int> s;
+  fill_node_base_aos(s, record_base, r, n_nodes);
   return s;
 }
 
@@ -102,18 +127,7 @@ JGX_HD inline node_set<layout_left, Real, Int>
 make_node_set_soa(const node_soa_ptrs& p, const jgx_record_desc& r,
                   std::size_t n_nodes) {
   node_set<layout_left, Real, Int> s;
-  s.n_nodes        = n_nodes;
-  s.x              = jgx::soa_field<Real, 4>(p.field[JGX_NF_X             ], r.field[JGX_NF_X             ], n_nodes);
-  s.values         = jgx::soa_field<Real, 4>(p.field[JGX_NF_VALUES        ], r.field[JGX_NF_VALUES        ], n_nodes);
-  s.deltas         = jgx::soa_field<Real, 4>(p.field[JGX_NF_DELTAS        ], r.field[JGX_NF_DELTAS        ], n_nodes);
-  s.index          = jgx::soa_field<Int , 2>(p.field[JGX_NF_INDEX         ], r.field[JGX_NF_INDEX         ], n_nodes);
-  s.parents        = jgx::soa_field<Int , 2>(p.field[JGX_NF_PARENTS       ], r.field[JGX_NF_PARENTS       ], n_nodes);
-  s.boundary       = jgx::soa_field<Int , 1>(p.field[JGX_NF_BOUNDARY      ], r.field[JGX_NF_BOUNDARY      ], n_nodes);
-  s.boundary_index = jgx::soa_field<Int , 1>(p.field[JGX_NF_BOUNDARY_INDEX], r.field[JGX_NF_BOUNDARY_INDEX], n_nodes);
-  s.axis_dof       = jgx::soa_field<Int , 1>(p.field[JGX_NF_AXIS_DOF      ], r.field[JGX_NF_AXIS_DOF      ], n_nodes);
-  s.parent_elem    = jgx::soa_field<Int , 1>(p.field[JGX_NF_PARENT_ELEM   ], r.field[JGX_NF_PARENT_ELEM   ], n_nodes);
-  s.ref_lambda     = jgx::soa_field<Real, 1>(p.field[JGX_NF_REF_LAMBDA    ], r.field[JGX_NF_REF_LAMBDA    ], n_nodes);
-  s.ref_mu         = jgx::soa_field<Real, 1>(p.field[JGX_NF_REF_MU        ], r.field[JGX_NF_REF_MU        ], n_nodes);
+  fill_node_base_soa(s, p.field, r, n_nodes);
   return s;
 }
 

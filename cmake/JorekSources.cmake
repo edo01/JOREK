@@ -15,6 +15,7 @@ set(JOREK_SOURCE_DIRS
   core
   datatypes
   datatypes/data_structure
+  datatypes/data_structure/node_variants/${JOREK_NODE_VARIANT}
   diagnostics
   diagnostics/new_diag
   diagnostics/postproc

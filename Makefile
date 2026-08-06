@@ -107,6 +107,20 @@ DIRS := diagnostics				\
 	.					\
 	vacuum
 
+# type_node ends with a #if chain, and the arm the model takes decides which
+# node_variants directory provides mod_jgx_node_variant_record. Mirrors
+# JOREK_NODE_VARIANT in cmake/JorekModelConfig.cmake.
+FULLMHD_MODELS     := 710 711 712 750
+STELLARATOR_MODELS := 180 183
+ifneq ($(filter $(MODEL_NUMBER),$(STELLARATOR_MODELS)),)
+  NODE_VARIANT := stellarator
+else ifneq ($(filter $(MODEL_NUMBER),$(FULLMHD_MODELS)),)
+  NODE_VARIANT := fullmhd
+else
+  NODE_VARIANT := reduced
+endif
+DIRS+=datatypes/data_structure/node_variants/$(NODE_VARIANT)
+
 DIRS+=$(EXTRA_DIRS) # Specified in Makefile.inc or commandline
 
 # All .f90 files we should generate .d dependency files for
