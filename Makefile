@@ -61,6 +61,7 @@ DIRS := diagnostics				\
 	models/$(MODEL)				\
 	refinement				\
 	matrix					\
+	numerics				\
 	particles				\
 	particles/mod_fields			\
 	particles/mod_fields_linear		\

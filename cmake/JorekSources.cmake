@@ -29,6 +29,7 @@ set(JOREK_SOURCE_DIRS
   matrix
   models
   models/${JOREK_MODEL}
+  numerics
   particles
   particles/mod_fields
   particles/mod_fields_linear
