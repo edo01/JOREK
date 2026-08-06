@@ -22,7 +22,9 @@ use mod_impurity, only: init_imp_adas, radiation_function, radiation_function_li
 use mod_atomic_coeff_deuterium, only : atomic_coeff_deuterium
 use mod_openadas , only : read_adf11
 use mod_atomic_coeff_deuterium, only : ad_deuterium , atomic_coeff_deuterium
-
+use coupling_variables
+use mod_coupling_settings
+use mod_particle_group_id
 implicit none
 
 type (type_node_list)   ,     pointer :: node_list
@@ -270,6 +272,19 @@ write(*,*) 'include_saw_ene =', include_saw_ene
 
 if (include_projections) then
   write(*,*) ' -proj_basename =', trim(proj_basename)
+
+
+  ! --- Initialize particle groups and determine coupling scheme + n_aux_var
+
+  !> generate the particle groups in use based on the defined groups in part_group_configs
+  if (part_groups_in_use(1) == 'non') then
+    call generate_part_groups_in_use()
+  endif
+  n_part_groups = count(part_groups_in_use /= 'non')
+
+  call match_part_groups_and_configs()                      !< find the matching part_group_config for each particle group
+  call check_compatibility_and_determine_coupling_schemes() !< determine coupling scheme
+  call determine_coupling_variables()                       !< determine n_aux_var
 end if
 
 write(*,*) '-----------'
@@ -374,10 +389,10 @@ if (include_vacuum_field) then
 #endif
 endif
 
-allocate(iibg(n_adas),iproj(n_var))
+allocate(iibg(n_adas),iproj(n_aux_var))
 
 if (include_projections) then
-  do i = 1, n_var
+  do i = 1, n_aux_var
     write(proj_label, '(a4,i2.2)') 'aux_', i
     call add_vtk_entry(proj_label, proj_label, iproj(i), n_scalars, si_units, scalar_names) 
   end do
@@ -721,7 +736,7 @@ do i=1,element_list%n_elements
         enddo
 
         if (include_projections) then
-          do i_proj=1,n_var
+          do i_proj=1,n_aux_var
             call interp(aux_node_list,element_list,i,i_proj,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
             scalars(inode,iproj(i_proj)) = P * HZ(i_tor,i_plane)
           end do
@@ -813,6 +828,13 @@ do i=1,element_list%n_elements
              call interp(node_list,element_list,i,m,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
              scalars(inode,m) = scalars(inode,m) + P * HZ(i_tor,i_plane)
           enddo
+
+          if (include_projections) then
+            do i_proj=1,n_aux_var
+              call interp(aux_node_list,element_list,i,i_proj,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
+              scalars(inode,iproj(i_proj)) = scalars(inode,iproj(i_proj)) + P * HZ(i_tor,i_plane)
+            end do
+          end if
           
           call interp(node_list,element_list,i,var_AR, i_tor,s,t,AR0,AR0_s,AR0_t,AR0_st,AR0_ss,AR0_tt)
           call interp(node_list,element_list,i,var_AZ, i_tor,s,t,AZ0,AZ0_s,AZ0_t,AZ0_st,AZ0_ss,AZ0_tt)
@@ -1076,7 +1098,7 @@ do i=1,element_list%n_elements
           enddo
 
           if (include_projections) then
-            do i_proj=1,n_var
+            do i_proj=1,n_aux_var
               call interp(aux_node_list,element_list,i,i_proj,i_tor,s,t,P,P_s,P_t,P_st,P_ss,P_tt)
               scalars(inode,iproj(i_proj)) = scalars(inode,iproj(i_proj)) + P * HZ(i_tor,i_plane)
             end do
@@ -1248,7 +1270,12 @@ do i=1,element_list%n_elements
         v_perp  = R * sqrt(u_x*u_x + u_y * u_y)
         Btot    = sqrt(F0**2 + ps_x**2 + ps_y**2) / BigR
         D_prof  = get_dperp (psi_norm)
-        ZK_prof = get_zkperp(psi_norm)
+
+        if (use_zkperp_times_density) then
+          ZK_prof = get_zkperp(psi_norm) * max(scalars(inode,var_rho),zkperp_density_floor)
+        else
+          ZK_prof = get_zkperp(psi_norm)
+        endif
 
         ZKpar_T = ZK_par * ((max( scalars(inode,6), T_min ))/T_0)**2.5
 

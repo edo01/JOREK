@@ -5,7 +5,7 @@ implicit none
 contains
 
 !> Initialize solvers, parameters, MPI, threads etc.
-subroutine initialise(my_id, n_cpu, skip_help)
+subroutine initialise(my_id, n_mpi, skip_help)
   use tr_module, only: tr_meminit
   use mod_clock, only: clck_init
   use data_structure, only: init_threads
@@ -23,7 +23,7 @@ subroutine initialise(my_id, n_cpu, skip_help)
 
 #include "r3_info.h"
 ! Necessary for dependency reasons... should clean that up a bit and create a module
-  integer, intent(out) :: my_id, n_cpu
+  integer, intent(out) :: my_id, n_mpi
   logical, optional, intent(in) :: skip_help
   integer :: ierr
   integer :: required, provided
@@ -50,14 +50,14 @@ subroutine initialise(my_id, n_cpu, skip_help)
   call init_threads()
   
   ! --- Determine number of MPI procs, ID of this proc
-  call MPI_COMM_SIZE(MPI_COMM_WORLD, n_cpu, ierr)
+  call MPI_COMM_SIZE(MPI_COMM_WORLD, n_mpi, ierr)
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
   
   ! --- Process command line arguments
   if (present(skip_help)) then
-    if ( my_id == 0 .and. .not. skip_help) call jorek2help(n_cpu, nbthreads)
+    if ( my_id == 0 .and. .not. skip_help) call jorek2help(n_mpi, nbthreads)
   else
-    if ( my_id == 0) call jorek2help(n_cpu, nbthreads)
+    if ( my_id == 0) call jorek2help(n_mpi, nbthreads)
   end if
   
   call MPI_Barrier(MPI_COMM_WORLD,ierr)
@@ -66,7 +66,7 @@ subroutine initialise(my_id, n_cpu, skip_help)
   call MPI_Barrier(MPI_COMM_WORLD,ierr)
 
   ! --- Initialise memory tracing
-  call tr_meminit(my_id, n_cpu)
+  call tr_meminit(my_id, n_mpi)
 
   ! --- Initialise timing
   call clck_init()
@@ -110,13 +110,13 @@ end subroutine initialise
 
 !> Verify that we are not doing stupid things. Run this after loading parameters
 !> from the input file.
-subroutine sanity_checks(my_id, n_cpu, mpi_required, mpi_provided)
+subroutine sanity_checks(my_id, n_mpi, mpi_required, mpi_provided)
   use mod_parameters, only: n_tor, n_plane
   use phys_module
   use gauss
 
   integer :: ierr, i
-  integer, intent(in) :: my_id, n_cpu
+  integer, intent(in) :: my_id, n_mpi
   integer :: nsolvers=0
   logical :: solvers(4), solvers_eq(3)
   integer :: mpi_required, mpi_provided
