@@ -347,6 +347,12 @@ ifeq (1, $(USE_TASKLOOP))
   DEFINES  := $(DEFINES) -DUSE_TASKLOOP
 endif
 
+ifeq (1, $(USE_STDLIB))
+  LIBS     := $(LIBS) $(LIB_STDLIB)
+  INCLUDES := $(INCLUDES) $(INC_STDLIB)
+  DEFINES  := $(DEFINES) -DUSE_STDLIB
+endif
+
 # Do not check to make these files to speed up and clean -d output
 Makefile: ;
 Makefile.inc: ;

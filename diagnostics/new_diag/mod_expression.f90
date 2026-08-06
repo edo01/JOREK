@@ -1383,11 +1383,20 @@ module mod_expression
           
           D_prof  = get_dperp (psi_norm)
           if ( with_TiTe ) then
-            ZKi_prof = get_zk_iperp(psi_norm)
-            ZKe_prof = get_zk_eperp(psi_norm)
+            if (use_zkperp_times_density) then
+              ZKi_prof = get_zk_iperp(psi_norm) * max(r0,zkperp_density_floor)
+              ZKe_prof = get_zk_eperp(psi_norm) * max(r0,zkperp_density_floor)
+            else
+              ZKi_prof = get_zk_iperp(psi_norm)
+              ZKe_prof = get_zk_eperp(psi_norm)
+            endif
             ZK_prof  = 0.d0
           else
-            ZK_prof  = get_zkperp(psi_norm)
+            if (use_zkperp_times_density) then
+              ZK_prof  = get_zkperp(psi_norm) * max(r0,zkperp_density_floor)
+            else
+              ZK_prof  = get_zkperp(psi_norm)
+            endif
             ZKi_prof = ZK_prof
             ZKe_prof = ZK_prof
           end if

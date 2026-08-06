@@ -62,7 +62,7 @@ program jorek2_fast_camera
 
 
   ! --- MPI variables
-  integer               :: my_id, n_cpu, ierr, nsend, nrecv
+  integer               :: my_id, n_mpi, ierr, nsend, nrecv
   integer               :: status(MPI_STATUS_SIZE)
   integer               :: pix_start, pix_end, pix_delta
   ! --- Photon Emissivity Coeff (PEC) variables
@@ -136,7 +136,7 @@ program jorek2_fast_camera
   ! ********************************************************************** !  
   call MPI_INIT(ierr)
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)      ! id of each MPI proc
-  call MPI_COMM_SIZE(MPI_COMM_WORLD, n_cpu, ierr)      ! number of MPI procs
+  call MPI_COMM_SIZE(MPI_COMM_WORLD, n_mpi, ierr)      ! number of MPI procs
 
 
 
@@ -361,7 +361,7 @@ program jorek2_fast_camera
   ! ********************************************************************** !
   
   ! --- Import and initialise
-  call initialise_and_broadcast_parameters(my_id, "__NO_FILENAME__")
+  call initialise_and_broadcast_parameters(my_id, "__NO_FILENAME__", .false.)
   do k_tor=1, n_tor
     mode(k_tor) = + int(k_tor / 2) * n_period
   enddo
@@ -424,7 +424,7 @@ program jorek2_fast_camera
   
   
   ! --- MPI loops
-  pix_delta = n_pix / n_cpu
+  pix_delta = n_pix / n_mpi
   pix_start = my_id*pix_delta + 1
   pix_end   = min(n_pix,(my_id+1)*pix_delta)
   pix_delta = pix_end-pix_start+1
@@ -884,7 +884,7 @@ program jorek2_fast_camera
 
   ! --- MPI collect
   if (my_id .eq. 0) then
-    do j=1,n_cpu-1
+    do j=1,n_mpi-1
       call mpi_recv(pix_start,1, MPI_INTEGER, j, j, MPI_COMM_WORLD, status, ierr)
       call mpi_recv(pix_end,  1, MPI_INTEGER, j, j, MPI_COMM_WORLD, status, ierr)
       call mpi_recv(pix_delta,1, MPI_INTEGER, j, j, MPI_COMM_WORLD, status, ierr)
