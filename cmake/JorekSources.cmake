@@ -23,6 +23,7 @@ set(JOREK_SOURCE_DIRS
   matrix
   models
   models/${JOREK_MODEL}
+  numerics
   particles
   particles/diagnostics
   particles/postprocessors
