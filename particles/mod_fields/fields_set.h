@@ -19,15 +19,18 @@
 
 #include <cstddef>
 #include "datatypes/data_structure/element_set.h"
-#include "datatypes/data_structure/node_set.h"
+#include "node_variant_set.h"
 #include "jgx/macros.h"
 
 namespace jorek {
 
 template <class L, class Real = double, class Int = int>
 struct fields_base_set {
+  using node_type = node_model_set<L, Real, Int>;
+
   element_set<L, Real, Int> element_list;
-  node_set<L, Real, Int>    node_list;
+  // Node_type is defined at compiled type (reduced, fullmhd, stellarator)
+  node_type                 node_list;
 
   bool is_static        = false;  /* fields_base%static (`static` is a C++ keyword) */
   bool flag_zero_dpsidt = false;
@@ -50,7 +53,7 @@ template <class L, class Real, class Int>
 JGX_HD inline void
 fill_fields_base(fields_base_set<L, Real, Int>& f,
                  const element_set<L, Real, Int>& el,
-                 const node_set<L, Real, Int>& nd,
+                 const node_model_set<L, Real, Int>& nd,
                  bool is_static, bool flag_zero_dpsidt) {
   f.element_list     = el;
   f.node_list        = nd;
@@ -61,7 +64,7 @@ fill_fields_base(fields_base_set<L, Real, Int>& f,
 template <class L, class Real = double, class Int = int>
 JGX_HD inline fields_interp_linear_set<L, Real, Int>
 make_fields_interp_linear_set(const element_set<L, Real, Int>& el,
-                              const node_set<L, Real, Int>& nd,
+                              const node_model_set<L, Real, Int>& nd,
                               bool is_static, bool flag_zero_dpsidt,
                               Real time_now, Real time_prev) {
   fields_interp_linear_set<L, Real, Int> f;
@@ -82,7 +85,7 @@ fields_interp_linear_set_from_registry(void* el_base, std::size_t n_elements,
                                        double time_now, double time_prev) {
   return make_fields_interp_linear_set<layout_stride, double, int>(
       element_set_from_registry(el_base, n_elements),
-      node_set_from_registry(nd_base, n_nodes),
+      node_model_set_from_registry(nd_base, n_nodes),
       is_static != 0, flag_zero_dpsidt != 0, time_now, time_prev);
 }
 

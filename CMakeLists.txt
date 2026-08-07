@@ -39,6 +39,9 @@ target_include_directories(jorek_common INTERFACE
   # "elements/mod_basisfunctions/basisfunctions.h".
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/include"  # jgx/view.h, jgx/macros.h
+  # Only the model's node variant is on the path, so the node_variant_set.h a
+  # shim includes is the arm of type_node this build has.
+  "${CMAKE_CURRENT_SOURCE_DIR}/datatypes/data_structure/node_variants/${JOREK_NODE_VARIANT}"
   "${CMAKE_CURRENT_SOURCE_DIR}/tools"    # r3_info.h
   "${CMAKE_CURRENT_SOURCE_DIR}/models"
   ${JOREK_INCLUDE_DIRS})

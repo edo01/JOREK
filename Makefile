@@ -205,6 +205,9 @@ INCLUDES += -Itools # for r3_info.h
 INCLUDES += -Imodels
 INCLUDES += -I. # C++ shims include their headers by path from the source root
 INCLUDES += -Ijgx/cpp/include # jgx/view.h, jgx/macros.h
+# Only the model's node variant is on the path, so the node_variant_set.h a shim
+# includes is the arm of type_node this build has.
+INCLUDES += -Idatatypes/data_structure/node_variants/$(NODE_VARIANT)
 # C++ support
 LIBS += -lstdc++ 
 CXXFLAGS += -pedantic -Wall
