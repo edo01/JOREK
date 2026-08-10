@@ -1,5 +1,5 @@
 #include "elements/mod_basisfunctions/basisfunctions.h"
-#include "jgx/jorek/jorek_settings.h"
+#include "models/mod_settings/mod_settings.h"
 
 extern "C" {
     void jgx_host_basisfunctions_2D_1_T(const double s, const double t,

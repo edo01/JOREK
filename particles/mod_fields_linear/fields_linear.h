@@ -14,7 +14,7 @@
 
 #include "elements/mod_interp/interp.h"
 #include "particles/mod_fields/fields_set.h"
-#include "jgx/jorek/jorek_settings.h"
+#include "models/mod_settings/mod_settings.h"
 #include "jgx/macros.h"
 #include "jgx/view.h"
 

@@ -1,7 +1,7 @@
 #ifndef BASISFUNCTIONS_H
 #define BASISFUNCTIONS_H
 
-#include "jgx/jorek/jorek_settings.h"
+#include "models/mod_settings/mod_settings.h"
 #include "jgx/macros.h"
 #include "jgx/view.h"
 
