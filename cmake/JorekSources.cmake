@@ -28,6 +28,7 @@ set(JOREK_SOURCE_DIRS
   jgx/jorek
   matrix
   models
+  models/constants
   models/${JOREK_MODEL}
   numerics
   particles

@@ -52,6 +52,7 @@ doc docs:
 DIRS := diagnostics				\
         diagnostics/tests			\
 	models					\
+	models/constants			\
 	communication				\
 	communication/IMAS			\
 	communication/tests             	\

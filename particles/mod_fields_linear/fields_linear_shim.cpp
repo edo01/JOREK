@@ -21,7 +21,6 @@ extern "C" {
                                                 const int32_t i_elm0, const int32_t* i_v0,
                                                 const int32_t n_v,
                                                 const double s, const double t, const double phi,
-                                                const int32_t n_period,
                                                 const double time, const double t_jorek,
                                                 double* P, double* P_s, double* P_t,
                                                 double* P_phi, double* P_time,
@@ -41,13 +40,13 @@ extern "C" {
         jgx::view<double, 1> Ppv(P_phi, pe), Ptimev(P_time, pe);
 
         f.interp_PRZ(time, static_cast<std::size_t>(i_elm0),
-                     i_v, n_v, s, t, phi, n_period, t_jorek,
+                     i_v, n_v, s, t, phi, t_jorek,
                      Pv, Psv, Ptv, Ppv, Ptimev,
                      *R, *R_s, *R_t, *Z, *Z_s, *Z_t);
     }
 
-    /* mod_fields_linear::do_interp_PRZP_1. As above, plus the toroidal
-     * periodicity of the (R,Z) coordinates and their phi derivatives. */
+    /* mod_fields_linear::do_interp_PRZP_1. As above, plus the phi derivatives
+     * of the (R,Z) coordinates. */
     void jgx_host_fields_linear_do_interp_PRZP_1(void* el_base, const int32_t n_elements,
                                                  void* nd_base, const int32_t n_nodes,
                                                  const int32_t is_static,
@@ -56,8 +55,6 @@ extern "C" {
                                                  const int32_t i_elm0, const int32_t* i_v0,
                                                  const int32_t n_v,
                                                  const double s, const double t, const double phi,
-                                                 const int32_t n_period,
-                                                 const int32_t n_coord_period,
                                                  const double time, const double t_jorek,
                                                  double* P, double* P_s, double* P_t,
                                                  double* P_phi, double* P_time,
@@ -78,7 +75,7 @@ extern "C" {
 
         // the interpolation strategy is deferred exactly as it happens in fortran.
         f.interp_PRZP_1(time, static_cast<std::size_t>(i_elm0),
-                        i_v, n_v, s, t, phi, n_period, n_coord_period,
+                        i_v, n_v, s, t, phi,
                         t_jorek, Pv, Psv, Ptv, Ppv, Ptimev,
                         *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);
     }

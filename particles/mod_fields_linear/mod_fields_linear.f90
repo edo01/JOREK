@@ -18,7 +18,7 @@ interface
   pure subroutine jgx_host_do_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,   &
                                            is_static, flag_zero_dpsidt,             &
                                            time_now, time_prev,                     &
-                                           i_elm0, i_v0, n_v, s, t, phi, n_period,  &
+                                           i_elm0, i_v0, n_v, s, t, phi,            &
                                            time, t_jorek, P, P_s, P_t, P_phi,       &
                                            P_time, R, R_s, R_t, Z, Z_s, Z_t)        &
       bind(C, name="jgx_host_fields_linear_do_interp_PRZ_1")
@@ -26,7 +26,7 @@ interface
     implicit none
     type(c_ptr),        value, intent(in) :: el_base, nd_base
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
-    integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt, n_period
+    integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
     real(c_double),     value, intent(in) :: time_now, time_prev
     real(c_double),     value, intent(in) :: s, t, phi, time, t_jorek
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
@@ -38,8 +38,8 @@ interface
   pure subroutine jgx_host_do_interp_PRZP_1(el_base, n_elements, nd_base, n_nodes,  &
                                             is_static, flag_zero_dpsidt,            &
                                             time_now, time_prev,                    &
-                                            i_elm0, i_v0, n_v, s, t, phi, n_period, &
-                                            n_coord_period, time, t_jorek,          &
+                                            i_elm0, i_v0, n_v, s, t, phi,           &
+                                            time, t_jorek,                          &
                                             P, P_s, P_t, P_phi, P_time,             &
                                             R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi) &
       bind(C, name="jgx_host_fields_linear_do_interp_PRZP_1")
@@ -48,7 +48,6 @@ interface
     type(c_ptr),        value, intent(in) :: el_base, nd_base
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
     integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
-    integer(c_int32_t), value, intent(in) :: n_period, n_coord_period
     real(c_double),     value, intent(in) :: time_now, time_prev
     real(c_double),     value, intent(in) :: s, t, phi, time, t_jorek
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
@@ -95,7 +94,6 @@ contains
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
   use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep, central_mass, central_density
-  use mod_parameters, only: n_period
   class(jorek_fields_interp_linear),  intent(in)  :: this
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
@@ -125,7 +123,7 @@ pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, 
                                 this%time_now, this%time_prev,                &
                                 int(i_elm - 1, c_int32_t), iv0,               &
                                 int(n_v, c_int32_t), s, t, phi,               &
-                                int(n_period, c_int32_t), time, t_jorek,      &
+                                time, t_jorek,                                &
                                 P, P_s, P_t, P_phi, P_time,                   &
                                 R, R_s, R_t, Z, Z_s, Z_t)
 end subroutine do_interp_PRZ_1
@@ -231,7 +229,6 @@ end subroutine do_interp_PRZ_2
 pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
   use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep, central_mass, central_density
-  use mod_parameters, only: n_period, n_coord_period
   class(jorek_fields_interp_linear),  intent(in)  :: this
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
@@ -261,8 +258,6 @@ pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s,
                                 this%time_now, this%time_prev,                &
                                 int(i_elm - 1, c_int32_t), iv0,               &
                                 int(n_v, c_int32_t), s, t, phi,               &
-                                int(n_period, c_int32_t),                     &
-                                int(n_coord_period, c_int32_t),               &
                                 time, t_jorek,                                &
                                 P, P_s, P_t, P_phi, P_time,                   &
                                 R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)

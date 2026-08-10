@@ -1,0 +1,30 @@
+/* models/constants/constants.def -- the physical constants of constants.f90.
+ *
+ * Single source of truth for both languages, in the same spirit as
+ * jgx/jorek/jgx_record_ids.def: the list lives here once and each side defines
+ * JOREK_CONSTANT to mean what it needs.
+ *
+ *   constants.f90  real(kind=8), parameter :: name = value_8
+ *   constants.h    constexpr double name = value;
+ *
+ * The values are therefore written in C form (`e` exponent, no kind suffix);
+ * the Fortran macro pastes `_8` onto the literal so it is read in double
+ * precision rather than as a default real. Every entry must be a single
+ * preprocessing token -- one numeric literal, no expression -- or the paste
+ * breaks. Derived constants (MU_ZERO) are spelled out in each file instead;
+ * they are bit-identical because IEEE double arithmetic is.
+ *
+ * Only the physical constants live here. The DOMAIN_* / *_XPOINT integer
+ * enums stay in constants.f90: nothing on the C++ side reads them yet.
+ */
+JOREK_CONSTANT(PI,               3.1415926535897932385)  /* PI */
+JOREK_CONSTANT(TWOPI,            6.2831853071795864769)  /* TWOPI */
+JOREK_CONSTANT(EPS_ZERO,         8.854187817e-12)        /* Vacuum permittivity [F/m] */
+JOREK_CONSTANT(EL_CHG,           1.602176565e-19)        /* Elementary charge [C] */
+JOREK_CONSTANT(K_BOLTZ,          1.3806488e-23)          /* Boltzmann constant [J/K] */
+JOREK_CONSTANT(C_LIGHT,          299792458.)             /* Speed of light [m/s] */
+JOREK_CONSTANT(ATOMIC_MASS_UNIT, 1.660539040e-27)        /* standardized mass unit [kg] */
+JOREK_CONSTANT(MASS_ELECTRON,    9.10938291e-31)         /* electron mass [kg] */
+JOREK_CONSTANT(SPEED_OF_LIGHT,   2.997924580105029e+8)   /* speed of light [m/s] */
+JOREK_CONSTANT(MOLE_NUMBER,      6.02214076e23)          /* The Avogadro constant */
+JOREK_CONSTANT(HBAR,             1.05457180e-34)         /* Reduced Planck constant [Js] */

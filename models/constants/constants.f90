@@ -6,19 +6,15 @@ module constants
 #include "version.h"
 
   ! @name Mathematical and physical constants
-  real*8,  parameter :: PI            = 3.1415926535897932385d0  !< PI
-  real*8,  parameter :: TWOPI         = 6.2831853071795864769d0  !< TWOPI
+  ! Declared from constants.def, which constants.h reads too, so
+  ! the Fortran and the ported C++ kernels cannot disagree on a value.
+  ! ! real*8,  parameter :: MASS_PROTON   = 1.67262178d-27         !< proton mass [kg] ! commented out because we should always use AMU
+#define JOREK_CONSTANT(name, value) real(kind=8), parameter :: name = value##_8
+#include "models/constants/constants.def"
+#undef JOREK_CONSTANT
+
+  !> Derived; constants.h spells the same expression out in C++.
   real*8,  parameter :: MU_ZERO       = 4.d-7*PI                 !< Magnetic constant  [Vs/Am]
-  real*8,  parameter :: EPS_ZERO      = 8.854187817d-12          !< Vacuum permittivity [F/m]
-  real*8,  parameter :: EL_CHG        = 1.602176565d-19          !< Elementary charge  [C]
-  real*8,  parameter :: K_BOLTZ       = 1.3806488d-23            !< Boltzmann constant [J/K]
-  real*8,  parameter :: C_LIGHT       = 299792458.               !< Speed of light [m/s]
-  ! real*8,  parameter :: MASS_PROTON   = 1.67262178d-27           !< proton mass [kg] ! commented out because we should always use AMU
-  real*8,  parameter :: ATOMIC_MASS_UNIT = 1.660539040d-27       !< standardized mass unit [kg]
-  real*8,  parameter :: MASS_ELECTRON = 9.10938291d-31           !< electron mass [kg]
-  real*8,  parameter :: SPEED_OF_LIGHT = 2.997924580105029d+8    !< speed of light in (m/s)
-  real*8,  parameter :: MOLE_NUMBER   = 6.02214076d23            !< The Avogadro constant
-  real*8,  parameter :: HBAR          = 1.05457180d-34           !< Reduced Planck constant [Js]
 
   !> @name Constants which describe the domain of a certain position (used by function which_domain)
   integer, parameter :: DOMAIN_PLASMA         = 0    !< Plasma region

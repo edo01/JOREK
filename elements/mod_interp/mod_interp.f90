@@ -47,7 +47,7 @@ end interface
 !> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
 interface
   pure subroutine jgx_host_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,  &
-                                        i_elm0, i_v0, n_v, s, t, phi, n_period, &
+                                        i_elm0, i_v0, n_v, s, t, phi,           &
                                         use_deltas, P, P_s, P_t, P_phi,         &
                                         R, R_s, R_t, Z, Z_s, Z_t)               &
       bind(C, name="jgx_host_interp_PRZ_1")
@@ -55,7 +55,7 @@ interface
     implicit none
     type(c_ptr),        value, intent(in) :: el_base, nd_base
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
-    integer(c_int32_t), value, intent(in) :: n_period, use_deltas
+    integer(c_int32_t), value, intent(in) :: use_deltas
     real(c_double),     value, intent(in) :: s, t, phi
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
@@ -66,8 +66,8 @@ end interface
 !> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
 interface
   pure subroutine jgx_host_interp_PRZP_1(el_base, n_elements, nd_base, n_nodes,   &
-                                         i_elm0, i_v0, n_v, s, t, phi, n_period,  &
-                                         n_coord_period, use_deltas,              &
+                                         i_elm0, i_v0, n_v, s, t, phi,            &
+                                         use_deltas,                              &
                                          P, P_s, P_t, P_phi,                      &
                                          R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)  &
       bind(C, name="jgx_host_interp_PRZP_1")
@@ -75,7 +75,7 @@ interface
     implicit none
     type(c_ptr),        value, intent(in) :: el_base, nd_base
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
-    integer(c_int32_t), value, intent(in) :: n_period, n_coord_period, use_deltas
+    integer(c_int32_t), value, intent(in) :: use_deltas
     real(c_double),     value, intent(in) :: s, t, phi
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
@@ -213,8 +213,7 @@ call jgx_host_interp_PRZ_1(c_loc(element_list%element(1)),               &
                            c_loc(node_list%node(1)),                     &
                            int(node_list%n_nodes, c_int32_t),            &
                            int(i_elm - 1, c_int32_t), iv0,               &
-                           int(n_v, c_int32_t), s, t, phi,               &
-                           int(n_period, c_int32_t), c_deltas,           &
+                           int(n_v, c_int32_t), s, t, phi, c_deltas,     &
                            P, P_s, P_t, P_phi, R, R_s, R_t, Z, Z_s, Z_t)
 end subroutine interp_PRZ_1
 
@@ -414,9 +413,7 @@ call jgx_host_interp_PRZP_1(c_loc(element_list%element(1)),               &
                             c_loc(node_list%node(1)),                     &
                             int(node_list%n_nodes, c_int32_t),            &
                             int(i_elm - 1, c_int32_t), iv0,               &
-                            int(n_v, c_int32_t), s, t, phi,               &
-                            int(n_period, c_int32_t),                     &
-                            int(n_coord_period, c_int32_t), c_deltas,     &
+                            int(n_v, c_int32_t), s, t, phi, c_deltas,     &
                             P, P_s, P_t, P_phi,                           &
                             R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
 end subroutine interp_PRZP_1

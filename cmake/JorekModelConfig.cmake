@@ -92,7 +92,7 @@ endif()
 math(EXPR JOREK_N_DEGREES "((${JOREK_N_ORDER} + 1) / 2) * ((${JOREK_N_ORDER} + 1) / 2)")
 set(JGX_SETTINGS_DEFINES "JGX_N_ORDER=${JOREK_N_ORDER}" "JGX_N_DEGREES=${JOREK_N_DEGREES}")
 
-foreach(_key n_tor n_coord_tor n_vertex_max n_values_max)
+foreach(_key n_tor n_coord_tor n_period n_coord_period n_vertex_max n_values_max)
   _jorek_read_setting(_value "${JOREK_GLOBAL_SETTINGS}" "${_key}")
   if(NOT _value)
     message(FATAL_ERROR "Could not read ${_key} from ${JOREK_GLOBAL_SETTINGS}")

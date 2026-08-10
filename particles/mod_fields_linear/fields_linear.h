@@ -43,7 +43,6 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    * @param n_v       number of variables, <= JGX_N_VALUES_MAX
    * @param s, t      element-local coordinates
    * @param phi       toroidal angle
-   * @param n_period  toroidal periodicity
    * @param t_jorek   one JOREK time unit in seconds, times tstep; <= 0 disables
    *                  the time interpolation.
    * @param[out] P, P_s, P_t, P_phi, P_time  variables, their s/t/phi derivatives
@@ -54,7 +53,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
   JGX_HD void interp_PRZ(const double time, const std::size_t ie,
                          const IdxView& i_v, const int n_v,
                          const double s, const double t, const double phi,
-                         const int n_period, const double t_jorek,
+                         const double t_jorek,
                          OutView P, OutView P_s, OutView P_t,
                          OutView P_phi, OutView P_time,
                          double& R, double& R_s, double& R_t,
@@ -62,7 +61,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
     for (int i = 0; i < n_v; ++i) P_time(i) = 0.0;
 
     interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
-                         n_period, false, P, P_s, P_t, P_phi,
+                         false, P, P_s, P_t, P_phi,
                          R, R_s, R_t, Z, Z_s, Z_t);
 
     if (t_jorek <= 0.0) return;
@@ -76,7 +75,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
 
     // R..Z_t come out identical: the geometry does not read values/deltas.
     interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
-                         n_period, true, Pd, Pd_s, Pd_t, Pd_phi,
+                         true, Pd, Pd_s, Pd_t, Pd_phi,
                          R, R_s, R_t, Z, Z_s, Z_t);
 
     double dt;
@@ -107,8 +106,6 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    * @param n_v             number of variables, <= JGX_N_VALUES_MAX
    * @param s, t            element-local coordinates
    * @param phi             toroidal angle
-   * @param n_period        toroidal periodicity
-   * @param n_coord_period  toroidal periodicity of the (R,Z) coordinates
    * @param t_jorek         one JOREK time unit in seconds, times tstep; <= 0 disables
    *                        the time interpolation.
    * @param[out] P, P_s, P_t, P_phi, P_time  variables, their s/t/phi derivatives
@@ -119,7 +116,6 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
   JGX_HD void interp_PRZP_1(const double time, const std::size_t ie,
                             const IdxView& i_v, const int n_v,
                             const double s, const double t, const double phi,
-                            const int n_period, const int n_coord_period,
                             const double t_jorek,
                             OutView P, OutView P_s, OutView P_t,
                             OutView P_phi, OutView P_time,
@@ -128,7 +124,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
     for (int i = 0; i < n_v; ++i) P_time(i) = 0.0;
 
     interp::interp_PRZP_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
-                          n_period, n_coord_period, false, P, P_s, P_t, P_phi,
+                          false, P, P_s, P_t, P_phi,
                           R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi);
 
     if (t_jorek <= 0.0) return;
@@ -140,7 +136,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
     const jgx::view<Real, 1> Pd_t(Pd_t_, pe), Pd_phi(Pd_phi_, pe);
 
     interp::interp_PRZP_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
-                          n_period, n_coord_period, true, Pd, Pd_s, Pd_t, Pd_phi,
+                          true, Pd, Pd_s, Pd_t, Pd_phi,
                           R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi);
 
     double dt;

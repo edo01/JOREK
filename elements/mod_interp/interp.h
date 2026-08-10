@@ -73,7 +73,6 @@ namespace interp
      * @param n_v         number of variables
      * @param s, t        element-local coordinates
      * @param phi         toroidal angle
-     * @param n_period    toroidal periodicity
      * @param use_deltas  interpolate nd.deltas instead of nd.values
      * @param[out] P, P_s, P_t, P_phi  interpolated variables and their derivatives (size n_v)
      * @param[out] R, R_s, R_t, Z, Z_s, Z_t  interpolated geometry and its derivatives
@@ -83,13 +82,14 @@ namespace interp
                                     const std::size_t ie,
                                     const IdxView& i_v, const int n_v,
                                     const double s, const double t, const double phi,
-                                    const int n_period, const bool use_deltas,
+                                    const bool use_deltas,
                                     OutView P, OutView P_s, OutView P_t, OutView P_phi,
                                     double& R, double& R_s, double& R_t,
                                     double& Z, double& Z_s, double& Z_t) {
         constexpr std::size_t n_vertex_max = JGX_N_VERTEX_MAX;
         constexpr std::size_t n_degrees    = JGX_N_DEGREES;
         constexpr std::size_t n_tor        = JGX_N_TOR;
+        constexpr int         n_period     = JGX_N_PERIOD;
 
         // Preparing the views for basisfunctions_2D_1_T and sincosperiod_moivre_explicit
         const std::size_t he[2] = { n_degrees, n_vertex_max };
@@ -157,8 +157,6 @@ namespace interp
      * @param n_v             number of variables
      * @param s, t            element-local coordinates
      * @param phi             toroidal angle
-     * @param n_period        toroidal periodicity
-     * @param n_coord_period  toroidal periodicity of the (R,Z) coordinates
      * @param use_deltas      interpolate nd.deltas instead of nd.values
      * @param[out] P, P_s, P_t, P_phi  interpolated variables and their derivatives (size n_v)
      * @param[out] R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi  geometry and its derivatives
@@ -168,15 +166,16 @@ namespace interp
                                      const std::size_t ie,
                                      const IdxView& i_v, const int n_v,
                                      const double s, const double t, const double phi,
-                                     const int n_period, const int n_coord_period,
                                      const bool use_deltas,
                                      OutView P, OutView P_s, OutView P_t, OutView P_phi,
                                      double& R, double& R_s, double& R_t, double& R_phi,
                                      double& Z, double& Z_s, double& Z_t, double& Z_phi) {
-        constexpr std::size_t n_vertex_max = JGX_N_VERTEX_MAX;
-        constexpr std::size_t n_degrees    = JGX_N_DEGREES;
-        constexpr std::size_t n_tor        = JGX_N_TOR;
-        constexpr std::size_t n_coord_tor  = JGX_N_COORD_TOR;
+        constexpr std::size_t n_vertex_max   = JGX_N_VERTEX_MAX;
+        constexpr std::size_t n_degrees      = JGX_N_DEGREES;
+        constexpr std::size_t n_tor          = JGX_N_TOR;
+        constexpr std::size_t n_coord_tor    = JGX_N_COORD_TOR;
+        constexpr int         n_period       = JGX_N_PERIOD;
+        constexpr int         n_coord_period = JGX_N_COORD_PERIOD;
 
         // Preparing the views for basisfunctions_2D_1_T and the two moivre series
         const std::size_t he[2] = { n_degrees, n_vertex_max };

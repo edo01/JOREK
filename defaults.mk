@@ -234,6 +234,8 @@ DEFINES := $(DEFINES) -DJGX_N_ORDER=$(N_ORDER_PARAMETER)
 DEFINES := $(DEFINES) -DJGX_N_DEGREES=$(JGX_N_DEGREES_PARAMETER)
 DEFINES := $(DEFINES) -DJGX_N_TOR=$(shell ./util/config.sh -p n_tor)
 DEFINES := $(DEFINES) -DJGX_N_COORD_TOR=$(shell ./util/config.sh -p n_coord_tor)
+DEFINES := $(DEFINES) -DJGX_N_PERIOD=$(shell ./util/config.sh -p n_period)
+DEFINES := $(DEFINES) -DJGX_N_COORD_PERIOD=$(shell ./util/config.sh -p n_coord_period)
 DEFINES := $(DEFINES) -DJGX_N_VERTEX_MAX=$(shell ./util/config.sh -p n_vertex_max)
 DEFINES := $(DEFINES) -DJGX_N_VALUES_MAX=$(shell ./util/config.sh -p n_values_max)
 
