@@ -221,13 +221,13 @@ ifeq (1, $(USE_FFTW))
 endif
 
 # polynomial order > 3 requires more Gauss points
-N_ORDER_PARAMETER = $(shell cat models/mod_settings.f90 |grep n_order |grep -v n_degrees | grep -v SETTINGS | awk '{print $$6}' | bc)
+N_ORDER_PARAMETER = $(shell cat models/mod_settings/mod_settings.f90 |grep n_order |grep -v n_degrees | grep -v SETTINGS | awk '{print $$6}' | bc)
 ifneq (3, $(N_ORDER_PARAMETER))
   DEFINES  := $(DEFINES) -DGAUSS_ORDER=8
 endif
 
-# Array extents for the C++ side, see jgx/jorek/jorek_settings.h. Read from
-# models/mod_settings.f90 so they cannot drift from the Fortran parameters.
+# Array extents for the C++ side, see models/mod_settings/mod_settings.h. Read from
+# models/mod_settings/mod_settings.f90 so they cannot drift from the Fortran parameters.
 # Mirrors cmake/JorekModelConfig.cmake.
 JGX_N_DEGREES_PARAMETER = $(shell echo $$(( (($(N_ORDER_PARAMETER)+1)/2)*(($(N_ORDER_PARAMETER)+1)/2) )))
 DEFINES := $(DEFINES) -DJGX_N_ORDER=$(N_ORDER_PARAMETER)

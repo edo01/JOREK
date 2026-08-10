@@ -4,7 +4,7 @@
 
 set(JOREK_MODEL_DIR "${CMAKE_SOURCE_DIR}/models/${JOREK_MODEL}")
 set(JOREK_MODEL_SETTINGS "${JOREK_MODEL_DIR}/mod_model_settings.f90")
-set(JOREK_GLOBAL_SETTINGS "${CMAKE_SOURCE_DIR}/models/mod_settings.f90")
+set(JOREK_GLOBAL_SETTINGS "${CMAKE_SOURCE_DIR}/models/mod_settings/mod_settings.f90")
 
 if(NOT IS_DIRECTORY "${JOREK_MODEL_DIR}")
   file(GLOB _available RELATIVE "${CMAKE_SOURCE_DIR}/models" "${CMAKE_SOURCE_DIR}/models/model*")
@@ -85,7 +85,7 @@ if(NOT JOREK_N_ORDER STREQUAL "3")
   list(APPEND JOREK_DEFINES "GAUSS_ORDER=8")
 endif()
 
-# --- Array extents for the C++ side (jgx/jorek/jorek_settings.h) ------------
+# --- Array extents for the C++ side (models/mod_settings/mod_settings.h) ----
 #
 # The ported kernels size their scratch with these, where the Fortran uses the
 # mod_settings.f90 parameters directly.

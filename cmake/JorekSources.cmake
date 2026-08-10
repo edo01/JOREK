@@ -29,6 +29,8 @@ set(JOREK_SOURCE_DIRS
   matrix
   models
   models/constants
+  models/mod_settings
+  models/phys_module
   models/${JOREK_MODEL}
   numerics
   particles

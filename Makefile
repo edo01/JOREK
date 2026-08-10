@@ -53,6 +53,8 @@ DIRS := diagnostics				\
         diagnostics/tests			\
 	models					\
 	models/constants			\
+	models/mod_settings			\
+	models/phys_module			\
 	communication				\
 	communication/IMAS			\
 	communication/tests             	\
