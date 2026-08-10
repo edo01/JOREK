@@ -30,6 +30,7 @@ use mod_random_seed
 use mod_basisfunctions
 use nodes_elements
 use mod_jgx_jorek_records, only: jgx_register_jorek_records
+use mod_jgx_phys, only: jgx_set_phys
 use constants,   only: MU_ZERO, ATOMIC_MASS_UNIT, K_BOLTZ, EL_CHG
 use mod_particle_wall_interaction
 use mod_neutral_collision, only: neutral_collisions_from_config, type_neutral_collision, gcd_neutral_collisions
@@ -282,6 +283,9 @@ do while (.not. sim%stop_now)
   tstep = get_tstep_n(sim%istep_fluid)     ! tstep is also set in stepper, but tstep is already used in the calls before the stepper
   sim%tstep_fluid_si = tstep*t_norm
   sim%time = sim%time + sim%tstep_fluid_si ! carries the time at the end of the current main loop
+
+  ! tstep just changed: refresh the copy the ported interpolators read
+  call jgx_set_phys()
 
   if (sim%my_id .eq. 0) then
     write(*,*) "sim%time       : ",sim%time

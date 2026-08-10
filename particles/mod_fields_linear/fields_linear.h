@@ -14,6 +14,7 @@
 
 #include "elements/mod_interp/interp.h"
 #include "particles/mod_fields/fields_set.h"
+#include "models/phys_module/phys.h"
 #include "models/mod_settings/mod_settings.h"
 #include "jgx/macros.h"
 #include "jgx/view.h"
@@ -43,8 +44,6 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    * @param n_v       number of variables, <= JGX_N_VALUES_MAX
    * @param s, t      element-local coordinates
    * @param phi       toroidal angle
-   * @param t_jorek   one JOREK time unit in seconds, times tstep; <= 0 disables
-   *                  the time interpolation.
    * @param[out] P, P_s, P_t, P_phi, P_time  variables, their s/t/phi derivatives
    *                  and their time derivative (size n_v)
    * @param[out] R, R_s, R_t, Z, Z_s, Z_t    geometry and its derivatives
@@ -53,12 +52,13 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
   JGX_HD void interp_PRZ(const double time, const std::size_t ie,
                          const IdxView& i_v, const int n_v,
                          const double s, const double t, const double phi,
-                         const double t_jorek,
                          OutView P, OutView P_s, OutView P_t,
                          OutView P_phi, OutView P_time,
                          double& R, double& R_s, double& R_t,
                          double& Z, double& Z_s, double& Z_t) const {
     for (int i = 0; i < n_v; ++i) P_time(i) = 0.0;
+
+    const double t_jorek = phys().t_jorek;
 
     interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
                          false, P, P_s, P_t, P_phi,
@@ -106,8 +106,6 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    * @param n_v             number of variables, <= JGX_N_VALUES_MAX
    * @param s, t            element-local coordinates
    * @param phi             toroidal angle
-   * @param t_jorek         one JOREK time unit in seconds, times tstep; <= 0 disables
-   *                        the time interpolation.
    * @param[out] P, P_s, P_t, P_phi, P_time  variables, their s/t/phi derivatives
    *                        and their time derivative (size n_v)
    * @param[out] R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi  geometry and its derivatives
@@ -116,12 +114,13 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
   JGX_HD void interp_PRZP_1(const double time, const std::size_t ie,
                             const IdxView& i_v, const int n_v,
                             const double s, const double t, const double phi,
-                            const double t_jorek,
                             OutView P, OutView P_s, OutView P_t,
                             OutView P_phi, OutView P_time,
                             double& R, double& R_s, double& R_t, double& R_phi,
                             double& Z, double& Z_s, double& Z_t, double& Z_phi) const {
     for (int i = 0; i < n_v; ++i) P_time(i) = 0.0;
+
+    const double t_jorek = phys().t_jorek;
 
     interp::interp_PRZP_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
                           false, P, P_s, P_t, P_phi,

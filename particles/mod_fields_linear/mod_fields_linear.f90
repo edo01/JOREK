@@ -19,7 +19,7 @@ interface
                                            is_static, flag_zero_dpsidt,             &
                                            time_now, time_prev,                     &
                                            i_elm0, i_v0, n_v, s, t, phi,            &
-                                           time, t_jorek, P, P_s, P_t, P_phi,       &
+                                           time, P, P_s, P_t, P_phi,                &
                                            P_time, R, R_s, R_t, Z, Z_s, Z_t)        &
       bind(C, name="jgx_host_fields_linear_do_interp_PRZ_1")
     import :: c_double, c_int32_t, c_ptr
@@ -28,7 +28,7 @@ interface
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
     integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
     real(c_double),     value, intent(in) :: time_now, time_prev
-    real(c_double),     value, intent(in) :: s, t, phi, time, t_jorek
+    real(c_double),     value, intent(in) :: s, t, phi, time
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
     real(c_double),           intent(out) :: P_time(n_v)
@@ -39,7 +39,7 @@ interface
                                             is_static, flag_zero_dpsidt,            &
                                             time_now, time_prev,                    &
                                             i_elm0, i_v0, n_v, s, t, phi,           &
-                                            time, t_jorek,                          &
+                                            time,                                   &
                                             P, P_s, P_t, P_phi, P_time,             &
                                             R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi) &
       bind(C, name="jgx_host_fields_linear_do_interp_PRZP_1")
@@ -49,7 +49,7 @@ interface
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
     integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
     real(c_double),     value, intent(in) :: time_now, time_prev
-    real(c_double),     value, intent(in) :: s, t, phi, time, t_jorek
+    real(c_double),     value, intent(in) :: s, t, phi, time
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
     real(c_double),           intent(out) :: P_time(n_v)
@@ -92,8 +92,6 @@ contains
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 !> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
 pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  use constants, only: mu_zero, atomic_mass_unit
-  use phys_module, only: tstep, central_mass, central_density
   class(jorek_fields_interp_linear),  intent(in)  :: this
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
@@ -103,10 +101,8 @@ pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, 
   real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
 
   integer(c_int32_t) :: c_static, c_zero_dpsidt, iv0(n_v)
-  real*8             :: t_jorek
 
-  ! JOREK time step in seconds
-  t_jorek = tstep*sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
+  ! t_jorek is read from the pushed phys copy (mod_jgx_phys.f90)
 
   ! default logicals are not interoperable
   c_static = 0
@@ -122,8 +118,7 @@ pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, 
                                 c_static, c_zero_dpsidt,                      &
                                 this%time_now, this%time_prev,                &
                                 int(i_elm - 1, c_int32_t), iv0,               &
-                                int(n_v, c_int32_t), s, t, phi,               &
-                                time, t_jorek,                                &
+                                int(n_v, c_int32_t), s, t, phi, time,         &
                                 P, P_s, P_t, P_phi, P_time,                   &
                                 R, R_s, R_t, Z, Z_s, Z_t)
 end subroutine do_interp_PRZ_1
@@ -227,8 +222,6 @@ end subroutine do_interp_PRZ_2
 !> Interpolate a variable at a specific position (with phi), with first derivatives only, including phi derivatives
 !> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
 pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-  use constants, only: mu_zero, atomic_mass_unit
-  use phys_module, only: tstep, central_mass, central_density
   class(jorek_fields_interp_linear),  intent(in)  :: this
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
@@ -238,10 +231,8 @@ pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s,
   real*8,                   intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
 
   integer(c_int32_t) :: c_static, c_zero_dpsidt, iv0(n_v)
-  real*8             :: t_jorek
 
-  ! JOREK time step in seconds
-  t_jorek = tstep*sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20)
+  ! t_jorek is read from the pushed phys copy (mod_jgx_phys.f90)
 
   ! default logicals are not interoperable
   c_static = 0
@@ -257,8 +248,7 @@ pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s,
                                 c_static, c_zero_dpsidt,                      &
                                 this%time_now, this%time_prev,                &
                                 int(i_elm - 1, c_int32_t), iv0,               &
-                                int(n_v, c_int32_t), s, t, phi,               &
-                                time, t_jorek,                                &
+                                int(n_v, c_int32_t), s, t, phi, time,         &
                                 P, P_s, P_t, P_phi, P_time,                   &
                                 R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
 end subroutine do_interp_PRZP_1
@@ -384,6 +374,7 @@ subroutine do_read(this, sim, ev)
   use mpi
   use mod_neighbours
   use nodes_elements
+  use mod_jgx_phys, only: jgx_set_phys
   class(read_jorek_fields_interp_linear), intent(inout) :: this
   type(particle_sim), intent(inout) :: sim
   type(event), intent(inout), optional :: ev
@@ -537,6 +528,12 @@ subroutine do_read(this, sim, ev)
     if (present(ev)) then
       call MPI_Bcast(ev%start, 1, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
     end if
+
+    ! Refresh the copy the ported interpolators read, now that broadcast_phys
+    ! has given every rank the values. Programs that step tstep must call this
+    ! again each step (kinetic_main does); for the rest this is the only place
+    ! the field set is built, so it is also the only refresh needed.
+    call jgx_set_phys()
   class default
     if (my_id .eq. 0) write(*,*) "ERROR, do_read called with wrong sim%fields"
   end select
