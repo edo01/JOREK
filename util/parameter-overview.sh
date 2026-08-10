@@ -58,7 +58,7 @@ function is_communicated() {
   fi
 }
 
-find_variables models/phys_module.f90 > tmp_$$_phys
+find_variables models/phys_module/phys_module.f90 > tmp_$$_phys
 find_variables vacuum/vacuum.f90      > tmp_$$_vacu
 
 rm -f $outfile
@@ -74,7 +74,7 @@ for param in `cat tmp_$$_phys`; do
       insert_header
     fi
     is_communicated $param
-    description=`egrep -i "^[^!]* $param[( ]" models/phys_module.f90 | grep "!" | sed -e 's/^.*![< ]*//' -e 's/\\\f//g' | tr '\n' ';' | sed -e 's/;$//' -e 's/((/( (/' -e 's/))/) )/' -e s'|//|/ /|'`
+    description=`egrep -i "^[^!]* $param[( ]" models/phys_module/phys_module.f90 | grep "!" | sed -e 's/^.*![< ]*//' -e 's/\\\f//g' | tr '\n' ';' | sed -e 's/;$//' -e 's/((/( (/' -e 's/))/) )/' -e s'|//|/ /|'`
     default=`egrep -i "^[^!] $param[ =(]" models/preset_parameters.f90 | sed -e 's/^[^!]*= *//' -e 's/!.*$//' -e 's| *(/ *||' -e 's| */) *||' -e 's/d0//g' -e 's/rst_hdf5_version_supported//' -e 's/[ \t]*$//' | tr '\n' ' '`
     echo -n "| **$param** | $default | $description |" >> $outfile
     for model in $models; do

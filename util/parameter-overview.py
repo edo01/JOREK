@@ -440,7 +440,7 @@ def main():
 
     comm_text = build_comm_text()
 
-    phys_vars = find_variables("models/phys_module.f90")
+    phys_vars = find_variables("models/phys_module/phys_module.f90")
     vacu_vars = find_variables("vacuum/vacuum.f90")
 
     with open(OUTFILE, "w") as out:
@@ -448,7 +448,7 @@ def main():
 
         emit_section(
             out, "phys_module", phys_vars, models, model_params,
-            description_source=lambda p: get_description("models/phys_module.f90", p),
+            description_source=lambda p: get_description("models/phys_module/phys_module.f90", p),
             default_fn=get_phys_default,
             comm_text=comm_text,
         )

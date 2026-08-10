@@ -139,7 +139,7 @@ function check_param_files() {
 
 # --- Determine the model
 model=`getmodel`
-paramfile1="models/mod_settings.f90"
+paramfile1="models/mod_settings/mod_settings.f90"
 paramfile2="models/$model/mod_model_settings.f90"
 paramfiles="$paramfile1 $paramfile2"
 check_param_files
@@ -166,7 +166,7 @@ for arg in $@; do
   fi
 done
 model=`getmodel`
-paramfile1="models/mod_settings.f90"
+paramfile1="models/mod_settings/mod_settings.f90"
 paramfile2="models/$model/mod_model_settings.f90"
 paramfiles="$paramfile1 $paramfile2"
 check_param_files
