@@ -65,6 +65,19 @@ soa_field(void* field_base, const jgx_field_desc& fd, std::size_t n_records) {
   return view<T, Rank, layout_left>(static_cast<T*>(field_base), ext);
 }
 
+/* A scalar component of a single record, read where it lies.
+ *
+ * A record whose count is 1 -- an interpolator, say -- has no record axis to
+ * make a view over, so its scalar components are read directly through the
+ * registered offset. Rank and extents are not consulted: the caller asks for a
+ * component it declared scalar at registration.
+ */
+template <class T>
+JGX_HD inline T record_scalar(const void* record_base, const jgx_field_desc& fd) {
+  return *reinterpret_cast<const T*>(
+      static_cast<const char*>(record_base) + fd.offset_bytes);
+}
+
 } /* namespace jgx */
 
 #endif /* JGX_FIELD_VIEW_H */
