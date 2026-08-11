@@ -270,6 +270,7 @@ subroutine do_jorek_timestep(this, sim, ev)
   use vacuum
   use vacuum_response,         only: update_response
   use mod_fields_linear
+  use mod_jgx_phys,            only: jgx_set_phys
   use mod_expression,          only: exprs_all_int, init_expr
   use mod_integrals3D
 
@@ -313,7 +314,9 @@ subroutine do_jorek_timestep(this, sim, ev)
     return
   end if
   tstep = dt_jorek !< Update the jorek timestep for use in mod_elt_matrix
-  !< Update the jorek previous timestep for use in mod_elt_matrix. 
+  ! tstep just changed: refresh the copy the ported interpolators read
+  call jgx_set_phys()
+  !< Update the jorek previous timestep for use in mod_elt_matrix.
   !< If ommited, certain models (e.g. 710+) will divide by zero. Not fully tested.
   if ( this%istep -1 > 0) then
     tstep_prev = get_tstep_n(this%istep-1) 
