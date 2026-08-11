@@ -11,12 +11,15 @@
 #ifndef JOREK_FIELDS_SET_H
 #define JOREK_FIELDS_SET_H
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include "jgx/jgx_record_api.h"
 #include "jgx/field_view.h"
+#include "jgx/view.h"
 #include "datatypes/data_structure/element_set.h"
 #include "datatypes/data_structure/node_set.h"
+#include "models/phys_module/phys.h"
 #include "jgx/macros.h"
 
 namespace jorek {
@@ -50,6 +53,55 @@ fill_fields_interp_base(fields_interp_base& f,
   f.flag_zero_dpsidt = jgx::record_scalar<std::int32_t>(interp_base, r.field[JGX_FI_FLAG_ZERO_DPSIDT]) != 0;
 }
 
+/* The jacobian R_s*Z_t - R_t*Z_s, clamped away from zero.
+ *
+ * The Fortran also prints at the clamp; a device kernel cannot, and the comment
+ * there already says the clamped value is wrong-but-not-NaN, so only the clamp
+ * is kept. */
+JGX_HD inline double jac(const double R_s, const double R_t,
+                         const double Z_s, const double Z_t) {
+  constexpr double tol = 1.0e-20;
+  const double j = R_s*Z_t - R_t*Z_s;
+  return (fabs(j) < tol) ? copysign(tol, j) : j;
+}
+
+/* mod_fields::grad_st_to_RZ -- first derivatives of n_v variables from
+ * element-local (s,t) to (R,Z). Goes through jac(), so the clamp applies. */
+template<class InView, class OutView>
+JGX_HD inline void grad_st_to_RZ(const int n_v,
+                                 const InView& P_s, const InView& P_t,
+                                 const double R_s, const double R_t,
+                                 const double Z_s, const double Z_t,
+                                 OutView P_R, OutView P_Z) {
+  const double inv_st_jac = 1.0/jac(R_s, R_t, Z_s, Z_t);
+  for (int i = 0; i < n_v; ++i) {
+    P_R(i) = (  P_s(i)*Z_t - P_t(i)*Z_s ) * inv_st_jac;
+    P_Z(i) = (- P_s(i)*R_t + P_t(i)*R_s ) * inv_st_jac;
+  }
+}
+
+/* mod_fields::EB_from_psiU -- the reduced-MHD fields from the (R,Z) derivatives
+ * of psi and U. See http://jorek.eu/wiki/doku.php?id=reduced_mhd and
+ * http://jorek.eu/wiki/doku.php?id=u_phi
+ * F0 and t_norm are arguments rather than read from phys(), so this stays a leaf
+ * with no module state -- as the Fortran does. */
+template<class OutView>
+JGX_HD inline void EB_from_psiU(const double R_inv, const double F0,
+                                const double t_norm,
+                                const double psi_R, const double psi_Z,
+                                const double U_R, const double U_Z,
+                                const double U_phi, const double psi_time,
+                                OutView E, OutView B) {
+  B(0) =  psi_Z*R_inv;
+  B(1) = -psi_R*R_inv;
+  B(2) =  F0*R_inv;
+
+  E(0) = -F0*U_R/t_norm;
+  E(1) = -F0*U_Z/t_norm;
+  /* the last term is not normalised with t_norm */
+  E(2) = -F0*U_phi*R_inv/t_norm - R_inv*psi_time;
+}
+
 /* type_fields: the grid that defines the fields, and the strategy that
  * interpolates them in time.
  *
@@ -63,6 +115,56 @@ struct fields_set {
   element_set<L, Real, Int> element_list;
   node_set<L, Real, Int>    node_list;
   Interp                    interp;
+
+  /**
+   * type_fields%calc_EBpsiU_reduced -- the reduced-MHD electric and magnetic
+   * fields, psi and U at (s,t,phi) in element ie.
+   *
+   * Reduced MHD only: no fullmhd, no stellarator. R_phi and Z_phi are then
+   * identically zero, so U_phi reduces to P_phi(2) and psi_phi is unused.
+   *
+   * @param time   time to interpolate at, SI
+   * @param ie     element index into element_list
+   * @param s, t   element-local coordinates
+   * @param phi    toroidal angle
+   * @param[out] E, B   electric [V/m] and magnetic [T] field
+   * @param[out] psi    psi in JOREK units
+   * @param[out] U      velocity stream function [m/s]
+   */
+  template<class OutView>
+  JGX_HD void calc_EBpsiU_reduced(const double time, const std::size_t ie,
+                                  const double s, const double t, const double phi,
+                                  OutView E, OutView B,
+                                  double& psi, double& U) const {
+    constexpr int n_v = 2;  /* 1 is psi, 2 is U */
+    const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
+
+    const std::int32_t iv_[n_v] = { 0, 1 };  /* 0-based across the seam */
+    const jgx::view<const std::int32_t, 1> i_v(iv_, pe);
+
+    Real P_[n_v], P_s_[n_v], P_t_[n_v], P_phi_[n_v], P_time_[n_v];
+    const jgx::view<Real, 1> P(P_, pe), P_s(P_s_, pe), P_t(P_t_, pe);
+    const jgx::view<Real, 1> P_phi(P_phi_, pe), P_time(P_time_, pe);
+
+    double R, R_s, R_t, Z, Z_s, Z_t;
+    interp.interp_PRZ(element_list, node_list, time, ie, i_v, n_v, s, t, phi,
+                      P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t);
+
+    Real P_R_[n_v], P_Z_[n_v];
+    const jgx::view<Real, 1> P_R(P_R_, pe), P_Z(P_Z_, pe);
+    grad_st_to_RZ(n_v, P_s, P_t, R_s, R_t, Z_s, Z_t, P_R, P_Z);
+
+    const double t_norm = phys().t_norm;
+
+    psi = P(0);
+    U   = P(1)/t_norm;
+
+    double psi_time = P_time(0);
+    if (interp.flag_zero_dpsidt) psi_time = 0.0;
+
+    EB_from_psiU(1.0/R, phys().F0, t_norm,
+                 P_R(0), P_Z(0), P_R(1), P_Z(1), P_phi(1), psi_time, E, B);
+  } // calc_EBpsiU_reduced
 };
 
 template <class Interp> using fields_set_aos = fields_set<layout_stride, Interp>;
