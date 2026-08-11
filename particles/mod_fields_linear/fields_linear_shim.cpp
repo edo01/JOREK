@@ -27,8 +27,8 @@ extern "C" {
                                                 double* R, double* R_s, double* R_t,
                                                 double* Z, double* Z_s, double* Z_t) {
 
-        // we get a linear field interpolator from the registry
-        const auto f = jorek::fields_interp_linear_set_from_registry(
+        // the fields: the grid, and the strategy that interpolates it in time
+        const auto f = jorek::fields_linear_set_from_registry(
             el_base, static_cast<std::size_t>(n_elements),
             nd_base, static_cast<std::size_t>(n_nodes),
             interp_base);
@@ -39,10 +39,11 @@ extern "C" {
         jgx::view<double, 1> Pv(P, pe), Psv(P_s, pe), Ptv(P_t, pe);
         jgx::view<double, 1> Ppv(P_phi, pe), Ptimev(P_time, pe);
 
-        f.interp_PRZ(time, static_cast<std::size_t>(i_elm0),
-                     i_v, n_v, s, t, phi,
-                     Pv, Psv, Ptv, Ppv, Ptimev,
-                     *R, *R_s, *R_t, *Z, *Z_s, *Z_t);
+        f.interp.interp_PRZ(f.element_list, f.node_list,
+                            time, static_cast<std::size_t>(i_elm0),
+                            i_v, n_v, s, t, phi,
+                            Pv, Psv, Ptv, Ppv, Ptimev,
+                            *R, *R_s, *R_t, *Z, *Z_s, *Z_t);
     }
 
     /* mod_fields_linear::do_interp_PRZP_1. As above, plus the phi derivatives
@@ -59,8 +60,8 @@ extern "C" {
                                                  double* R, double* R_s, double* R_t, double* R_phi,
                                                  double* Z, double* Z_s, double* Z_t, double* Z_phi) {
 
-        // we get a linear field interpolator from the registry
-        const auto f = jorek::fields_interp_linear_set_from_registry(
+        // the fields: the grid, and the strategy that interpolates it in time
+        const auto f = jorek::fields_linear_set_from_registry(
             el_base, static_cast<std::size_t>(n_elements),
             nd_base, static_cast<std::size_t>(n_nodes),
             interp_base);
@@ -72,9 +73,10 @@ extern "C" {
         jgx::view<double, 1> Ppv(P_phi, pe), Ptimev(P_time, pe);
 
         // the interpolation strategy is deferred exactly as it happens in fortran.
-        f.interp_PRZP_1(time, static_cast<std::size_t>(i_elm0),
-                        i_v, n_v, s, t, phi,
-                        Pv, Psv, Ptv, Ppv, Ptimev,
-                        *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);
+        f.interp.interp_PRZP_1(f.element_list, f.node_list,
+                               time, static_cast<std::size_t>(i_elm0),
+                               i_v, n_v, s, t, phi,
+                               Pv, Psv, Ptv, Ppv, Ptimev,
+                               *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);
     }
 }

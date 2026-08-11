@@ -3,8 +3,12 @@
  *
  * Mirrors jorek_fields_interp_linear
  * (particles/mod_fields_linear/mod_fields_linear.f90): the extension of
- * fields_base is C++ inheritance, its type-bound procedures are member
+ * fields_interpolator is C++ inheritance, its type-bound procedures are member
  * functions carrying the binding name.
+ *
+ * The strategy inherits fields_interpolator, not the fields -- it holds no grid,
+ * and interp_PRZ takes one, as the Fortran deferred interface does. The fields
+ * are a fields_set that *holds* one of these (particles/mod_fields/fields_set.h).
  */
 #ifndef FIELDS_LINEAR_H
 #define FIELDS_LINEAR_H
@@ -29,15 +33,8 @@ enum fields_interp_linear_field {
   JGX_FIL_COUNT
 };
 
-template <class L, class Real = double, class Int = int>
-struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
-  using base = fields_base_set<L, Real, Int>;
-
-  /* The base is dependent; unqualified lookup needs these. */
-  using base::element_list;
-  using base::node_list;
-  using base::is_static;
-
+template <class Real = double>
+struct fields_interp_linear_set : fields_interp_base_set {
   Real time_now  = 0;  /* SI */
   Real time_prev = 0;  /* SI */
 
@@ -46,6 +43,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    * variables and the geometry at (s,t,phi) in element ie, then interpolate
    * linearly in time between the two restart files the field set holds.
    *
+   * @param element_list, node_list  the grid, owned by the fields
    * @param time      time to interpolate at, SI
    * @param ie        element index into element_list
    * @param i_v       indices of the n_v variables to interpolate
@@ -56,8 +54,9 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    *                  and their time derivative (size n_v)
    * @param[out] R, R_s, R_t, Z, Z_s, Z_t    geometry and its derivatives
    */
-  template<class IdxView, class OutView>
-  JGX_HD void interp_PRZ(const double time, const std::size_t ie,
+  template<class ES, class NS, class IdxView, class OutView>
+  JGX_HD void interp_PRZ(const ES& element_list, const NS& node_list,
+                         const double time, const std::size_t ie,
                          const IdxView& i_v, const int n_v,
                          const double s, const double t, const double phi,
                          OutView P, OutView P_s, OutView P_t,
@@ -108,6 +107,7 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    * interp_PRZ, for a non-axisymmetric configuration: the geometry has phi
    * derivatives of its own.
    *
+   * @param element_list, node_list  the grid, owned by the fields
    * @param time            time to interpolate at, SI
    * @param ie              element index into element_list
    * @param i_v             indices of the n_v variables to interpolate
@@ -118,8 +118,9 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
    *                        and their time derivative (size n_v)
    * @param[out] R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi  geometry and its derivatives
    */
-  template<class IdxView, class OutView>
-  JGX_HD void interp_PRZP_1(const double time, const std::size_t ie,
+  template<class ES, class NS, class IdxView, class OutView>
+  JGX_HD void interp_PRZP_1(const ES& element_list, const NS& node_list,
+                            const double time, const std::size_t ie,
                             const IdxView& i_v, const int n_v,
                             const double s, const double t, const double phi,
                             OutView P, OutView P_s, OutView P_t,
@@ -164,34 +165,38 @@ struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
   } // interp_PRZP_1
 };
 
-using fields_interp_linear_set_aos = fields_interp_linear_set<layout_stride>;
-using fields_interp_linear_set_soa = fields_interp_linear_set<layout_left>;
+/* The fields, with the linear strategy in them. */
+using fields_linear_set_aos = fields_set_aos<fields_interp_linear_set<>>;
+using fields_linear_set_soa = fields_set_soa<fields_interp_linear_set<>>;
 
-template <class L, class Real = double, class Int = int>
-JGX_HD inline fields_interp_linear_set<L, Real, Int>
-make_fields_interp_linear_set(const element_set<L, Real, Int>& el,
-                              const node_set<L, Real, Int>& nd,
-                              const void* interp_base, const jgx_record_desc& r) {
-  fields_interp_linear_set<L, Real, Int> f;
-  fill_fields_base(f, el, nd, interp_base, r);
+template <class Real = double>
+JGX_HD inline fields_interp_linear_set<Real>
+make_fields_interp_linear_set(const void* interp_base, const jgx_record_desc& r) {
+  fields_interp_linear_set<Real> f;
+  fill_fields_interp_base(f, interp_base, r);
   f.time_now  = jgx::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_NOW ]);
   f.time_prev = jgx::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_PREV]);
   return f;
 }
 
-/* Address an existing Fortran jorek_fields_interp_linear in place. All three
- * bases -- the two meshes and the interpolator -- come from inside the caller's
- * select type, and all three get their layout from the registry. The
- * interpolator is one record, so its count is implicit. */
-inline fields_interp_linear_set_aos
-fields_interp_linear_set_from_registry(void* el_base, std::size_t n_elements,
-                                       void* nd_base, std::size_t n_nodes,
-                                       const void* interp_base) {
-  return make_fields_interp_linear_set<layout_stride, double, int>(
-      element_set_from_registry(el_base, n_elements),
-      node_set_from_registry(nd_base, n_nodes),
+/* Address an existing Fortran jorek_fields_interp_linear in place. It is one
+ * record, so no count: only the base pointer varies per call. */
+inline fields_interp_linear_set<>
+fields_interp_linear_set_from_registry(const void* interp_base) {
+  return make_fields_interp_linear_set<double>(
       interp_base,
       jgx::registered_record(JGX_REC_FIELDS_INTERP_LINEAR, JGX_FIL_COUNT));
+}
+
+/* The whole fields object. All three bases come from inside the caller's select
+ * type and all three get their layout from the registry. */
+inline fields_linear_set_aos
+fields_linear_set_from_registry(void* el_base, std::size_t n_elements,
+                                void* nd_base, std::size_t n_nodes,
+                                const void* interp_base) {
+  return make_fields_set(element_set_from_registry(el_base, n_elements),
+                         node_set_from_registry(nd_base, n_nodes),
+                         fields_interp_linear_set_from_registry(interp_base));
 }
 
 } /* namespace jorek */
