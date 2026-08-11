@@ -158,8 +158,8 @@ pure subroutine do_interp_PRZ_2(this,node_list,element_list,time,i_elm,i_v,n_v,s
   implicit none
   !> declare input variables
   class(jorek_fields_interp_linear), intent(in) :: this
-  type(type_node_list),    intent(in)           :: node_list
-  type(type_element_list), intent(in)           :: element_list
+  type(type_node_list),    target, intent(in)   :: node_list
+  type(type_element_list), target, intent(in)   :: element_list
   real(kind=8), intent(in)                      :: s, t, phi, time
   integer, intent(in)                           :: i_elm, n_v
   integer, dimension(n_v), intent(in)           :: i_v
