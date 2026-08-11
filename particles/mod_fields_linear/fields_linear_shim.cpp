@@ -7,17 +7,17 @@
 extern "C" {
     /* mod_fields_linear::do_interp_PRZ_1.
      *
-     * `this` is a class(fields_base) at the call site and a polymorphic dummy has
-     * no interoperable form, so the facade stays Fortran and passes what the type
-     * holds: the two mesh bases with their record counts, the flags of
-     * fields_base and the two restart times of jorek_fields_interp_linear.
-     *
+     * `this` is a class(fields_interpolator) at the call site and a polymorphic
+     * dummy has no interoperable form, so the facade stays Fortran. It hands over
+     * three base pointers -- the two meshes with their record counts, and the
+     * interpolator itself. The interpolator's own components are read through its
+     * registration (JGX_REC_FIELDS_INTERP_LINEAR) rather than unpacked into loose
+     * arguments here, which is what keeps this signature from growing with every
+     * strategy.
      */
     void jgx_host_fields_linear_do_interp_PRZ_1(void* el_base, const int32_t n_elements,
                                                 void* nd_base, const int32_t n_nodes,
-                                                const int32_t is_static,
-                                                const int32_t flag_zero_dpsidt,
-                                                const double time_now, const double time_prev,
+                                                const void* interp_base,
                                                 const int32_t i_elm0, const int32_t* i_v0,
                                                 const int32_t n_v,
                                                 const double s, const double t, const double phi,
@@ -31,7 +31,7 @@ extern "C" {
         const auto f = jorek::fields_interp_linear_set_from_registry(
             el_base, static_cast<std::size_t>(n_elements),
             nd_base, static_cast<std::size_t>(n_nodes),
-            is_static, flag_zero_dpsidt, time_now, time_prev);
+            interp_base);
 
         const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
 
@@ -49,9 +49,7 @@ extern "C" {
      * of the (R,Z) coordinates. */
     void jgx_host_fields_linear_do_interp_PRZP_1(void* el_base, const int32_t n_elements,
                                                  void* nd_base, const int32_t n_nodes,
-                                                 const int32_t is_static,
-                                                 const int32_t flag_zero_dpsidt,
-                                                 const double time_now, const double time_prev,
+                                                 const void* interp_base,
                                                  const int32_t i_elm0, const int32_t* i_v0,
                                                  const int32_t n_v,
                                                  const double s, const double t, const double phi,
@@ -65,7 +63,7 @@ extern "C" {
         const auto f = jorek::fields_interp_linear_set_from_registry(
             el_base, static_cast<std::size_t>(n_elements),
             nd_base, static_cast<std::size_t>(n_nodes),
-            is_static, flag_zero_dpsidt, time_now, time_prev);
+            interp_base);
 
         const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
 

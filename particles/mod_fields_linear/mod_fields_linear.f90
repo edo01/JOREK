@@ -16,18 +16,15 @@ public jorek_fields_interp_linear, read_jorek_fields_interp_linear, last_file_be
 !> of the same name and the C symbol namespace is flat.
 interface
   pure subroutine jgx_host_do_interp_PRZ_1(el_base, n_elements, nd_base, n_nodes,   &
-                                           is_static, flag_zero_dpsidt,             &
-                                           time_now, time_prev,                     &
+                                           interp_base,                             &
                                            i_elm0, i_v0, n_v, s, t, phi,            &
                                            time, P, P_s, P_t, P_phi,                &
                                            P_time, R, R_s, R_t, Z, Z_s, Z_t)        &
       bind(C, name="jgx_host_fields_linear_do_interp_PRZ_1")
     import :: c_double, c_int32_t, c_ptr
     implicit none
-    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    type(c_ptr),        value, intent(in) :: el_base, nd_base, interp_base
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
-    integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
-    real(c_double),     value, intent(in) :: time_now, time_prev
     real(c_double),     value, intent(in) :: s, t, phi, time
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
@@ -36,8 +33,7 @@ interface
   end subroutine
 
   pure subroutine jgx_host_do_interp_PRZP_1(el_base, n_elements, nd_base, n_nodes,  &
-                                            is_static, flag_zero_dpsidt,            &
-                                            time_now, time_prev,                    &
+                                            interp_base,                            &
                                             i_elm0, i_v0, n_v, s, t, phi,           &
                                             time,                                   &
                                             P, P_s, P_t, P_phi, P_time,             &
@@ -45,10 +41,8 @@ interface
       bind(C, name="jgx_host_fields_linear_do_interp_PRZP_1")
     import :: c_double, c_int32_t, c_ptr
     implicit none
-    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    type(c_ptr),        value, intent(in) :: el_base, nd_base, interp_base
     integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0, n_v
-    integer(c_int32_t), value, intent(in) :: is_static, flag_zero_dpsidt
-    real(c_double),     value, intent(in) :: time_now, time_prev
     real(c_double),     value, intent(in) :: s, t, phi, time
     integer(c_int32_t),        intent(in) :: i_v0(n_v)
     real(c_double),           intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v)
@@ -92,7 +86,7 @@ contains
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 !> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
 pure subroutine do_interp_PRZ_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  class(jorek_fields_interp_linear),  intent(in)  :: this
+  class(jorek_fields_interp_linear),  target, intent(in)  :: this
   type(type_node_list),    target, intent(in) :: node_list
   type(type_element_list), target, intent(in) :: element_list
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
@@ -102,27 +96,27 @@ pure subroutine do_interp_PRZ_1(this, node_list, element_list, time, i_elm, i_v,
   real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
   real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
 
-  integer(c_int32_t) :: c_static, c_zero_dpsidt, iv0(n_v)
+  integer(c_int32_t) :: iv0(n_v)
 
   ! t_jorek is read from the pushed phys copy (mod_jgx_phys.f90)
 
-  ! default logicals are not interoperable
-  c_static = 0
-  if (this%static) c_static = 1
-  c_zero_dpsidt = 0
-  if (this%flag_zero_dpsidt) c_zero_dpsidt = 1
   iv0 = int(i_v - 1, c_int32_t)
 
-  call jgx_host_do_interp_PRZ_1(c_loc(element_list%element(1)),          &
-                                int(element_list%n_elements, c_int32_t), &
-                                c_loc(node_list%node(1)),                &
-                                int(node_list%n_nodes, c_int32_t),       &
-                                c_static, c_zero_dpsidt,                      &
-                                this%time_now, this%time_prev,                &
-                                int(i_elm - 1, c_int32_t), iv0,               &
-                                int(n_v, c_int32_t), s, t, phi, time,         &
-                                P, P_s, P_t, P_phi, P_time,                   &
-                                R, R_s, R_t, Z, Z_s, Z_t)
+  ! c_loc rejects a polymorphic entity, so the concrete base pointer has to come
+  ! from inside a select type -- the same rule the particle builders follow.
+
+  select type (me => this)
+  type is (jorek_fields_interp_linear)
+    call jgx_host_do_interp_PRZ_1(c_loc(element_list%element(1)),          &
+                                  int(element_list%n_elements, c_int32_t), &
+                                  c_loc(node_list%node(1)),                &
+                                  int(node_list%n_nodes, c_int32_t),       &
+                                  c_loc(me),                               &
+                                  int(i_elm - 1, c_int32_t), iv0,          &
+                                  int(n_v, c_int32_t), s, t, phi, time,    &
+                                  P, P_s, P_t, P_phi, P_time,              &
+                                  R, R_s, R_t, Z, Z_s, Z_t)
+  end select
 end subroutine do_interp_PRZ_1
 
 !> This procedure interpolates a variable, its first and second order derivatives in space
@@ -157,7 +151,7 @@ pure subroutine do_interp_PRZ_2(this,node_list,element_list,time,i_elm,i_v,n_v,s
   use mod_linear, only: linear_interp_differentials_dt
   implicit none
   !> declare input variables
-  class(jorek_fields_interp_linear), intent(in) :: this
+  class(jorek_fields_interp_linear), target, intent(in) :: this
   type(type_node_list),    target, intent(in)   :: node_list
   type(type_element_list), target, intent(in)   :: element_list
   real(kind=8), intent(in)                      :: s, t, phi, time
@@ -226,7 +220,7 @@ end subroutine do_interp_PRZ_2
 !> Interpolate a variable at a specific position (with phi), with first derivatives only, including phi derivatives
 !> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
 pure subroutine do_interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-  class(jorek_fields_interp_linear),  intent(in)  :: this
+  class(jorek_fields_interp_linear),  target, intent(in)  :: this
   type(type_node_list),    target, intent(in) :: node_list
   type(type_element_list), target, intent(in) :: element_list
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
@@ -236,27 +230,27 @@ pure subroutine do_interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v
   real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
   real*8,                   intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
 
-  integer(c_int32_t) :: c_static, c_zero_dpsidt, iv0(n_v)
+  integer(c_int32_t) :: iv0(n_v)
 
   ! t_jorek is read from the pushed phys copy (mod_jgx_phys.f90)
 
-  ! default logicals are not interoperable
-  c_static = 0
-  if (this%static) c_static = 1
-  c_zero_dpsidt = 0
-  if (this%flag_zero_dpsidt) c_zero_dpsidt = 1
   iv0 = int(i_v - 1, c_int32_t)
 
-  call jgx_host_do_interp_PRZP_1(c_loc(element_list%element(1)),         &
-                                int(element_list%n_elements, c_int32_t), &
-                                c_loc(node_list%node(1)),                &
-                                int(node_list%n_nodes, c_int32_t),       &
-                                c_static, c_zero_dpsidt,                      &
-                                this%time_now, this%time_prev,                &
-                                int(i_elm - 1, c_int32_t), iv0,               &
-                                int(n_v, c_int32_t), s, t, phi, time,         &
-                                P, P_s, P_t, P_phi, P_time,                   &
-                                R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+  ! c_loc rejects a polymorphic entity, so the concrete base pointer has to come
+  ! from inside a select type -- the same rule the particle builders follow.
+
+  select type (me => this)
+  type is (jorek_fields_interp_linear)
+    call jgx_host_do_interp_PRZP_1(c_loc(element_list%element(1)),          &
+                                   int(element_list%n_elements, c_int32_t), &
+                                   c_loc(node_list%node(1)),                &
+                                   int(node_list%n_nodes, c_int32_t),       &
+                                   c_loc(me),                               &
+                                   int(i_elm - 1, c_int32_t), iv0,          &
+                                   int(n_v, c_int32_t), s, t, phi, time,    &
+                                   P, P_s, P_t, P_phi, P_time,              &
+                                   R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+  end select
 end subroutine do_interp_PRZP_1
 
 !> Constructor to allow for optional and default variables

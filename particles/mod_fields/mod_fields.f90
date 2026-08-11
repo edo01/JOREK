@@ -52,7 +52,7 @@ module mod_fields
     !> derivatives of the variable and of space
     pure subroutine interp_PRZ(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
       import fields_interpolator, type_node_list, type_element_list
-      class(fields_interpolator),  intent(in)  :: this
+      class(fields_interpolator),  target, intent(in)  :: this
       type(type_node_list),    target, intent(in) :: node_list
       type(type_element_list), target, intent(in) :: element_list
       real*8,                   intent(in)  :: time !< Time at which to calculate this variable
@@ -70,7 +70,7 @@ module mod_fields
                                R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
       import fields_interpolator, type_node_list, type_element_list
       !> declare input variables
-      class(fields_interpolator), intent(in) :: this
+      class(fields_interpolator), target, intent(in) :: this
       type(type_node_list),    target, intent(in) :: node_list
       type(type_element_list), target, intent(in) :: element_list
       real(kind=8), intent(in)            :: time, s, t, phi
@@ -87,7 +87,7 @@ module mod_fields
     !> derivatives of the variable and of space
     pure subroutine interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
       import fields_interpolator, type_node_list, type_element_list
-      class(fields_interpolator),  intent(in)  :: this
+      class(fields_interpolator),  target, intent(in)  :: this
       type(type_node_list),    target, intent(in) :: node_list
       type(type_element_list), target, intent(in) :: element_list
       real*8,                   intent(in)  :: time !< Time at which to calculate this variable

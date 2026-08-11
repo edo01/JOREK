@@ -21,6 +21,14 @@
 
 namespace jorek {
 
+/* What jorek_fields_interp_linear adds to fields_interpolator, continuing the
+ * shared numbering. Mirrors mod_jgx_fields_interp_linear_record.f90. */
+enum fields_interp_linear_field {
+  JGX_FIL_TIME_NOW = JGX_FI_BASE_COUNT,
+  JGX_FIL_TIME_PREV,
+  JGX_FIL_COUNT
+};
+
 template <class L, class Real = double, class Int = int>
 struct fields_interp_linear_set : fields_base_set<L, Real, Int> {
   using base = fields_base_set<L, Real, Int>;
@@ -163,28 +171,27 @@ template <class L, class Real = double, class Int = int>
 JGX_HD inline fields_interp_linear_set<L, Real, Int>
 make_fields_interp_linear_set(const element_set<L, Real, Int>& el,
                               const node_set<L, Real, Int>& nd,
-                              bool is_static, bool flag_zero_dpsidt,
-                              Real time_now, Real time_prev) {
+                              const void* interp_base, const jgx_record_desc& r) {
   fields_interp_linear_set<L, Real, Int> f;
-  fill_fields_base(f, el, nd, is_static, flag_zero_dpsidt);
-  f.time_now  = time_now;
-  f.time_prev = time_prev;
+  fill_fields_base(f, el, nd, interp_base, r);
+  f.time_now  = jgx::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_NOW ]);
+  f.time_prev = jgx::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_PREV]);
   return f;
 }
 
-/* Address an existing Fortran jorek_fields_interp_linear in place. The two mesh
- * bases come from inside the caller's select type; their layout comes from the
- * registry, as for any other set. Flags arrive as int32 because Fortran's
- * default logical is not interoperable. */
+/* Address an existing Fortran jorek_fields_interp_linear in place. All three
+ * bases -- the two meshes and the interpolator -- come from inside the caller's
+ * select type, and all three get their layout from the registry. The
+ * interpolator is one record, so its count is implicit. */
 inline fields_interp_linear_set_aos
 fields_interp_linear_set_from_registry(void* el_base, std::size_t n_elements,
                                        void* nd_base, std::size_t n_nodes,
-                                       int is_static, int flag_zero_dpsidt,
-                                       double time_now, double time_prev) {
+                                       const void* interp_base) {
   return make_fields_interp_linear_set<layout_stride, double, int>(
       element_set_from_registry(el_base, n_elements),
       node_set_from_registry(nd_base, n_nodes),
-      is_static != 0, flag_zero_dpsidt != 0, time_now, time_prev);
+      interp_base,
+      jgx::registered_record(JGX_REC_FIELDS_INTERP_LINEAR, JGX_FIL_COUNT));
 }
 
 } /* namespace jorek */

@@ -81,7 +81,7 @@ end function ind
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 pure subroutine do_interp_PRZ_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  class(jorek_fields_interp_hermite_birkhoff),  intent(in)  :: this
+  class(jorek_fields_interp_hermite_birkhoff),  target, intent(in)  :: this
   type(type_node_list),    target, intent(in) :: node_list !< unused: the ring buffer holds the grids
   type(type_element_list), target, intent(in) :: element_list !< unused: the ring buffer holds the grids
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
@@ -150,7 +150,7 @@ pure subroutine do_interp_PRZ_2(this,node_list,element_list,time,i_elm,i_v,n_v,s
   R,R_s,R_t,R_ss,R_st,R_tt,Z,Z_s,Z_t,Z_ss,Z_st,Z_tt)
   implicit none
   !> declare input variables
-  class(jorek_fields_interp_hermite_birkhoff), intent(in) :: this
+  class(jorek_fields_interp_hermite_birkhoff), target, intent(in) :: this
   type(type_node_list),    target, intent(in)             :: node_list !< unused: the ring buffer holds the grids
   type(type_element_list), target, intent(in)             :: element_list !< unused: the ring buffer holds the grids
   real(kind=8), intent(in)                                :: time, s, t, phi
@@ -245,7 +245,7 @@ pure subroutine do_interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v
   use phys_module, only: tstep_rst, central_mass, central_density
   use mod_linear, only: linear_interp_differentials
   use mod_linear, only: linear_interp_differentials_dt
-  class(jorek_fields_interp_hermite_birkhoff),  intent(in)  :: this
+  class(jorek_fields_interp_hermite_birkhoff),  target, intent(in)  :: this
   type(type_node_list),    target, intent(in) :: node_list !< unused: the ring buffer holds the grids
   type(type_element_list), target, intent(in) :: element_list !< unused: the ring buffer holds the grids
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
