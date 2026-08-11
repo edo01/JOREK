@@ -549,10 +549,10 @@ subroutine do_jorek_timestep(this, sim, ev)
     call export_restart(sim%fields%node_list, sim%fields%element_list, 'jorek_restart', aux_node_list)
   end if
 
-  select type (fields => sim%fields)
+  select type (interp => sim%fields%interp)
   type is (jorek_fields_interp_linear)
-    fields%time_prev = sim%time
-    fields%time_now  = sim%time + dt
+    interp%time_prev = sim%time
+    interp%time_now  = sim%time + dt
   end select
 end subroutine do_jorek_timestep
 

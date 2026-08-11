@@ -79,7 +79,7 @@ end interface read_jorek_fields_interp_linear
 !>
 !> The reason behind not using deltas is that we do not have to alter much code
 !> and can import two restarts which are not consecutive and still interpolate.
-type, extends(fields_base) :: jorek_fields_interp_linear
+type, extends(fields_interpolator) :: jorek_fields_interp_linear
   real*8 :: time_now  = 0.d0 !< Time of current restart file (SI units)
   real*8 :: time_prev = 0.d0!< Time of previous restart file (SI units)
   contains
@@ -91,8 +91,10 @@ contains
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
 !> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
-pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+pure subroutine do_interp_PRZ_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
   class(jorek_fields_interp_linear),  intent(in)  :: this
+  type(type_node_list),    target, intent(in) :: node_list
+  type(type_element_list), target, intent(in) :: element_list
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
   integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -111,10 +113,10 @@ pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, 
   if (this%flag_zero_dpsidt) c_zero_dpsidt = 1
   iv0 = int(i_v - 1, c_int32_t)
 
-  call jgx_host_do_interp_PRZ_1(c_loc(this%element_list%element(1)),          &
-                                int(this%element_list%n_elements, c_int32_t), &
-                                c_loc(this%node_list%node(1)),                &
-                                int(this%node_list%n_nodes, c_int32_t),       &
+  call jgx_host_do_interp_PRZ_1(c_loc(element_list%element(1)),          &
+                                int(element_list%n_elements, c_int32_t), &
+                                c_loc(node_list%node(1)),                &
+                                int(node_list%n_nodes, c_int32_t),       &
                                 c_static, c_zero_dpsidt,                      &
                                 this%time_now, this%time_prev,                &
                                 int(i_elm - 1, c_int32_t), iv0,               &
@@ -144,7 +146,7 @@ end subroutine do_interp_PRZ_1
 !>   R_s,R_t,Z_s,Z_t:: (real8) global coordinates first order derivatives
 !>   R_ss,R_st,R_tt:   (real8) R second order derivatives
 !>   Z_ss,Z_st,Z_tt:   (real8) Z second order derivatives
-pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi, &
+pure subroutine do_interp_PRZ_2(this,node_list,element_list,time,i_elm,i_v,n_v,s,t,phi, &
   P,P_s,P_t,P_phi,P_time,P_ss,P_st,P_tt,P_sphi,P_tphi,P_stime,   &
   P_ttime,R,R_s,R_t,R_ss,R_st,R_tt,Z,Z_s,Z_t,Z_ss,Z_st,Z_tt)
   !> load module and functions
@@ -156,6 +158,8 @@ pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi, &
   implicit none
   !> declare input variables
   class(jorek_fields_interp_linear), intent(in) :: this
+  type(type_node_list),    intent(in)           :: node_list
+  type(type_element_list), intent(in)           :: element_list
   real(kind=8), intent(in)                      :: s, t, phi, time
   integer, intent(in)                           :: i_elm, n_v
   integer, dimension(n_v), intent(in)           :: i_v
@@ -182,14 +186,14 @@ pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi, &
   P_ttime = 0.d0
   
   !> interpolate variables
-  call interp_PRZ(this%node_list,this%element_list,i_elm,i_v,n_v,  &
+  call interp_PRZ(node_list,element_list,i_elm,i_v,n_v,  &
     s,t,phi,P,P_s,P_t,P_phi,P_st,P_ss,P_tt,P_sphi,P_tphi,P_phiphi, &
     R,R_s,R_t,R_st,R_ss,R_tt,Z,Z_s,Z_t,Z_st,Z_ss,Z_tt,&
     deltas=.false.)
 
   !> interpolate differentials    
   if(t_jorek .gt. 0.d0) then
-    call interp_PRZ(this%node_list,this%element_list,i_elm,i_v,n_v, &
+    call interp_PRZ(node_list,element_list,i_elm,i_v,n_v, &
       s,t,phi,dP,dP_s,dP_t,dP_phi,dP_st,dP_ss,dP_tt,dP_sphi,        &
       dP_tphi,dP_phiphi,R,R_s,R_t,R_st,R_ss,R_tt,                   &
       Z,Z_s,Z_t,Z_st,Z_ss,Z_tt,deltas=.true.)
@@ -221,8 +225,10 @@ end subroutine do_interp_PRZ_2
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only, including phi derivatives
 !> Facade only -- the body is in C++ (mod_fields_linear/fields_linear_shim.cpp).
-pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+pure subroutine do_interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
   class(jorek_fields_interp_linear),  intent(in)  :: this
+  type(type_node_list),    target, intent(in) :: node_list
+  type(type_element_list), target, intent(in) :: element_list
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
   integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -241,10 +247,10 @@ pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s,
   if (this%flag_zero_dpsidt) c_zero_dpsidt = 1
   iv0 = int(i_v - 1, c_int32_t)
 
-  call jgx_host_do_interp_PRZP_1(c_loc(this%element_list%element(1)),         &
-                                int(this%element_list%n_elements, c_int32_t), &
-                                c_loc(this%node_list%node(1)),                &
-                                int(this%node_list%n_nodes, c_int32_t),       &
+  call jgx_host_do_interp_PRZP_1(c_loc(element_list%element(1)),         &
+                                int(element_list%n_elements, c_int32_t), &
+                                c_loc(node_list%node(1)),                &
+                                int(node_list%n_nodes, c_int32_t),       &
                                 c_static, c_zero_dpsidt,                      &
                                 this%time_now, this%time_prev,                &
                                 int(i_elm - 1, c_int32_t), iv0,               &
@@ -387,25 +393,26 @@ subroutine do_read(this, sim, ev)
 
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
 
-  ! Check that the right fields are allocated in sim and allocate if needed
-  if (allocated(sim%fields)) then
-    select type (f => sim%fields)
+  ! Check that the fields and the right interpolator are allocated in sim
+  if (.not. allocated(sim%fields)) allocate(fields_base::sim%fields)
+  if (allocated(sim%fields%interp)) then
+    select type (f => sim%fields%interp)
     type is (jorek_fields_interp_linear) ! do nothing
     class default
-      write(*,*) "WARNING: wrong type of fields in particle%sim, reallocating"
-      deallocate(sim%fields)
-      allocate(jorek_fields_interp_linear::sim%fields)
+      write(*,*) "WARNING: wrong type of field interpolator in particle%sim, reallocating"
+      deallocate(sim%fields%interp)
+      allocate(jorek_fields_interp_linear::sim%fields%interp)
     end select
   else
-    allocate(jorek_fields_interp_linear::sim%fields)
+    allocate(jorek_fields_interp_linear::sim%fields%interp)
   end if
 
   if (.not. associated(sim%fields%node_list))    sim%fields%node_list    => node_list
   if (.not. associated(sim%fields%element_list)) sim%fields%element_list => element_list
 
-  
+
   ! Continue for jorek_fields_interp_linear
-  select type (f => sim%fields)
+  select type (f => sim%fields%interp)
   type is (jorek_fields_interp_linear)
 
     if (my_id .eq. 0) then
@@ -419,7 +426,7 @@ subroutine do_read(this, sim, ev)
         end if
         inquire(file=trim(restart_file), exist=file_exists)
         if (file_exists) then
-          call import_hdf5_restart(f%node_list,f%element_list,restart_file,this%rst_format,ierr)
+          call import_hdf5_restart(sim%fields%node_list,sim%fields%element_list,restart_file,this%rst_format,ierr)
           f%static = .true.
         else
           if (my_id .eq. 0) write(*,*) "ERROR: file ", trim(restart_file), " does not exist"
@@ -433,9 +440,9 @@ subroutine do_read(this, sim, ev)
         if(this%mode_divisor .ne. 1.d0) then
            write(*,"(A,3e14.6)") "mod_fields_linear : Importing mode structure divided by", this%mode_divisor
            !$omp parallel do default(shared) private(i_nodes)
-           do i_nodes=1,f%node_list%n_nodes
-             f%node_list%node(i_nodes)%values(2:n_tor,:,:)= f%node_list%node(i_nodes)%values(2:n_tor,:,:)/this%mode_divisor
-             f%node_list%node(i_nodes)%deltas= f%node_list%node(i_nodes)%deltas/this%mode_divisor
+           do i_nodes=1,sim%fields%node_list%n_nodes
+             sim%fields%node_list%node(i_nodes)%values(2:n_tor,:,:)= sim%fields%node_list%node(i_nodes)%values(2:n_tor,:,:)/this%mode_divisor
+             sim%fields%node_list%node(i_nodes)%deltas= sim%fields%node_list%node(i_nodes)%deltas/this%mode_divisor
            enddo
            !$omp end parallel do
         endif !<mode_divisor != 1
@@ -451,7 +458,7 @@ subroutine do_read(this, sim, ev)
           write(restart_file,'(A,A)') trim(tmp_name), '.h5'
           inquire(file=trim(restart_file), exist=file_exists)
           if (file_exists) then
-            call import_hdf5_restart(f%node_list,f%element_list,trim(restart_file),this%rst_format,ierr)
+            call import_hdf5_restart(sim%fields%node_list,sim%fields%element_list,trim(restart_file),this%rst_format,ierr)
             if (ierr .ne. 0) then
               if (my_id .eq. 0) write(*,*) "ERROR: cannot open restart file"
               call exit(1)
@@ -481,7 +488,7 @@ subroutine do_read(this, sim, ev)
           inquire(file=trim(restart_file), exist=file_exists)
           if (file_exists) then
             next_file_found=.true.
-            call merge_restart(f%node_list, f%element_list, trim(restart_file), this%rst_format,my_id, ierr)
+            call merge_restart(sim%fields%node_list, sim%fields%element_list, trim(restart_file), this%rst_format,my_id, ierr)
             if (ierr .ne. 0) then
               if (my_id .eq. 0) write(*,*) "ERROR: cannot open restart file"
               call exit(1)
@@ -514,10 +521,10 @@ subroutine do_read(this, sim, ev)
     end if
 
     ! Communicate the new fields to all processes
-    call broadcast_elements(my_id, f%element_list)
-    call broadcast_nodes(my_id, f%node_list)
+    call broadcast_elements(my_id, sim%fields%element_list)
+    call broadcast_nodes(my_id, sim%fields%node_list)
     call broadcast_phys(my_id)
-    call update_neighbours(f%node_list, f%element_list) ! needs to be done on every process to have an RTree everywhere
+    call update_neighbours(sim%fields%node_list, sim%fields%element_list) ! needs to be done on every process to have an RTree everywhere
     call MPI_Bcast(f%time_prev, 1, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
     call MPI_Bcast(f%time_now, 1, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
     call MPI_Bcast(sim%time, 1, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)

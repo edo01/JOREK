@@ -1,26 +1,38 @@
-!> Module containing base type for field interpolations, with interfaces
-!> to implement
+!> Module containing the fields and the base type for the time interpolation
+!> strategy they use, with interfaces to implement
 module mod_fields
   use data_structure
   implicit none
   private
-  public fields_base
+  public fields_base, fields_interpolator
   public grad_st_to_RZ, EB_from_psiU
 
-!> Base type for a field interpolator.
+!> Base type for a time interpolation strategy.
 !> Must implement the following interfaces, which are the normal
-!> functions and an additional time component (JOREK units)
-!> node_list and element_list should be the currently-valid representation of the grid
-!> (values themselves should not be used, only for find_RZ etc)
-  type, abstract :: fields_base
-    type(type_node_list),pointer         :: node_list    => null() !< Current node list
-    type(type_element_list), pointer     :: element_list => null() !< Current element list
-    logical                              :: static=.false. !< if true do not time interpolate
-    logical                              :: flag_zero_dpsidt=.false. !< if true, P_time(1) = dpsi/dt = 0
+!> functions and an additional time component (JOREK units).
+!> The grid belongs to the fields and is handed in; an extension only
+!> owns whatever its own scheme needs (restart times, a ring buffer, ...).
+  type, abstract :: fields_interpolator
+    logical :: static=.false. !< if true do not time interpolate
+    logical :: flag_zero_dpsidt=.false. !< if true, P_time(1) = dpsi/dt = 0
   contains
     procedure(interp_PRZ), deferred, public    :: interp_PRZ
     procedure(interp_PRZ_2), deferred, public  :: interp_PRZ_2
     procedure(interp_PRZP_1), deferred, public :: interp_PRZP_1
+  end type fields_interpolator
+
+!> The fields: the grid that defines them, and the strategy used to
+!> interpolate them in time.
+!> node_list and element_list should be the currently-valid representation of the grid
+!> (values themselves should not be used, only for find_RZ etc)
+  type :: fields_base
+    type(type_node_list),pointer         :: node_list    => null() !< Current node list
+    type(type_element_list), pointer     :: element_list => null() !< Current element list
+    class(fields_interpolator), allocatable :: interp !< Time interpolation strategy
+  contains
+    procedure, public :: interp_PRZ    => fields_interp_PRZ
+    procedure, public :: interp_PRZ_2  => fields_interp_PRZ_2
+    procedure, public :: interp_PRZP_1 => fields_interp_PRZP_1
     procedure, public :: calc_NeTe
     procedure, public :: calc_NeTevpar
     procedure, public :: calc_NeTeTi
@@ -41,9 +53,11 @@ module mod_fields
   interface
     !> Interpolate a variable at s, t, phi in i_elm, returning first
     !> derivatives of the variable and of space
-    pure subroutine interp_PRZ(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-      import fields_base
-      class(fields_base),  intent(in)  :: this
+    pure subroutine interp_PRZ(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+      import fields_interpolator, type_node_list, type_element_list
+      class(fields_interpolator),  intent(in)  :: this
+      type(type_node_list),    target, intent(in) :: node_list
+      type(type_element_list), target, intent(in) :: element_list
       real*8,                   intent(in)  :: time !< Time at which to calculate this variable
       integer,                  intent(in)  :: i_elm
       integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -54,12 +68,14 @@ module mod_fields
     end subroutine interp_PRZ
     !> Interpolate a variable at s, t, phi in i_elm, returning first
     !> and second order derivatives of the variable and of R and Z.
-    pure subroutine interp_PRZ_2(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, &
+    pure subroutine interp_PRZ_2(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, &
                                P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime, &
                                R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
-      import fields_base
+      import fields_interpolator, type_node_list, type_element_list
       !> declare input variables
-      class(fields_base), intent(in)      :: this
+      class(fields_interpolator), intent(in) :: this
+      type(type_node_list),    target, intent(in) :: node_list
+      type(type_element_list), target, intent(in) :: element_list
       real(kind=8), intent(in)            :: time, s, t, phi
       integer, intent(in)                 :: i_elm, n_v
       integer, dimension(n_v), intent(in) :: i_v
@@ -72,9 +88,11 @@ module mod_fields
     end subroutine interp_PRZ_2
     !> Interpolate a variable at s, t, phi in i_elm, returning first
     !> derivatives of the variable and of space
-    pure subroutine interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-      import fields_base
-      class(fields_base),  intent(in)  :: this
+    pure subroutine interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+      import fields_interpolator, type_node_list, type_element_list
+      class(fields_interpolator),  intent(in)  :: this
+      type(type_node_list),    target, intent(in) :: node_list
+      type(type_element_list), target, intent(in) :: element_list
       real*8,                   intent(in)  :: time !< Time at which to calculate this variable
       integer,                  intent(in)  :: i_elm
       integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -126,13 +144,61 @@ subroutine calc_EBpsiU_reduced(fields, time, i_elm, st, phi, E, B, psi, U)
 
   ! Set dpsi/dt to 0 if flag is true
   psi_time = P_time(1)
-  if(fields%flag_zero_dpsidt) psi_time = 0.d0
+  if(fields%interp%flag_zero_dpsidt) psi_time = 0.d0
 
   ! R_phi and Z_phi are identically zero without the stellarator model, so
   ! U_phi reduces to P_phi(2) and psi_phi is unused.
   call EB_from_psiU(1.d0/R, F0, t_norm, P_R(1), P_Z(1), P_R(2), P_Z(2), P_phi(2), psi_time, E, B)
 
 end subroutine calc_EBpsiU_reduced
+
+!> Interpolate through the strategy, on the grid the fields carry.
+pure subroutine fields_interp_PRZ(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+  class(fields_base),       intent(in)  :: this
+  real*8,                   intent(in)  :: time !< Time at which to calculate this variable
+  integer,                  intent(in)  :: i_elm
+  integer,                  intent(in)  :: n_v, i_v(n_v)
+  real*8,                   intent(in)  :: s, t, phi
+  real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_time(n_v)
+  real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
+  real*8,                   intent(out) :: P_phi(n_v)
+
+  call this%interp%interp_PRZ(this%node_list, this%element_list, time, i_elm, i_v, n_v, &
+    s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+end subroutine fields_interp_PRZ
+
+!> Interpolate through the strategy, on the grid the fields carry.
+pure subroutine fields_interp_PRZ_2(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, &
+                                    P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime, &
+                                    R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
+  class(fields_base), intent(in)      :: this
+  real(kind=8), intent(in)            :: time, s, t, phi
+  integer, intent(in)                 :: i_elm, n_v
+  integer, dimension(n_v), intent(in) :: i_v
+  real(kind=8), intent(out)                 :: R, R_s, R_t, R_ss, R_st, R_tt
+  real(kind=8), intent(out)                 :: Z, Z_s, Z_t, Z_ss, Z_st, Z_tt
+  real(kind=8), dimension(n_v), intent(out) :: P, P_s, P_t, P_phi, P_time
+  real(kind=8), dimension(n_v), intent(out) :: P_ss, P_st, P_tt, P_sphi, P_tphi
+  real(kind=8), dimension(n_v), intent(out) :: P_stime, P_ttime
+
+  call this%interp%interp_PRZ_2(this%node_list, this%element_list, time, i_elm, i_v, n_v, &
+    s, t, phi, P, P_s, P_t, P_phi, P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime, &
+    R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
+end subroutine fields_interp_PRZ_2
+
+!> Interpolate through the strategy, on the grid the fields carry.
+pure subroutine fields_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+  class(fields_base),       intent(in)  :: this
+  real*8,                   intent(in)  :: time !< Time at which to calculate this variable
+  integer,                  intent(in)  :: i_elm
+  integer,                  intent(in)  :: n_v, i_v(n_v)
+  real*8,                   intent(in)  :: s, t, phi
+  real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
+  real*8,                   intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
+
+  call this%interp%interp_PRZP_1(this%node_list, this%element_list, time, i_elm, i_v, n_v, &
+    s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+end subroutine fields_interp_PRZP_1
 
 !> Calculates the electric and magnetic fields at a specific position
 !> in the jorek element `i_elm` at `st`.
@@ -226,7 +292,7 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   U   = P(2)/t_norm
 
   ! Set dpsi/dt to 0 if flag is true
-  if(fields%flag_zero_dpsidt) P_time(1) = 0.d0
+  if(fields%interp%flag_zero_dpsidt) P_time(1) = 0.d0
 
 #if STELLARATOR_MODEL
   chi = get_chi(R,Z,phi,fields%node_list,fields%element_list,i_elm,st(1),st(2))
@@ -837,7 +903,7 @@ subroutine calc_RK4(fields, time, i_elm, st, phi, A, dA, B, dB, Bnorm, dBnorm, b
   dA(3,3) = P_phi(1) / R
 
 ! Set dpsi/dt to 0 if flag is true
-  if(fields%flag_zero_dpsidt) P_time(1) = 0.d0
+  if(fields%interp%flag_zero_dpsidt) P_time(1) = 0.d0
 
 ! Calculate the magnetic field (see http://jorek.eu/wiki/doku.php?id=reduced_mhd)
   B     = [+psi_Z, -psi_R, F0] * R_inv
@@ -1229,7 +1295,7 @@ subroutine calc_Qin(fields, time, i_elm, st, phi, A, dA, B, dB, Bnorm, dBnorm, b
   dA(3,3) = P_phi(1) / R
 
   ! Set dpsi/dt to 0 if flag is true
-  if(fields%flag_zero_dpsidt) P_time(1) = 0.d0
+  if(fields%interp%flag_zero_dpsidt) P_time(1) = 0.d0
 
   ! Calculate the magnetic field (see http://jorek.eu/wiki/doku.php?id=reduced_mhd)
   B     = [+psi_Z, -psi_R, F0] * R_inv
@@ -1459,7 +1525,7 @@ pure subroutine calc_EBNormBGradBCurlbDbdt(fields,time,i_elm,st,phi,E,b, &
        RZ(10),RZ(11),RZ(12))
 
   !> set dpsidt to zero if needed
-  if(fields%flag_zero_dpsidt) then
+  if(fields%interp%flag_zero_dpsidt) then
     psi(5)  = 0.d0 !< psi_time
     psi(11) = 0.d0 !< psi_stime
     psi(12) = 0.d0 !< psi_ttime
@@ -1605,7 +1671,7 @@ pure subroutine set_flag_dpsidt(this,flag_dpsidt_to_zero)
   class(fields_base),intent(inout) :: this !< fields object
   logical,intent(in)               :: flag_dpsidt_to_zero !< flag value
 
-  this%flag_zero_dpsidt = flag_dpsidt_to_zero
+  this%interp%flag_zero_dpsidt = flag_dpsidt_to_zero
 
 end subroutine set_flag_dpsidt
 

@@ -48,7 +48,7 @@ end interface read_jorek_fields_interp_hermite_birkhoff
 !>
 !> We use a kind of ring buffer to store the node lists
 integer, parameter :: NL = 4 !< number of node_lists
-type, extends(fields_base) :: jorek_fields_interp_hermite_birkhoff
+type, extends(fields_interpolator) :: jorek_fields_interp_hermite_birkhoff
   type(type_node_list), allocatable, dimension(:)    :: node_lists    !< Ring buffer of node lists
   type(type_element_list), allocatable, dimension(:) :: element_lists !< Ring buffer of element lists
   real*8, dimension(NL) :: t !< Time at each restart file (SI units)
@@ -80,8 +80,10 @@ end function ind
 
 
 !> Interpolate a variable at a specific position (with phi), with first derivatives only
-pure subroutine do_interp_PRZ_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+pure subroutine do_interp_PRZ_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
   class(jorek_fields_interp_hermite_birkhoff),  intent(in)  :: this
+  type(type_node_list),    target, intent(in) :: node_list !< unused: the ring buffer holds the grids
+  type(type_element_list), target, intent(in) :: element_list !< unused: the ring buffer holds the grids
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
   integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -143,12 +145,14 @@ end subroutine do_interp_PRZ_1
 !>  R_s,R_t,Z_s,Z_t: (real8) radial and vertical position first order derivatives
 !>  R_ss,R_st,R_tt:  (real8) R second order derivatives
 !>  Z_ss,Z_st,Z_tt:  (real8) Z second order derivatives
-pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi,       &
+pure subroutine do_interp_PRZ_2(this,node_list,element_list,time,i_elm,i_v,n_v,s,t,phi,       &
   P,P_s,P_t,P_phi,P_time,P_ss,P_st,P_tt,P_sphi,P_tphi,P_stime,P_ttime, &
   R,R_s,R_t,R_ss,R_st,R_tt,Z,Z_s,Z_t,Z_ss,Z_st,Z_tt)
   implicit none
   !> declare input variables
   class(jorek_fields_interp_hermite_birkhoff), intent(in) :: this
+  type(type_node_list),    target, intent(in)             :: node_list !< unused: the ring buffer holds the grids
+  type(type_element_list), target, intent(in)             :: element_list !< unused: the ring buffer holds the grids
   real(kind=8), intent(in)                                :: time, s, t, phi
   integer, intent(in)                                     :: i_elm,n_v
   integer, dimension(n_v), intent(in)                     :: i_v
@@ -235,13 +239,15 @@ pure subroutine do_interp_PRZ_2(this,time,i_elm,i_v,n_v,s,t,phi,       &
     
 end subroutine do_interp_PRZ_2
 
-pure subroutine do_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+pure subroutine do_interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
   use mod_interp
   use constants, only: mu_zero, atomic_mass_unit
   use phys_module, only: tstep_rst, central_mass, central_density
   use mod_linear, only: linear_interp_differentials
   use mod_linear, only: linear_interp_differentials_dt
   class(jorek_fields_interp_hermite_birkhoff),  intent(in)  :: this
+  type(type_node_list),    target, intent(in) :: node_list !< unused: the ring buffer holds the grids
+  type(type_element_list), target, intent(in) :: element_list !< unused: the ring buffer holds the grids
   real*8,                   intent(in)  :: time !< Time at which to calculate this variable
   integer,                  intent(in)  :: i_elm
   integer,                  intent(in)  :: n_v, i_v(n_v)
@@ -311,23 +317,24 @@ subroutine do_read(this, sim, ev)
 
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
 
-  ! Check that the right fields are allocated in sim and allocate if needed
-  if (allocated(sim%fields)) then
-    select type (f => sim%fields)
+  ! Check that the fields and the right interpolator are allocated in sim
+  if (.not. allocated(sim%fields)) allocate(fields_base::sim%fields)
+  if (allocated(sim%fields%interp)) then
+    select type (f => sim%fields%interp)
     type is (jorek_fields_interp_hermite_birkhoff) ! do nothing
     class default
-      write(*,*) "WARNING: wrong type of fields in particle%sim, reallocating"
-      deallocate(sim%fields)
-      allocate(jorek_fields_interp_hermite_birkhoff::sim%fields)
+      write(*,*) "WARNING: wrong type of field interpolator in particle%sim, reallocating"
+      deallocate(sim%fields%interp)
+      allocate(jorek_fields_interp_hermite_birkhoff::sim%fields%interp)
     end select
   else
-    allocate(jorek_fields_interp_hermite_birkhoff::sim%fields)
+    allocate(jorek_fields_interp_hermite_birkhoff::sim%fields%interp)
   end if
   if (.not. associated(sim%fields%node_list))    allocate(sim%fields%node_list)
   if (.not. associated(sim%fields%element_list)) allocate(sim%fields%element_list)
-  
+
   ! Continue for jorek_fields_interp_hermite_birkhoff
-  select type (f => sim%fields)
+  select type (f => sim%fields%interp)
   type is (jorek_fields_interp_hermite_birkhoff)
     if (.not. allocated(f%node_lists))    allocate(f%node_lists(NL))
     if (.not. allocated(f%element_lists)) allocate(f%element_lists(NL))
@@ -335,10 +342,10 @@ subroutine do_read(this, sim, ev)
     ! If nothing has been loaded load the initial file
     if (f%len .eq. 0) then
       this%i = this%i-1 ! trick to reuse normal reading code
-      call read_next_file(this, f, i, prefer_plus_2=.false.)
+      call read_next_file(this, sim%fields%node_list, sim%fields%element_list, i, prefer_plus_2=.false.)
       this%i = i
-      call update_neighbours(f%node_list, f%element_list)
-      call append_to_fields(f, f%node_list, f%element_list, t_start*t_norm, &
+      call update_neighbours(sim%fields%node_list, sim%fields%element_list)
+      call append_to_fields(f, sim%fields%node_list, sim%fields%element_list, t_start*t_norm, &
         tstep_rst*t_norm, from_deltas=.true.)
       ! Set sim%time to this time also, to start at the right point
       if (sim%time .gt. 1d-16) then ! check if this is the right file if we have already set a time
@@ -353,9 +360,9 @@ subroutine do_read(this, sim, ev)
       end if
 
       ! Now read the next file
-      call read_next_file(this, f, i, prefer_plus_2=.true.)
-      call update_neighbours(f%node_list, f%element_list)
-      call append_to_fields(f, f%node_list, f%element_list, t_start*t_norm, &
+      call read_next_file(this, sim%fields%node_list, sim%fields%element_list, i, prefer_plus_2=.true.)
+      call update_neighbours(sim%fields%node_list, sim%fields%element_list)
+      call append_to_fields(f, sim%fields%node_list, sim%fields%element_list, t_start*t_norm, &
         tstep_rst*t_norm, from_deltas=i - this%i .ge. 2)
       ! note that t_start is set in import_hdf5_restart instead of t_now
       this%i = i ! update index of latest file read
@@ -390,10 +397,10 @@ subroutine do_read(this, sim, ev)
 
 
       ! Do an incremental read
-      call read_next_file(this, f, i, prefer_plus_2=.true.)
-      call update_neighbours(f%node_list, f%element_list)
+      call read_next_file(this, sim%fields%node_list, sim%fields%element_list, i, prefer_plus_2=.true.)
+      call update_neighbours(sim%fields%node_list, sim%fields%element_list)
       if (my_id .eq. 0) write(*,"(i2,A)") i-this%i, " JOREK steps between restarts"
-      call append_to_fields(f, f%node_list, f%element_list, t_start*t_norm, &
+      call append_to_fields(f, sim%fields%node_list, sim%fields%element_list, t_start*t_norm, &
         tstep_rst*t_norm, from_deltas=i - this%i .ge. 2)
         ! note that t_start is set in import_hdf5_restart instead of t_now
       this%i=i ! set index of last-read file
@@ -420,12 +427,13 @@ end subroutine do_read
 !> f%node_list, f%element_list.
 !> Performs MPI communication to get values from root process to every other process.
 !> Also broadcasted are tstep_rst and t_start
-subroutine read_next_file(this, f, i_found, prefer_plus_2)
+subroutine read_next_file(this, node_list, element_list, i_found, prefer_plus_2)
   use mod_import_restart
   use phys_module
   use mpi
   class(read_jorek_fields_interp_hermite_birkhoff), intent(inout) :: this
-  class(jorek_fields_interp_hermite_birkhoff), intent(inout) :: f
+  type(type_node_list), intent(inout) :: node_list !< staging area for the file just read
+  type(type_element_list), intent(inout) :: element_list !< staging area for the file just read
   integer, intent(out) :: i_found
   logical, optional, intent(in) :: prefer_plus_2 !< Set to true if we need to
   !< check for the presence of this%i+2 first
@@ -455,9 +463,9 @@ subroutine read_next_file(this, f, i_found, prefer_plus_2)
         next_file_found=.true.
 
         ! Read the next restart file
-        call import_hdf5_restart(f%node_list,f%element_list,trim(restart_file),this%rst_format,ierr)
-        call broadcast_elements(my_id, f%element_list)
-        call broadcast_nodes(my_id, f%node_list)
+        call import_hdf5_restart(node_list,element_list,trim(restart_file),this%rst_format,ierr)
+        call broadcast_elements(my_id, element_list)
+        call broadcast_nodes(my_id, node_list)
         call broadcast_phys(my_id) ! we only really use tstep_rst and t_start but this is simpler to write
         if (ierr .ne. 0) then
           if (my_id .eq. 0) write(*,*) "ERROR: cannot open restart file"
@@ -476,8 +484,8 @@ subroutine read_next_file(this, f, i_found, prefer_plus_2)
     end if
     call MPI_Bcast(i_found, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
   else
-    call broadcast_elements(my_id, f%element_list)
-    call broadcast_nodes(my_id, f%node_list)
+    call broadcast_elements(my_id, element_list)
+    call broadcast_nodes(my_id, node_list)
     call broadcast_phys(my_id) ! we only really use tstep_rst and t_start but this is simpler to write
     call MPI_Bcast(i_found, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
   end if
