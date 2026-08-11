@@ -73,7 +73,7 @@ end interface read_jorek_fields_interp_linear
 !>
 !> The reason behind not using deltas is that we do not have to alter much code
 !> and can import two restarts which are not consecutive and still interpolate.
-type, extends(fields_interpolator) :: jorek_fields_interp_linear
+type, extends(fields_interpolator_base) :: jorek_fields_interp_linear
   real*8 :: time_now  = 0.d0 !< Time of current restart file (SI units)
   real*8 :: time_prev = 0.d0!< Time of previous restart file (SI units)
   contains

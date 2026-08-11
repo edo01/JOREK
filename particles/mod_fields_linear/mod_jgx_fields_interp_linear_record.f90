@@ -2,7 +2,7 @@
 !>
 !> The field ids below are the contract with the C++ field enum: the two lists
 !> must stay in the same order. Ids 0..1 are the components inherited from
-!> fields_interpolator and keep the same numbering in every interpolator record,
+!> fields_interpolator_base and keep the same numbering in every interpolator record,
 !> so C++ code that only needs the base part is written once -- the same
 !> arrangement particle_base has inside every particle record.
 !>
@@ -33,7 +33,7 @@ module mod_jgx_fields_interp_linear_record
   private
   public :: jgx_register_fields_interp_linear_record
 
-  !> fields_interpolator fields -- the same ids in every interpolator record
+  !> fields_interpolator_base fields -- the same ids in every interpolator record
   integer(c_int32_t), parameter :: JGX_FI_STATIC           = 0
   integer(c_int32_t), parameter :: JGX_FI_FLAG_ZERO_DPSIDT = 1
   integer(c_int32_t), parameter :: JGX_FI_BASE_COUNT       = 2
@@ -55,7 +55,7 @@ contains
 
     ext(1) = 1
 
-    !> inherited from fields_interpolator
+    !> inherited from fields_interpolator_base
     call jgx_c_record_add_field(JGX_REC_FIELDS_INTERP_LINEAR, JGX_FI_STATIC, &
          jgx_offset_of(c_loc(f(1)%static), c_loc(f(1))), JGX_I32, 1, ext)
     call jgx_c_record_add_field(JGX_REC_FIELDS_INTERP_LINEAR, JGX_FI_FLAG_ZERO_DPSIDT, &

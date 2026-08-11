@@ -4,7 +4,7 @@ module mod_fields
   use data_structure
   implicit none
   private
-  public type_fields, fields_interpolator
+  public type_fields, fields_interpolator_base
   public grad_st_to_RZ, EB_from_psiU
 
 !> Base type for a time interpolation strategy.
@@ -12,23 +12,23 @@ module mod_fields
 !> functions and an additional time component (JOREK units).
 !> The grid belongs to the fields and is handed in; an extension only
 !> owns whatever its own scheme needs (restart times, a ring buffer, ...).
-  type, abstract :: fields_interpolator
+  type, abstract :: fields_interpolator_base
     logical :: static=.false. !< if true do not time interpolate
     logical :: flag_zero_dpsidt=.false. !< if true, P_time(1) = dpsi/dt = 0
   contains
     procedure(interp_PRZ), deferred, public    :: interp_PRZ
     procedure(interp_PRZ_2), deferred, public  :: interp_PRZ_2
     procedure(interp_PRZP_1), deferred, public :: interp_PRZP_1
-  end type fields_interpolator
+  end type fields_interpolator_base
 
 !> The fields: the grid that defines them, and the strategy used to
 !> interpolate them in time.
 !> node_list and element_list should be the currently-valid representation of the grid
 !> (values themselves should not be used, only for find_RZ etc)
   type :: type_fields
-    type(type_node_list),pointer         :: node_list    => null() !< Current node list
-    type(type_element_list), pointer     :: element_list => null() !< Current element list
-    class(fields_interpolator), allocatable :: interp !< Time interpolation strategy
+    type(type_node_list),pointer                  :: node_list    => null() !< Current node list
+    type(type_element_list), pointer              :: element_list => null() !< Current element list
+    class(fields_interpolator_base), allocatable  :: interp !< Time interpolation strategy
   contains
     procedure, public :: calc_NeTe
     procedure, public :: calc_NeTevpar
@@ -51,8 +51,8 @@ module mod_fields
     !> Interpolate a variable at s, t, phi in i_elm, returning first
     !> derivatives of the variable and of space
     pure subroutine interp_PRZ(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-      import fields_interpolator, type_node_list, type_element_list
-      class(fields_interpolator),  target, intent(in)  :: this
+      import fields_interpolator_base, type_node_list, type_element_list
+      class(fields_interpolator_base),  target, intent(in)  :: this
       type(type_node_list),    target, intent(in) :: node_list
       type(type_element_list), target, intent(in) :: element_list
       real*8,                   intent(in)  :: time !< Time at which to calculate this variable
@@ -68,9 +68,9 @@ module mod_fields
     pure subroutine interp_PRZ_2(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, &
                                P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime, &
                                R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
-      import fields_interpolator, type_node_list, type_element_list
+      import fields_interpolator_base, type_node_list, type_element_list
       !> declare input variables
-      class(fields_interpolator), target, intent(in) :: this
+      class(fields_interpolator_base), target, intent(in) :: this
       type(type_node_list),    target, intent(in) :: node_list
       type(type_element_list), target, intent(in) :: element_list
       real(kind=8), intent(in)            :: time, s, t, phi
@@ -86,8 +86,8 @@ module mod_fields
     !> Interpolate a variable at s, t, phi in i_elm, returning first
     !> derivatives of the variable and of space
     pure subroutine interp_PRZP_1(this, node_list, element_list, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-      import fields_interpolator, type_node_list, type_element_list
-      class(fields_interpolator),  target, intent(in)  :: this
+      import fields_interpolator_base, type_node_list, type_element_list
+      class(fields_interpolator_base),  target, intent(in)  :: this
       type(type_node_list),    target, intent(in) :: node_list
       type(type_element_list), target, intent(in) :: element_list
       real*8,                   intent(in)  :: time !< Time at which to calculate this variable

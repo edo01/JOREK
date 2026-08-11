@@ -7,7 +7,7 @@
 extern "C" {
     /* mod_fields_linear::do_interp_PRZ_1.
      *
-     * `this` is a class(fields_interpolator) at the call site and a polymorphic
+     * `this` is a class(fields_interpolator_base) at the call site and a polymorphic
      * dummy has no interoperable form, so the facade stays Fortran. It hands over
      * three base pointers -- the two meshes with their record counts, and the
      * interpolator itself. The interpolator's own components are read through its

@@ -48,7 +48,7 @@ end interface read_jorek_fields_interp_hermite_birkhoff
 !>
 !> We use a kind of ring buffer to store the node lists
 integer, parameter :: NL = 4 !< number of node_lists
-type, extends(fields_interpolator) :: jorek_fields_interp_hermite_birkhoff
+type, extends(fields_interpolator_base) :: jorek_fields_interp_hermite_birkhoff
   type(type_node_list), allocatable, dimension(:)    :: node_lists    !< Ring buffer of node lists
   type(type_element_list), allocatable, dimension(:) :: element_lists !< Ring buffer of element lists
   real*8, dimension(NL) :: t !< Time at each restart file (SI units)

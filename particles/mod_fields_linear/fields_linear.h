@@ -3,10 +3,10 @@
  *
  * Mirrors jorek_fields_interp_linear
  * (particles/mod_fields_linear/mod_fields_linear.f90): the extension of
- * fields_interpolator is C++ inheritance, its type-bound procedures are member
+ * fields_interpolator_base is C++ inheritance, its type-bound procedures are member
  * functions carrying the binding name.
  *
- * The strategy inherits fields_interpolator, not the fields -- it holds no grid,
+ * The strategy inherits fields_interpolator_base, not the fields -- it holds no grid,
  * and interp_PRZ takes one, as the Fortran deferred interface does. The fields
  * are a fields_set that *holds* one of these (particles/mod_fields/fields_set.h).
  */
@@ -25,7 +25,7 @@
 
 namespace jorek {
 
-/* What jorek_fields_interp_linear adds to fields_interpolator, continuing the
+/* What jorek_fields_interp_linear adds to fields_interpolator_base, continuing the
  * shared numbering. Mirrors mod_jgx_fields_interp_linear_record.f90. */
 enum fields_interp_linear_field {
   JGX_FIL_TIME_NOW = JGX_FI_BASE_COUNT,
@@ -34,7 +34,7 @@ enum fields_interp_linear_field {
 };
 
 template <class Real = double>
-struct fields_interp_linear_set : fields_interp_base_set {
+struct fields_interp_linear_set : fields_interp_base {
   Real time_now  = 0;  /* SI */
   Real time_prev = 0;  /* SI */
 
