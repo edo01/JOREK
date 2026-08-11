@@ -2,6 +2,7 @@
 !> strategy they use, with interfaces to implement
 module mod_fields
   use data_structure
+  use, intrinsic :: iso_c_binding, only: c_double, c_int32_t
   implicit none
   private
   public type_fields, fields_interpolator_base
@@ -34,7 +35,6 @@ module mod_fields
     procedure, public :: calc_NeTevpar
     procedure, public :: calc_NeTeTi
     procedure, public :: calc_NjTj
-    procedure, public :: calc_EBpsiU_reduced
     procedure, public :: calc_EBpsiU
     procedure, public :: calc_vvector
     procedure, public :: calc_F_profile
@@ -99,59 +99,53 @@ module mod_fields
     end subroutine interp_PRZP_1
   end interface
 
+!> Interfaces only -- the bodies are in C++ (particles/mod_fields/fields_shim.cpp).
+  interface
+    !> Transforms first derivatives of `n_v` variables from element-local (s,t) to (R,Z).
+    !> Goes through the same zero-jacobian clamp as jac(), but silently: a device
+    !> kernel cannot print the warning the Fortran jac() writes.
+    pure subroutine grad_st_to_RZ(n_v, P_s, P_t, R_s, R_t, Z_s, Z_t, P_R, P_Z) &
+        bind(C, name="jgx_host_fields_grad_st_to_RZ")
+      import :: c_double, c_int32_t
+      implicit none
+      integer(c_int32_t), value, intent(in) :: n_v
+      real(c_double),            intent(in) :: P_s(n_v), P_t(n_v)
+      real(c_double),     value, intent(in) :: R_s, R_t, Z_s, Z_t
+      real(c_double),           intent(out) :: P_R(n_v), P_Z(n_v)
+    end subroutine grad_st_to_RZ
+
+    !> Assembles the reduced-MHD electric and magnetic fields from the (R,Z) derivatives
+    !> of psi and U. See http://jorek.eu/wiki/doku.php?id=reduced_mhd and
+    !> http://jorek.eu/wiki/doku.php?id=u_phi
+    !> F0 and t_norm are passed in rather than taken from phys_module, so this stays a
+    !> leaf with no module state.
+    pure subroutine EB_from_psiU(R_inv, F0_in, t_norm, psi_R, psi_Z, U_R, U_Z, U_phi, &
+                                 psi_time, E, B)                                      &
+        bind(C, name="jgx_host_fields_EB_from_psiU")
+      import :: c_double
+      implicit none
+      real(c_double), value, intent(in) :: R_inv     !< 1/R
+      real(c_double), value, intent(in) :: F0_in     !< toroidal field function
+      real(c_double), value, intent(in) :: t_norm    !< 1 jorek time unit in seconds
+      real(c_double), value, intent(in) :: psi_R, psi_Z
+      real(c_double), value, intent(in) :: U_R, U_Z, U_phi
+      real(c_double), value, intent(in) :: psi_time  !< dpsi/dt, already zeroed by the caller if requested
+      real(c_double),       intent(out) :: E(3)      !< Electric field [V/m]
+      real(c_double),       intent(out) :: B(3)      !< Magnetic field [T]
+    end subroutine EB_from_psiU
+  end interface
+
 contains
-
-!> Reduced-MHD-only variant of calc_EBpsiU: no fullmhd, no stellarator.
-!> Split out so the device path has a branch-free leaf to port.
-subroutine calc_EBpsiU_reduced(fields, time, i_elm, st, phi, E, B, psi, U)
-  use phys_module, only: F0, central_mass, central_density
-  use constants, only: mu_zero, atomic_mass_unit
-  ! Routine parameters
-  class(type_fields), intent(in) :: fields
-  real*8, intent(in)  :: time
-  integer, intent(in) :: i_elm !< JOREK element index
-  real*8, intent(in)  :: st(2) !< element-local coordinates
-  real*8, intent(in)  :: phi !< toroidal angle
-  real*8, intent(out) :: E(3) !< Electric field [V/m]
-  real*8, intent(out) :: B(3) !< Magnetic field [T]
-  real*8, intent(out) :: psi !< psi in JOREK units
-  real*8, intent(out) :: u !< velocity stream function in m/s
-
-  ! Internal parameters
-  integer, parameter :: i_var(2) = [1,2] ! 1 is psi, 2 is U
-  real*8             :: P(2), P_s(2), P_t(2), P_phi(2), P_time(2) ! Placeholder for evaluating variables and derivatives locally
-  real*8             :: P_R(2), P_Z(2)
-  ! Values
-  real*8             :: R, R_s, R_t, Z, Z_s, Z_t
-  ! Others
-  real*8             :: t_norm, psi_time
-
-  t_norm  = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
-
-  ! Interpolate the fields to get psi and U at the current position (and the
-  ! changes u_n - u(n-1))
-  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
-    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-
-  ! Calculate the derivatives to R and Z
-  call grad_st_to_RZ(2, P_s, P_t, R_s, R_t, Z_s, Z_t, P_R, P_Z)
-
-  ! Update psi and U
-  psi = P(1)
-  U   = P(2)/t_norm
-
-  ! Set dpsi/dt to 0 if flag is true
-  psi_time = P_time(1)
-  if(fields%interp%flag_zero_dpsidt) psi_time = 0.d0
-
-  ! R_phi and Z_phi are identically zero without the stellarator model, so
-  ! U_phi reduces to P_phi(2) and psi_phi is unused.
-  call EB_from_psiU(1.d0/R, F0, t_norm, P_R(1), P_Z(1), P_R(2), P_Z(2), P_phi(2), psi_time, E, B)
-
-end subroutine calc_EBpsiU_reduced
 
 !> Calculates the electric and magnetic fields at a specific position
 !> in the jorek element `i_elm` at `st`.
+!>
+!> DUPLICATED IN C++: the reduced-MHD path of this routine (no fullmhd, no
+!> stellarator) is ported as jorek::fields_set%calc_EBpsiU_reduced, in
+!> particles/mod_fields/fields_set.h. Keep the two in step.
+!> The duplication is deliberate and kept small: the physics itself lives in
+!> grad_st_to_RZ and EB_from_psiU, which are ported alongside it, so what is
+!> written twice is only the handful of lines that call them.
 subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   use phys_module, only: F0, mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
@@ -173,14 +167,16 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   integer, parameter :: i_var(3) = [1,2,3]
   real*8             :: P(3), P_s(3), P_t(3), P_phi(3), P_time(3) !Placeholders, differ in full MHD
   real*8             :: A3, AR, AZ, A3_R, A3_Z, A3_t, AR_Z, AR_p, AR_t, AZ_R, AZ_P,AZ_t, Fprof
+  real*8             :: inv_st_jac
 #else
   integer, parameter :: i_var(2) = [1,2]
   real*8             :: P(2), P_s(2), P_t(2), P_phi(2), P_time(2) ! Placeholder for evaluating variables and derivatives locally
+  real*8             :: P_R(2), P_Z(2)
 #endif
   ! Values
   real*8             :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
   ! Others
-  real*8             :: inv_st_jac, R_inv
+  real*8             :: R_inv
   real*8             :: psi_R, psi_Z, psi_phi, U_R, U_Z, U_phi, t_norm
   real*8, dimension(0:n_order-1,0:n_order-1,0:n_order-1) :: chi
 
@@ -232,12 +228,12 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   ! Calculate the derivatives to R and Z
 
   R_inv = 1.d0/R
-  inv_st_jac = 1.d0/jac(R_s,R_t,Z_s,Z_t)
-  psi_R    = (  P_s(1) * Z_t - P_t(1) * Z_s ) * inv_st_jac
-  psi_Z    = (- P_s(1) * R_t + P_t(1) * R_s ) * inv_st_jac
+  call grad_st_to_RZ(2, P_s, P_t, R_s, R_t, Z_s, Z_t, P_R, P_Z)
+  psi_R    = P_R(1)
+  psi_Z    = P_Z(1)
   psi_phi  = P_phi(1) - R_phi*psi_R - Z_phi*psi_Z
-  U_R      = (  P_s(2) * Z_t - P_t(2) * Z_s ) * inv_st_jac
-  U_Z      = (- P_s(2) * R_t + P_t(2) * R_s ) * inv_st_jac
+  U_R      = P_R(2)
+  U_Z      = P_Z(2)
   U_phi    = P_phi(2) - R_phi*U_R - Z_phi*U_Z
 
   ! Update psi and U
@@ -257,13 +253,9 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   E     = [-U_R, -U_Z, -U_phi*R_inv]/t_norm
   E     = E - P_time(1)/F0*(/ chi(1,0,0), chi(0,1,0), chi(0,0,1)*R_inv /) 
 #else
-  ! Calculate the magnetic field (see http://jorek.eu/wiki/doku.php?id=reduced_mhd)
-  B     = [+psi_Z, -psi_R, F0] * R_inv
-
-  ! The local electric field, obtained from E=-Grad (u F0)-\partial_t A
-  ! See http://jorek.eu/wiki/doku.php?id=u_phi
-  E     = [-F0*U_R, -F0*U_Z, -F0*U_phi*R_inv]/t_norm
-  E(3)  = E(3) - R_inv*P_time(1) ! because this is not normalized with t_norm
+  ! R_phi and Z_phi are identically zero without the stellarator model, so U_phi
+  ! has reduced to P_phi(2) above and psi_phi is unused.
+  call EB_from_psiU(R_inv, F0, t_norm, psi_R, psi_Z, U_R, U_Z, U_phi, P_time(1), E, B)
 #endif
 
 #endif
@@ -1643,46 +1635,6 @@ pure subroutine set_flag_dpsidt(this,flag_dpsidt_to_zero)
   this%interp%flag_zero_dpsidt = flag_dpsidt_to_zero
 
 end subroutine set_flag_dpsidt
-
-!> Transforms first derivatives of `n_v` variables from element-local (s,t) to (R,Z).
-!> Goes through jac(), so the zero-jacobian guard applies. Note this is *not* the
-!> same as transform_first_derivatives_st_to_RZ, which divides by the raw determinant.
-subroutine grad_st_to_RZ(n_v, P_s, P_t, R_s, R_t, Z_s, Z_t, P_R, P_Z)
-  integer, intent(in) :: n_v
-  real*8, intent(in)  :: P_s(n_v), P_t(n_v)
-  real*8, intent(in)  :: R_s, R_t, Z_s, Z_t
-  real*8, intent(out) :: P_R(n_v), P_Z(n_v)
-
-  real*8 :: inv_st_jac
-
-  inv_st_jac = 1.d0/jac(R_s,R_t,Z_s,Z_t)
-  P_R = (  P_s * Z_t - P_t * Z_s ) * inv_st_jac
-  P_Z = (- P_s * R_t + P_t * R_s ) * inv_st_jac
-
-end subroutine grad_st_to_RZ
-
-!> Assembles the reduced-MHD electric and magnetic fields from the (R,Z) derivatives
-!> of psi and U. See http://jorek.eu/wiki/doku.php?id=reduced_mhd and
-!> http://jorek.eu/wiki/doku.php?id=u_phi
-!> F0 and t_norm are passed in rather than taken from phys_module, so this stays a
-!> leaf with no module state.
-pure subroutine EB_from_psiU(R_inv, F0_in, t_norm, psi_R, psi_Z, U_R, U_Z, U_phi, psi_time, E, B)
-  real*8, intent(in)  :: R_inv     !< 1/R
-  real*8, intent(in)  :: F0_in     !< toroidal field function
-  real*8, intent(in)  :: t_norm    !< 1 jorek time unit in seconds
-  real*8, intent(in)  :: psi_R, psi_Z
-  real*8, intent(in)  :: U_R, U_Z, U_phi
-  real*8, intent(in)  :: psi_time  !< dpsi/dt, already zeroed by the caller if requested
-  real*8, intent(out) :: E(3)      !< Electric field [V/m]
-  real*8, intent(out) :: B(3)      !< Magnetic field [T]
-
-  B     = [+psi_Z, -psi_R, F0_in] * R_inv
-
-  ! obtained from E = -Grad(u F0) - \partial_t A
-  E     = [-F0_in*U_R, -F0_in*U_Z, -F0_in*U_phi*R_inv]/t_norm
-  E(3)  = E(3) - R_inv*psi_time ! because this is not normalized with t_norm
-
-end subroutine EB_from_psiU
 
 !> calculates the jacobian R_s*Z_t - R_t*Z_s
 !> returns small number if jac = 0 (to avoid NaNs, but it is of course not correct)
