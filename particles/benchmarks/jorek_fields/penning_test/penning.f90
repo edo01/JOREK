@@ -17,7 +17,7 @@ use particle_tracer
 use mod_coordinate_transforms ! For solution of penning trap trajectory
 use mod_parameters
 use constants
-use mod_fields, only: fields_base
+use mod_fields, only: type_fields
 use mod_fields_linear
 use mod_export_restart
 use mod_neighbours
@@ -25,7 +25,7 @@ use mod_find_rz_nearby
 
 implicit none
 
-type(fields_base) :: fields
+type(type_fields) :: fields
 
 ! Define our particle list
 type(particle_kinetic_leapfrog) :: particle

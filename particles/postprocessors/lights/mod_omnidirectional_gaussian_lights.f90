@@ -38,7 +38,7 @@ contains
 !> omnidirectional radiation properties
 !> inputs:
 !>   light_vert: (synchrotron_light_vertices) empty synchrotron lights
-!>   fields:     (fields_base) JOREK MHD fields
+!>   fields:     (type_fields) JOREK MHD fields
 !>   particle:   (particle_base) JOREK particle base structure
 !>   time_id:    (real8) index of simulation time
 !>   mass:       (real8) particle mass
@@ -47,7 +47,7 @@ contains
 !>               1 -> intensity of the magnetic field
 subroutine compute_omnidirectional_mhd_fields(light_vert,fields,&
 particle_in,time_id,mass,mhd_fields)
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_particle_types,        only: particle_base
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   !> used only for unit testing but required for compilation
@@ -55,7 +55,7 @@ particle_in,time_id,mass,mhd_fields)
   implicit none
   !> Inputs:
   class(omnidirectional_gaussian_lights),intent(in) :: light_vert
-  class(fields_base),intent(in)                     :: fields
+  class(type_fields),intent(in)                     :: fields
   class(particle_base),intent(in)                   :: particle_in
   integer,intent(in)                                :: time_id
   real*8,intent(in)                                 :: mass
@@ -283,7 +283,7 @@ end subroutine setup_omnidirectional_light_class
 !> momentum parallel to the magnetic field line.
 !> inputs:
 !>   light_vert:   (omnidirectional_gaussian_lights) omnidirectional lights class
-!>   fields:       (fields_base) JOREK MHD fields structure
+!>   fields:       (type_fields) JOREK MHD fields structure
 !>   light_id:     (integer) index of the light to be treated
 !>   time_id:      (integer) index of the time to treat
 !>   mass:         (real8) mass in AMU
@@ -294,14 +294,14 @@ light_id,time_id,mass,particle_out)
   use constants,                      only: SPEED_OF_LIGHT,TWOPI
   use mod_coordinate_transforms,      only: cartesian_to_cylindrical
   use mod_coordinate_transforms,      only: vector_cylindrical_to_cartesian
-  use mod_fields,                     only: fields_base
+  use mod_fields,                     only: type_fields
   use mod_particle_types,             only: particle_base,particle_kinetic_relativistic
   !> used only for unit testing but required for compilation
   use mod_particle_common_test_tools, only: compute_test_E_B_fields
   implicit none
   !> inputs:
   class(omnidirectional_gaussian_lights),intent(in) :: light_vert
-  class(fields_base),intent(in)                     :: fields
+  class(type_fields),intent(in)                     :: fields
   integer,intent(in)                                :: light_id,time_id
   real*8,intent(in)                                 :: mass
   !> outputs:

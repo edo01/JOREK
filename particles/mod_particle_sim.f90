@@ -55,7 +55,7 @@ type :: particle_sim
   integer                                         :: nstep_inner_loop          !< number of inner particle loops within the fluid step
   integer                                         :: lcm_inner_loop = -9999991 !< least common multiple of each_nstep_part of all actions in the inner loop
   integer                                         :: gcd_inner_loop = -9999991 !< greatest common divisor  of each_nstep_part of all actions in the inner loop
-  class(fields_base), allocatable                 :: fields
+  class(type_fields), allocatable                 :: fields
   logical                                         :: stop_now = .false.
   real*8                                          :: t_norm              !< JOREK normalisation factor
   type(particle_group), dimension(:), allocatable :: groups

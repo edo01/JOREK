@@ -144,7 +144,7 @@ subroutine boris_all_initial_half_step_backwards_RZPhi(particles, m, fields, t, 
   use mod_fields
   class(particle_kinetic_leapfrog), intent(inout), dimension(:) :: particles
   real*8, intent(in) :: m
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8, intent(in) :: t !< Time of the current simulation
   real*8, intent(in) :: dt !< Timestep
 

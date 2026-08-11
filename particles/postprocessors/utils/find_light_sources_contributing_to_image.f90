@@ -277,7 +277,7 @@ end subroutine compute_contribution_light_source_to_image_static
 !> inputs:
 !>   lights_inout:                    (light_vertices) class containing all active lights
 !>   rng:                             (type_rng) random number generator
-!>   fields:                          (fields_base) JOREK MHD fields
+!>   fields:                          (type_fields) JOREK MHD fields
 !>   my_id:                           (integer) id of the current mpi task
 !>   n_mpis:                          (integer) number of mpi tasks
 !>   n_times:                         (integer) number of times to be treated
@@ -297,7 +297,7 @@ subroutine generate_particle_simulations_from_active_light_sources(lights_inout,
 rng,fields,my_id,n_mpis,n_times,n_dead_particles,n_particles,n_spectra,accept_threshold,&
 masses,times,active_light_source_intensities,signs_charge,sims_particle_out,signs_p_parallel_in)
   use mod_rng
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   use mod_particle_sim,   only: particle_sim
   use mod_light_vertices, only: light_vertices
   implicit none
@@ -305,7 +305,7 @@ masses,times,active_light_source_intensities,signs_charge,sims_particle_out,sign
   class(light_vertices),intent(inout) :: lights_inout
   class(type_rng),intent(inout)       :: rng
   !> inputs:
-  class(fields_base),intent(in)                              :: fields
+  class(type_fields),intent(in)                              :: fields
   integer,intent(in)                                         :: n_dead_particles,n_particles,n_mpis,my_id
   integer,intent(in)                                         :: n_times,n_spectra
   integer,dimension(n_times),intent(in)                      :: signs_charge
@@ -336,7 +336,7 @@ end subroutine generate_particle_simulations_from_active_light_sources
 !> inputs:
 !>   lights_inout:                    (light_vertices) class containing all active lights
 !>   rng:                             (type_rng) random number generator
-!>   fields:                          (fields_base) JOREK MHD fields
+!>   fields:                          (type_fields) JOREK MHD fields
 !>   my_id:                           (integer) id of the current mpi task
 !>   n_mpis:                          (integer) number of mpi tasks
 !>   n_dead_particles:                (integer) number of required dead particles
@@ -356,7 +356,7 @@ rng,fields,my_id,n_mpis,n_dead_particles,n_particles,n_spectra,accept_threshold,
 mass,time,active_light_source_intensities,sign_charge,sim_particle_out,sign_p_parallel_in)
   use mod_rng
   use mod_random_seed
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   use mod_particle_types, only: particle_base
   use mod_particle_types, only: particle_gc_relativistic
   use mod_particle_types, only: particle_kinetic_relativistic
@@ -369,7 +369,7 @@ mass,time,active_light_source_intensities,sign_charge,sim_particle_out,sign_p_pa
   class(light_vertices),intent(inout) :: lights_inout
   class(type_rng),intent(inout)       :: rng
   !> inputs:
-  class(fields_base),intent(in)                      :: fields
+  class(type_fields),intent(in)                      :: fields
   integer,intent(in)                                 :: n_dead_particles,n_particles,n_mpis,my_id
   integer,intent(in)                                 :: n_spectra,sign_charge
   real*8,intent(in)                                  :: time,mass,accept_threshold

@@ -91,12 +91,12 @@ subroutine compute_field_line_rhs(fields,n_variables, &
      int_parameters,real_parameters,derivatives,ifail)
   
   !> load modules
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   use mod_find_rz_nearby
   implicit none
   
   !> declare input variables
-  class(fields_base), intent(in)                         :: fields
+  class(type_fields), intent(in)                         :: fields
   integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
   integer, dimension(n_variables), intent(in)            :: int_parameters
   real(kind=8), intent(in)                               :: t
@@ -133,13 +133,13 @@ end subroutine compute_field_line_rhs
 !> Push field line tracer with RK4
 subroutine field_line_runge_kutta_fixed_dt_push_jorek(fields, particle, t, dt)
   !> modules
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   use mod_find_rz_nearby
   use mod_runge_kutta, only: runge_kutta_fixed_dt
   implicit none
 
   !> input/output variables
-  class(fields_base),       intent(in)    :: fields
+  class(type_fields),       intent(in)    :: fields
   type(particle_fieldline), intent(inout) :: particle
   real(kind=8),             intent(in)    :: t
   real(kind=8),             intent(in)    :: dt

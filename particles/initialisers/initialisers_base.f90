@@ -35,7 +35,7 @@ module initialisers_base
     end function rej_f
     function real_f(n_x,x,st,time,i_elm,fields,x_min,x_max,&
     n_real_param,real_param,n_int_param,int_param)
-      use mod_fields, only: fields_base
+      use mod_fields, only: type_fields
       implicit none
       !> inputs:
       integer,intent(in)                                  :: n_x,i_elm
@@ -45,13 +45,13 @@ module initialisers_base
       real*8,dimension(n_x),intent(in)                    :: x,x_min,x_max
       real*8,dimension(2),intent(in)                      :: st
       real*8,dimension(:),allocatable,intent(in)          :: real_param
-      class(fields_base),intent(in)                       :: fields
+      class(type_fields),intent(in)                       :: fields
       !> outputs:
       real*8                                              :: real_f
     end function real_f
     subroutine real_arr_inout_s(n_x,x,st,time,i_elm,fields,x_min,x_max,&
     n_real_param,real_param,n_int_param,int_param)
-      use mod_fields, only: fields_base
+      use mod_fields, only: type_fields
       implicit none
       !> inputs:
       integer,intent(in)                                  :: n_x
@@ -60,7 +60,7 @@ module initialisers_base
       real*8,intent(in)                                   :: time
       real*8,dimension(n_x),intent(in)                    :: x_min,x_max
       real*8,dimension(:),allocatable,intent(in)          :: real_param
-      class(fields_base),intent(in)                       :: fields
+      class(type_fields),intent(in)                       :: fields
       !> inputs-outputs:
       integer,intent(inout)                               :: i_elm
       real*8,dimension(2),intent(inout)                   :: st
@@ -69,7 +69,7 @@ module initialisers_base
     subroutine part_inout_s(p_inout,n_x,x,time,fields,n_real_param,&
     real_param,n_int_param,int_param)
       use mod_particle_types, only: particle_base
-      use mod_fields,         only: fields_base
+      use mod_fields,         only: type_fields
       implicit none
       !> inputs:
       integer,intent(in)               :: n_x
@@ -80,7 +80,7 @@ module initialisers_base
       real*8,dimension(:),allocatable,intent(in)  :: real_param
       !> inputs-outputs:
       class(particle_base),intent(inout) :: p_inout
-      class(fields_base),intent(in)      :: fields
+      class(type_fields),intent(in)      :: fields
     end subroutine
   end interface
 
@@ -292,7 +292,7 @@ end subroutine initialise_particles
 !> Inputs:
 !>   n_variables:                (integer) dimensionality of the phase space
 !>   particles:                  (particle_base)(n_particles) particle array to be initialised
-!>   fields:                     (fields_base) jorek MHD fields data structure
+!>   fields:                     (type_fields) jorek MHD fields data structure
 !>   rng_base:                   (type_rng) type of random number generator to be used
 !>   pdf:                        (real_f) particle probability density function
 !>   weight_f:                   (real_f) method computing the particle weight
@@ -337,7 +337,7 @@ subroutine initialise_particles_in_phase_space(n_variables, particles, fields, r
   n_real_gdf_param_in, real_gdf_param_in, n_int_gdf_param_in, int_gdf_param_in, &
   n_real_samp_to_part_param_in,real_samp_to_part_param_in,n_int_samp_to_part_param_in, &
   int_samp_to_part_param_in,rng_n_streams_round_off_in)
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_random_seed,           only: random_seed
   use mod_particle_types,        only: particle_base
   use mod_rng
@@ -349,7 +349,7 @@ subroutine initialise_particles_in_phase_space(n_variables, particles, fields, r
   !> inputs-outputs
   class(particle_base), dimension(:), intent(inout) :: particles
   !> inputs
-  class(fields_base),intent(in)                        :: fields
+  class(type_fields),intent(in)                        :: fields
   class(type_rng),intent(in)                           :: rng_base !< What type of random number generator to use (will be reseeded here)
   procedure(real_f)                                    :: pdf,weight_f,gdf
   procedure(real_arr_inout_s)                          :: gdf_sampler
@@ -531,7 +531,7 @@ end subroutine initialise_particles_in_phase_space
 !>   i_elm:            (integer) jorek element number
 !>   weight:           (real8) particle weight
 !>   rand:             (real8) uniformly distributed random number [0,1]
-!>   fields:           (fields_base) jorek MHD fields
+!>   fields:           (type_fields) jorek MHD fields
 !>   pdf:              (real_f) procedure returning the value of the
 !>                     probability density function at a given point
 !>   gdf:              (real_f) procedure returning the value of the
@@ -553,10 +553,10 @@ function rejection_funct_gpdf(n_x,x,st,time,i_elm,weight,rand,&
 x_min,x_max,fields,pdf,gdf,one_over_sup_pdf,one_over_sup_gdf,&
 n_real_pdf_param,real_pdf_param,n_int_pdf_param,int_pdf_param,&
 n_real_gdf_param,real_gdf_param,n_int_gdf_param,int_gdf_param) result(rej)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> input variables
-  class(fields_base),intent(in)    :: fields
+  class(type_fields),intent(in)    :: fields
   integer,intent(in)               :: n_x,i_elm
   integer,intent(in)               :: n_real_pdf_param, n_int_pdf_param
   integer,intent(in)               :: n_real_gdf_param, n_int_gdf_param
@@ -614,7 +614,7 @@ subroutine initialise_particles_H_mu_psi(particles, fields, rng_base, mass, T_ma
   use mod_interp
   implicit none
   class(particle_base), dimension(:), intent(inout) :: particles
-  class(fields_base),    intent(in)                 :: fields
+  class(type_fields),    intent(in)                 :: fields
   class(type_rng),       intent(in)                 :: rng_base !< What type of random number generator to use (will be reseeded here)
   real*8,                intent(in)                 :: mass
   real*8,                external,   optional       :: Theta_transform !< Function to transform 0-1 to the theta-domain
@@ -1053,7 +1053,7 @@ subroutine initialise_particles_H_mu_psi_phiplanes(particles, fields, rng_base, 
   use mod_interp
   implicit none
   class(particle_base), dimension(:), intent(inout) :: particles
-  class(fields_base),    intent(in)                 :: fields
+  class(type_fields),    intent(in)                 :: fields
   class(type_rng),       intent(in)                 :: rng_base !< What type of random number generator to use (will be reseeded here)
   real*8,                intent(in)                 :: mass
   real*8,                external,   optional       :: Theta_transform !< Function to transform 0-1 to the theta-domain
@@ -1651,7 +1651,7 @@ subroutine normalize_with_projection_at_gc(proj, particles, fields, time, mass, 
   use mod_boris,  only: kinetic_leapfrog_to_gc
   type(projection), intent(in)                      :: proj
   class(particle_base), dimension(:), intent(inout) :: particles
-  class(fields_base), intent(in)                    :: fields
+  class(type_fields), intent(in)                    :: fields
 
   real*8, intent(in)            :: time
   real*8, intent(in)            :: mass

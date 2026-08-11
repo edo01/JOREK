@@ -204,17 +204,17 @@ end subroutine generate_equidistant_mesh_1d
 
 !> generate equidistant mesh in R and Z coordinates
 !> inputs:
-!>   fields: (fields_base) jorek mhd fields datatype 
+!>   fields: (type_fields) jorek mhd fields datatype 
 !>   n_R:    (integer) number of major radius nodes
 !>   n_Z:    (integer) number of vertical coordinate nodes
 !> outputs:
 !>   R_mesh: (real8)(n_R) major radius mesh
 !>   Z_mesh: (real8)(n_Z) vertical coordinate mesh
 subroutine generate_equidistant_RZ_mesh(fields,n_R,n_Z,R_mesh,Z_mesh)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in) :: fields
+  class(type_fields),intent(in) :: fields
   integer,intent(in)            :: n_R,n_Z
   !> outputs: 
   real*8,dimension(n_R),intent(out) :: R_mesh
@@ -252,7 +252,7 @@ end subroutine generate_equidistant_poloidal_flux_mesh
 !> compute the magnetic field at a give R,Z position
 !> all points outside the boundary have the boundary poloidal flux value
 !> inputs:
-!>   fields:           (fields_base) JOREK MHD fields
+!>   fields:           (type_fields) JOREK MHD fields
 !>   n_v:              (integer) number of magnetic field vector components (must be 3)
 !>   n_R:              (integer) number of mesh points along the major radius
 !>   n_Z:              (integer) number of mesh points along the vertical coordinates
@@ -267,10 +267,10 @@ end subroutine generate_equidistant_poloidal_flux_mesh
 !>   poloidal_flux:  (real8)(n_Z,n_R) poloidal flux
 subroutine compute_magnetic_field_poloidal_flux(fields,n_v,n_R,n_Z,time,tor_angle,&
 R_mesh,Z_mesh,ploidal_flux_bnd,magnetic_field,poloidal_flux)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in)    :: fields
+  class(type_fields),intent(in)    :: fields
   integer,intent(in)               :: n_v,n_R,n_Z
   real*8,intent(in)                :: time,tor_angle,ploidal_flux_bnd
   real*8,dimension(n_R),intent(in) :: R_mesh
@@ -305,7 +305,7 @@ end subroutine compute_magnetic_field_poloidal_flux
 !> write the magnetic field file to be provided as input to SOFT
 !> inputs:
 !>   filename:       (character) name of the file to be generated
-!>   fields:         (fields_base) jorek MHD fields
+!>   fields:         (type_fields) jorek MHD fields
 !>   write_wall:     (logical) if true write the tokamak wall in hdf5
 !>   n_vec:          (integer) N# of components of the magnetic vector
 !>   n_R_loc:        (integer) number of major radius point for one task
@@ -332,10 +332,10 @@ magnetic_field,poloidal_flux,mag_name,description)
   use hdf5
   use hdf5_io_module, only: HDF5_open_or_create,HDF5_close,HDF5_char_saving
   use hdf5_io_module, only: HDF5_array1D_saving,HDF5_array2D_saving
-  use mod_fields,     only: fields_base
+  use mod_fields,     only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in)                      :: fields
+  class(type_fields),intent(in)                      :: fields
   character(len=*),intent(in)                        :: filename,mag_name,description
   logical,intent(in)                                 :: write_wall
   integer,intent(in)                                 :: n_vec,n_R_loc,n_Z,n_lcfs
@@ -439,7 +439,7 @@ end subroutine gather_2d_array_equal_chunks
 !> |   |
 !> 4 - 1
 !> inputs:
-!>   fields:  (fields_base) JOREK MHD fields
+!>   fields:  (type_fields) JOREK MHD fields
 !>   fluxes:  (type_surface_list)(n_psi) flux surface list
 !>   psiaxis: (real8) poloidal flux at the magnetic axis
 !>   RZ_axis: (real8)(2) major radius and vertical position magnetic axis
@@ -451,7 +451,7 @@ subroutine find_LFS_minor_radius_flux_surface(fields,fluxes,psiaxis,RZ_axis,flux
   use mod_interp,     only: interp_RZ
   implicit none
   !> inputs:
-  class(fields_base),intent(in)      :: fields
+  class(type_fields),intent(in)      :: fields
   type(type_surface_list),intent(in) :: fluxes
   real*8,intent(in)                  :: psiaxis
   real*8,dimension(2),intent(in)     :: RZ_axis
@@ -520,7 +520,7 @@ end subroutine find_LFS_minor_radius_flux_surface
 
 !> find a point given two targets within an element by Newton method
 !> inputs:
-!>   fields:      (fields)(fields_base) JOREK MHD fields
+!>   fields:      (fields)(type_fields) JOREK MHD fields
 !>   i_elm:       (integer) element number
 !>   i_harmonic:  (integer) selected toroidal harmonic
 !>   n_trial:     (integer) number of trial element coordinates
@@ -537,10 +537,10 @@ end subroutine find_LFS_minor_radius_flux_surface
 subroutine find_point_from_target_in_elm_harmonic(fields,i_elm,i_harmonic,n_trial,&
 target_ids,s_trial,t_trial,targets_old,s_new,t_new,targets_new,ifail)
   use mod_interp, only: interp,interp_RZ
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in)        :: fields
+  class(type_fields),intent(in)        :: fields
   integer,intent(in)                   :: i_elm,i_harmonic,n_trial
   integer,dimension(2),intent(in)      :: target_ids
   real*8,dimension(2),intent(in)       :: targets_old
@@ -594,7 +594,7 @@ end subroutine find_point_from_target_in_elm_harmonic
 !> compute electron distribution function based on the current density
 !> and unform phase space compatible with SOFT inputs.
 !> inputs:
-!>   fields:        (fields)(fields_base) JOREK MHD fields
+!>   fields:        (fields)(type_fields) JOREK MHD fields
 !>   fluxes:        (type_surface_list)(n_psi) flux surface list
 !>   n_momenta:     (integer) size of the momentum mesh 
 !>   n_pitch:       (integer) size of the pitch angle mesh
@@ -609,10 +609,10 @@ subroutine soft_current_density_uniform_phase_pdf(fields,fluxes,n_momenta,&
 n_pitch,charge,mass,momentum_mesh,cospitch_mesh,pdf)
   use constants,      only: EL_CHG,PI,SPEED_OF_LIGHT
   use data_structure, only: type_surface_list
-  use mod_fields,     only: fields_base
+  use mod_fields,     only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in)           :: fields
+  class(type_fields),intent(in)           :: fields
   type(type_surface_list),intent(in)      :: fluxes
   integer,intent(in)                      :: n_momenta,n_pitch,charge
   real*8,intent(in)                       :: mass
@@ -646,7 +646,7 @@ end subroutine soft_current_density_uniform_phase_pdf
 !> alligned with the geometrical toroidal coordinate). 
 !> The SI units are used.
 !> inputs:
-!>   fields:       (fields_base) JOREK MHD fields
+!>   fields:       (type_fields) JOREK MHD fields
 !>   flux_surface: (type_surface) flux surface datatype
 !> outptus:
 !>   int_jz: (real8) integral of the toroidal current density in SI units
@@ -655,14 +655,14 @@ subroutine integrate_current_density_over_flux_surface(fields,flux_surface,int_z
   use mod_model_settings, only: var_zj
   use data_structure,     only: type_surface
   use mod_interp,         only: interp_RZ,interp
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   implicit none
   !> parameters:
   !> Gaussian points between (-1d0,1d0) to be used for Gauss integration
   real*8, parameter :: xgs(4)=(/-0.861136311594053,-0.339981043584856,0.339981043584856,0.861136311594053/)
   real*8, parameter :: wgs(4)=(/0.347854845137454,0.652145154862546,0.652145154862546,0.347854845137454/)
   !> inputs:
-  class(fields_base),intent(in) :: fields
+  class(type_fields),intent(in) :: fields
   type(type_surface),intent(in) :: flux_surface
   !> outputs:
   real*8,intent(out) :: int_zj
@@ -782,7 +782,7 @@ end subroutine write_soft_distribution_function
 
 !> find points on the separatrix (last close flux surface)
 !> inputs:
-!>   fields:   (fields_base) JOREK MHD field type
+!>   fields:   (type_fields) JOREK MHD field type
 !>   my_id:    (integer) rank of the MPI task
 !>   xpoint:   (logical) if true a x-point lcfs is found
 !>   xcase:    (integer) type of x-point case
@@ -797,10 +797,10 @@ psi_bnd,RZ_mag,n_lcfs,RZ_lcfs)
   use constants,      only: TWOPI
   use data_structure, only: type_surface_list
   use mod_interp,     only: interp_RZ
-  use mod_fields,     only: fields_base
+  use mod_fields,     only: type_fields
   implicit none
   !> inputs:
-  class(fields_base) :: fields
+  class(type_fields) :: fields
   logical,intent(in) :: xpoint
   integer,intent(in) :: my_id,xcase,n_points
   real*8,intent(in)  :: psi_bnd
@@ -893,7 +893,7 @@ end subroutine sort
 !>   i_elm_axis:        (integer) element containing the magnetic axis
 !>   psi_axis:          (real8) poloidal flux at the magnetic axis
 !>   st_axis:           (real8) local element coordinated of the magnetic axis
-!>   fields:            (fields_base) JOREK particle MHD fields
+!>   fields:            (type_fields) JOREK particle MHD fields
 !>   flux_surface_list: (type_surface_list) list of flux surfaces including 
 !>                     the magnetic axis 
 !> outputs:
@@ -902,10 +902,10 @@ end subroutine sort
 subroutine define_flux_surfaces(my_id,x_case,x_point,i_elm_axis,psi_axis,\
 st_axis,fields,flux_surface_list)
   use data_structure, only: type_surface_list
-  use mod_fields,     only: fields_base
+  use mod_fields,     only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in)  :: fields
+  class(type_fields),intent(in)  :: fields
   integer,intent(in)             :: my_id,x_case,i_elm_axis
   logical,intent(in)             :: x_point 
   real*8,intent(in)              :: psi_axis

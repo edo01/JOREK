@@ -6,7 +6,7 @@ use data_structure
 use mod_particle_types
 use mod_sobseq_rng
 use mod_initialise_particles
-use mod_fields, only: fields_base
+use mod_fields, only: type_fields
 use mod_fields_linear
 use mod_fieldline_euler
 use mod_neighbours
@@ -22,7 +22,7 @@ real*8,parameter  :: Z_init=2.d-1
 integer :: rank_loc,n_tasks_loc,ifail_loc
 type(type_node_list),target      :: node_list_sol
 type(type_element_list),target   :: element_list_sol
-type(fields_base) :: fields_sol
+type(type_fields) :: fields_sol
 contains
 !> Fruit basket -----------------------------------
 subroutine run_fruit_fieldline_spec_mpi(rank,n_tasks,ifail)

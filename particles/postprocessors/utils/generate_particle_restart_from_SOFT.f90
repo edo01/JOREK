@@ -598,7 +598,7 @@ end subroutine read_and_compute_soft_orbit_data
 !> particle position and write it in a HDF5 file, both magnetic fields are
 !> expressed in cylindrical coordinates: 1: R,2: Z,3: phi
 !> inputs:
-!>   fields:                   (fields_base) JOREK MHD fields
+!>   fields:                   (type_fields) JOREK MHD fields
 !>   n_vec:                    (integer) size of the position and magnetic field vector: 3
 !>   time:                     (real8) time of the MHD field
 !>   accepted_label:           (integer) SOFT label for accepted particles
@@ -610,14 +610,14 @@ accepted_label,soft_orbit_filename_in,Bfield_error_filename_in)
   use hdf5
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
   use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
-  use mod_fields,     only: fields_base
+  use mod_fields,     only: type_fields
   use hdf5_io_module, only: HDF5_open,HDF5_open_or_create,HDF5_close
   use hdf5_io_module, only: HDF5_allocatable_array1D_reading_int
   use hdf5_io_module, only: HDF5_allocatable_array2D_reading
   use hdf5_io_module, only: HDF5_array1D_saving,HDF5_array2D_saving
   implicit none
   !> inputs:
-  class(fields_base),intent(in)               :: fields 
+  class(type_fields),intent(in)               :: fields 
   character(len=*),intent(in)                 :: soft_orbit_filename_in
   character(len=*),intent(in)                 :: Bfield_error_filename_in
   integer,intent(in)                          :: n_vec

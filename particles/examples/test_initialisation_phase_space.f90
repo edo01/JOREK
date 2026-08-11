@@ -367,7 +367,7 @@ end subroutine compute_error_tot_n_phys_particles
 !>   pbound:      (real8)(2) upper and lower total momentum bounds
 !>   pitchbound:  (real8)(2) upper and lower pitch angle bounds
 !>   gyrobound:   (real8)(2) upper and lower gyro angle bounds
-!>   fields:      (fields_base) jorek MHD fields
+!>   fields:      (type_fields) jorek MHD fields
 !> outputs:
 !>   histo:         (integer)(nR-1,nZ-1,nphi-1,np-1,npitch-1,ngyro-1) 6D particle histogram
 !>   estimated_pdf: (real8)(nR-1,nZ-1,nphi-1,np-1,npitch-1,ngyro-1) 6D pdf estimation   
@@ -382,12 +382,12 @@ Zmesh,phimesh,pmesh,pitchmesh,gyromesh,n_particles,particles,time,nR,nZ,nphi,np,
 npitch,ngyro,Rbound,Zbound,phibound,pbound,pitchbound,gyrobound,fields)
   use constants,                 only: TWOPI
   use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_particle_types,        only: particle_kinetic_relativistic
   use mod_pusher_tools,          only: get_orthonormals
   implicit none
   !> inputs:
-  class(fields_base),intent(in) :: fields
+  class(type_fields),intent(in) :: fields
   integer,intent(in) :: n_particles,nR,nZ,nphi,np,npitch,ngyro
   real*8,intent(in)  :: time
   real*8,dimension(2),intent(in) :: Rbound,Zbound,phibound
@@ -506,19 +506,19 @@ end subroutine compute_equidistant_mesh
 !>   pitchmesh: (real8)(npitch) pitch angle mesh
 !>   gyromesh:  (real8)(ngyro) gyro angle mesh
 !>   pdf:       (procedure) particle distribution function
-!>   fields:    (fields_base) jorek MHD fields
+!>   fields:    (type_fields) jorek MHD fields
 !> outputs:
 !>   pdf_at_midpoints: (real8) value of the pdf at the midpoints
 subroutine evaluate_pdf_at_midpoints(&
 pdf_midpoints,nR,nZ,nphi,np,npitch,ngyro,Rmesh,Zmesh,phimesh,pmesh,& 
 pitchmesh,gyromesh,charge,time,pdf,fields,n_real_pdf_param_in,&
 real_pdf_param_in,n_int_pdf_param_in,int_pdf_param_in)
-   use mod_fields, only: fields_base
+   use mod_fields, only: type_fields
   implicit none
   !> Parameters
   integer,parameter                   :: nx=7
   !> Inputs
-  class(fields_base),intent(in)       :: fields
+  class(type_fields),intent(in)       :: fields
   integer,intent(in)                  :: nR,nZ,nphi,np,npitch,ngyro
   real*8,intent(in)                   :: charge,time
   real*8,dimension(nR),intent(in)     :: Rmesh
@@ -593,7 +593,7 @@ subroutine dump_kinetic_particles_in_txt(n_particles,particles,mass,time,fields,
   use constants,                 only: TWOPI
   use mod_particle_types,        only: particle_base
   use mod_particle_types,        only: particle_kinetic_relativistic
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_coordinate_transforms, only: vector_cartesian_to_cylindrical
   use mod_pusher_tools,          only: get_orthonormals
   implicit none
@@ -602,7 +602,7 @@ subroutine dump_kinetic_particles_in_txt(n_particles,particles,mass,time,fields,
   !> Inputs
   integer,intent(in)                                     :: n_particles
   class(particle_base),dimension(n_particles),intent(in) :: particles
-  class(fields_base),intent(in)                          :: fields
+  class(type_fields),intent(in)                          :: fields
   character(len=*),intent(in)                            :: filename
   real*8,intent(in)                                      :: mass,time
   !> Variables
@@ -725,7 +725,7 @@ end subroutine write_array6d_integer
 !>   x:            (real8)(n_x) phase space sample in spehrical
 !>                 momentum coordinates cartesian charge coordinates
 !>   time:         (real8) time of the simulation
-!>   fields:       (fields_base) JOREK MHD fields
+!>   fields:       (type_fields) JOREK MHD fields
 !>   n_real_param: (integer) number of real parameters: 0
 !>   real_param:   (real8)(n_real_param) real parameters: empty
 !>   n_int_param:  (integer) number of integer parameters: 0
@@ -736,14 +736,14 @@ subroutine spherical_p_cartesian_q_to_relativistic_kinetic(p_inout,&
 n_x,x,time,fields,n_real_param,real_param,n_int_param,int_param)
   use mod_particle_types,        only: particle_base
   use mod_particle_types,        only: particle_kinetic_relativistic
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_pusher_tools,          only: get_orthonormals
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   implicit none
   !> Inputs-Outputs:
   class(particle_base),intent(inout) :: p_inout
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: n_x,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -769,7 +769,7 @@ end subroutine spherical_p_cartesian_q_to_relativistic_kinetic
 !>   x:            (real8)(nx) random state to accept
 !>   i_elm:        (integer) jorek mesh element number
 !>   st:           (real8)(2) local mesh coordinates
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
 !>   n_real_param: (integer) N# of real input parameters of the pdf
@@ -781,7 +781,7 @@ end subroutine spherical_p_cartesian_q_to_relativistic_kinetic
 !>   pdf: (real8) value of the probability density 
 function pdf_uniform(nx,x,st,time,i_elm,fields,x_min,x_max,&
 n_real_param,real_param,n_int_param,int_param)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,i_elm,n_real_param
@@ -790,7 +790,7 @@ n_real_param,real_param,n_int_param,int_param)
   real*8,intent(in)                           :: time
   real*8,dimension(nx),intent(in)             :: x,x_min,x_max
   real*8,dimension(2),intent(in)              :: st
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   real*8,dimension(:),allocatable,intent(in)  :: real_param
   !> Outputs:
   real*8 :: pdf_uniform
@@ -815,7 +815,7 @@ end function pdf_uniform
 !>   sup_pdf:      (real8) value of the probability density upper bound
 function sup_pdf_uniform(nx,x_min,x_max,n_real_param,real_param,&
 n_int_param,int_param) result(sup_pdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,n_real_param
@@ -842,7 +842,7 @@ end function sup_pdf_uniform
 !>   i_elm:        (integer) jorek mesh element number
 !>   st:           (real8)(2) local mesh coordinates
 !>   time:         (real8) physical time at wich the particle is sampled
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
 !>   n_real_param: (integer) N# of real input parameters of the pdf
@@ -858,7 +858,7 @@ x_min,x_max,n_real_param,real_param,n_int_param,int_param) result(pdf)
   use constants,          only: MU_ZERO,EL_CHG,SPEED_OF_LIGHT
   use mod_model_settings, only: var_zj
   use mod_interp,         only: interp_PRZ
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,i_elm,n_real_param
@@ -867,7 +867,7 @@ x_min,x_max,n_real_param,real_param,n_int_param,int_param) result(pdf)
   real*8,intent(in)                           :: time
   real*8,dimension(nx),intent(in)             :: x,x_min,x_max
   real*8,dimension(2),intent(in)              :: st
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   real*8,dimension(:),allocatable,intent(in)  :: real_param
   !> Outputs:
   real*8 :: pdf
@@ -893,7 +893,7 @@ end function pdf_current_density_uniform_phase
 !>   nx:           (integer) number of variables
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters of the pdf
 !>   real_param:   (real8)(n_real_param) real pdf parameters
 !>                 1) pdf distribution coefficient (not used)
@@ -908,10 +908,10 @@ function sup_pdf_current_density_uniform_phase(nx,x_min,x_max,fields,&
 n_real_param,real_param,n_int_param,int_param) result(sup_pdf)
   use constants,          only: SPEED_OF_LIGHT,EL_CHG,MU_ZERO
   use mod_model_settings, only: n_var,var_zj
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,n_real_param
   integer,intent(in)                          :: n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
@@ -963,7 +963,7 @@ end function sup_pdf_current_density_uniform_phase
 !>   x:            (real8)(nx) random state to accept
 !>   i_elm:        (integer) jorek mesh element number
 !>   st:           (real8)(2) local mesh coordinates
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
 !>   n_real_param: (integer) N# of real input parameters of the pdf
@@ -975,7 +975,7 @@ end function sup_pdf_current_density_uniform_phase
 !>   gdf: (real8) value of the sampler probability density 
 function gdf_uniform_phase(nx,x,st,time,i_elm,fields,x_min,x_max,&
 n_real_param,real_param,n_int_param,int_param) result(gdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,i_elm,n_real_param
@@ -984,7 +984,7 @@ n_real_param,real_param,n_int_param,int_param) result(gdf)
   real*8,intent(in)                           :: time
   real*8,dimension(nx),intent(in)             :: x,x_min,x_max
   real*8,dimension(2),intent(in)              :: st
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   real*8,dimension(:),allocatable,intent(in)  :: real_param
   !> Outputs:
   real*8 :: gdf
@@ -1009,7 +1009,7 @@ end function gdf_uniform_phase
 !>   sup_gdf: (real8) value of the sampler probability density upper bound
 function sup_gdf_uniform_phase(nx,x_min,x_max,n_real_param,real_param,&
 n_int_param,int_param) result(sup_gdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,n_real_param
@@ -1031,7 +1031,7 @@ end function sup_gdf_uniform_phase
 !>   x:            (real8)(nx) random numbers in [0,1)
 !>   i_elm:        (integer) jorek mesh element number
 !>   st:           (real8)(2) local mesh coordinates
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
 !>   n_real_param: (integer) N# of real input parameters of the pdf
@@ -1045,7 +1045,7 @@ end function sup_gdf_uniform_phase
 !>   x:            (real8)(nx) particle position to accept
 subroutine gdf_uniform_sampler(nx,x,st,time,i_elm,fields,&
 x_min,x_max,n_real_param,real_param,n_int_param,int_param)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,n_real_param
@@ -1053,7 +1053,7 @@ x_min,x_max,n_real_param,real_param,n_int_param,int_param)
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
   real*8,dimension(nx),intent(in)             :: x_min,x_max
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   real*8,dimension(:),allocatable,intent(in)  :: real_param
   !> Inputs-Outputs:
   integer,intent(inout)                       :: i_elm
@@ -1079,7 +1079,7 @@ end subroutine gdf_uniform_sampler
 !>   time:         (real8) physical time at wich the particle is sampled
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters
 !>   real_param:   (real8)(n_real_param) real weight parameters
 !>                 1) plasma volume in SI units
@@ -1090,10 +1090,10 @@ end subroutine gdf_uniform_sampler
 !>   weight:       (real) particle weight
 function weight_uniform_one(nx,x,st,time,i_elm,fields,x_min,x_max,&
 n_real_param,real_param,n_int_param,int_param) result(weight)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,i_elm,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -1119,7 +1119,7 @@ end function weight_uniform_one
 !>   time:         (real8) physical time at wich the particle is sampled
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters
 !>   real_param:   (real8)(n_real_param) real weight parameters
 !>                 1) plasma volume in SI units
@@ -1130,10 +1130,10 @@ end function weight_uniform_one
 !>   weight:       (real) particle weight
 function weight_uniform(nx,x,st,time,i_elm,fields,x_min,x_max,n_real_param,&
 real_param,n_int_param,int_param) result(weight)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,i_elm,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -1160,7 +1160,7 @@ end function weight_uniform
 !>   time:         (real8) physical time at wich the particle is sampled
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters
 !>   real_param:   (real8)(n_real_param) real weight parameters
 !>                 1) 3D integral of the plasma density in SI units
@@ -1173,10 +1173,10 @@ end function weight_uniform
 function particle_weight_current_density_uniform_phase(nx,x,st,time,i_elm,fields,&
 x_min,x_max,n_real_param,real_param,n_int_param,int_param) result(weight)
   use constants,  only: EL_CHG,SPEED_OF_LIGHT
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,i_elm,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -1205,7 +1205,7 @@ end function particle_weight_current_density_uniform_phase
 !>   time:         (real8) physical time at wich the particle is sampled
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters
 !>   real_param:   (real8)(n_real_param) real weight parameters
 !>                 1) plasma volume in SI units
@@ -1217,10 +1217,10 @@ end function particle_weight_current_density_uniform_phase
 function n_physical_particle_weight_uniform(nx,time,fields,&
 x_min,x_max,n_real_param,real_param,n_int_param,int_param) result(n_phys_part)
   use constants,  only: EL_CHG,SPEED_OF_LIGHT
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -1241,7 +1241,7 @@ end function n_physical_particle_weight_uniform
 !>   time:         (real8) physical time at wich the particle is sampled
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters
 !>   real_param:   (real8)(n_real_param) real weight parameters
 !>                 1) 3D integral of the plasma density in SI units
@@ -1254,10 +1254,10 @@ end function n_physical_particle_weight_uniform
 function n_physical_particle_current_density_uniform_phase(nx,time,fields,&
 x_min,x_max,n_real_param,real_param,n_int_param,int_param) result(n_phys_part)
   use constants,  only: EL_CHG,SPEED_OF_LIGHT
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time

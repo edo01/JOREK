@@ -425,7 +425,7 @@ contains
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_kinetic_relativistic), intent(inout) :: prt
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
 
     real*8 :: E(3), B(3), psi, U, ne, rnd(3), pout(3), Te, Ti, the
@@ -513,7 +513,7 @@ contains
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_gc_relativistic), intent(inout) :: prt
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
 
     real*8 :: pnorm, E(3), B(3), psi, U, Te, Ti, the, ne, rnd(2), pin, xiin, pout, xiout
@@ -719,7 +719,7 @@ contains
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_gc_relativistic), intent(inout) :: prt
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
     real*8 :: pnorm, E(3), B(3), psi, U, Te, Ti, the, ne, rnd(2), pin, xiin, pout, xiout
     real*8, allocatable :: ni(:), thi(:)
@@ -759,7 +759,7 @@ contains
     implicit none
     class(ccoll_data), intent(in) :: dat !< Collision data
     class(particle_kinetic_relativistic), intent(inout) :: prt
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real*8,intent(in) :: mass, time, dt !< Mass in AMU and time in seconds
     real*8 :: E(3), B(3), psi, U, ne, rnd(2), pin, pout, xiin, xiout, Te, Ti, the, bperp(3), bhat(3)
     real*8, allocatable :: ni(:), thi(:)

@@ -62,7 +62,7 @@ use mod_parameters
 use phys_module, only: central_density
 use constants
 use mod_parameters
-class(fields_base), intent(in)                    :: fields
+class(type_fields), intent(in)                    :: fields
 real*8, intent(in)                                :: time, s, t, phi
 integer, intent(in)                               :: i_elm
 real*8, intent(out)                               :: n_e !< electron density [m^-3]

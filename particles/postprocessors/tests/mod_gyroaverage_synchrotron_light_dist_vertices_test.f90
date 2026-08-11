@@ -110,7 +110,7 @@ subroutine setup()
   use mod_particle_common_test_tools, only: fill_particles_tokamak
   use mod_particle_common_test_tools, only: invalidate_particles
   use mod_particle_common_test_tools, only: obtain_active_particle_ids
-  use mod_fields,                     only: fields_base
+  use mod_fields,                     only: type_fields
   use mod_fields_linear,              only: jorek_fields_interp_linear
   !$ use omp_lib
   implicit none
@@ -127,7 +127,7 @@ subroutine setup()
   !> allocate and initialise particle lists
   do ii=1,n_times_sol
     sims_particles(ii)%time = time_vector_sol(ii)
-    allocate(fields_base::sims_particles(ii)%fields)
+    allocate(type_fields::sims_particles(ii)%fields)
     allocate(jorek_fields_interp_linear::sims_particles(ii)%fields%interp)
     allocate(sims_particles(ii)%groups(n_groups_per_sim(ii)))
     call allocate_one_particle_list_type(n_groups_per_sim(ii),&

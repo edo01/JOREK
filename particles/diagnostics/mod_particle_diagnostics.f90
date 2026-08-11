@@ -396,7 +396,7 @@ subroutine calculate_particle_diagnostics(fields, time, particles, mass, real8_s
   use mod_fields_linear
   use domains
   use equil_info
-  class(fields_base), intent(in)                               :: fields
+  class(type_fields), intent(in)                               :: fields
   real*8, intent(in)                                           :: time
   class(particle_base), intent(in), dimension(:)               :: particles
   real*8, intent(in)                                           :: mass

@@ -31,7 +31,7 @@ contains
   !> but a user-defined metric can be easily added as last argument to the 
   !> procedure runge_kutta_order_error_control_dt.
   !> inputs:
-  !>   fields:     (fields_base) JOREK fields
+  !>   fields:     (type_fields) JOREK fields
   !>   tolerances: (real8)(4) tolerances on the integration error for
   !>                          1:R, 2:Z, 3:phi, 4:p_parallel
   !>   t:          (real8) current time
@@ -52,7 +52,7 @@ contains
     t,dt,t_stop,mass,dt_new,particle)
 #endif
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_find_rz_nearby
     use mod_runge_kutta, only: runge_kutta_order_error_control_dt
     implicit none
@@ -60,7 +60,7 @@ contains
     type(particle_gc_relativistic), intent(inout) :: particle
     real(kind=8), intent(inout)                   :: dt
     !> input variables
-    class(fields_base), intent(in)         :: fields
+    class(type_fields), intent(in)         :: fields
     real(kind=8), intent(in)               :: t, t_stop, mass
     real(kind=8), dimension(4), intent(in) :: tolerances
     !> output variables
@@ -107,7 +107,7 @@ contains
   !> using a Runge-Kutta integrator with an adaptation of the time step
   !> before the push based on local gradients.
   !> inputs:
-  !>   fields:   (fields_base) JOREK fields
+  !>   fields:   (type_fields) JOREK fields
   !>   t:        (real8) current time
   !>   dt:       (real8) "suggested" time step
   !>   t_stop:   (real8) time of next event
@@ -120,7 +120,7 @@ contains
   subroutine runge_kutta_adapt_dt_gc_push_jorek(fields,t,dt, &
     t_stop,mass,particle)
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_find_rz_nearby
     use mod_runge_kutta, only: runge_kutta_adaptative_dt
     implicit none
@@ -129,7 +129,7 @@ contains
     real(kind=8), intent(inout) :: dt
     !> input variables
     real(kind=8), intent(in)       :: t
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real(kind=8), intent(in)       :: t_stop,mass
     !> internal variables
     integer :: ifail, i_elm_new
@@ -178,13 +178,13 @@ contains
     real_parameters) result(dt_new)
      !> modules
      use constants, only: EL_CHG, ATOMIC_MASS_UNIT, TWOPI, SPEED_OF_LIGHT
-     use mod_fields, only: fields_base
+     use mod_fields, only: type_fields
      implicit none
      !> parameters
      real(kind=8), parameter :: inv_number_steps=0.1 !< 10 steps per characteristic time
      real(kind=8), parameter :: minimum_n_gyroperiod=1.d0
      !> input variables
-     class(fields_base), intent(in)                         :: fields
+     class(type_fields), intent(in)                         :: fields
      integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
      real(kind=8), intent(in)                               :: t, dt
      real(kind=8), dimension(n_variables), intent(in)       :: solution
@@ -227,7 +227,7 @@ contains
   !> This subroutine pushes a relativistic guiding center in JOREK fields
   !> using a standard Runge-Kutta integrator without time step control.
   !> inputs:
-  !>   fields:   (fields_base) JOREK fields
+  !>   fields:   (type_fields) JOREK fields
   !>   t:        (real8) current time
   !>   dt:       (real8) time step
   !>   mass:     (real8) GC mass in AMU
@@ -237,7 +237,7 @@ contains
   !>   particle: (particle_gc_relativistic) pushed GC
   subroutine runge_kutta_fixed_dt_gc_push_jorek(fields,t,dt,mass,particle)
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_find_rz_nearby
     use mod_runge_kutta, only: runge_kutta_fixed_dt
     implicit none
@@ -245,7 +245,7 @@ contains
     type(particle_gc_relativistic), intent(inout) :: particle
     real(kind=8), intent(inout)                   :: t
     !> input variables
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real(kind=8), intent(in)       :: dt, mass
     !> internal variables
     integer                    :: ifail, i_elm_new 
@@ -280,7 +280,7 @@ contains
   !> using a standard Runge-Kutta integrator without time step control. This pusher
   !> takes into account the radiation reaction force.
   !> inputs:
-  !>   fields:   (fields_base) JOREK fields
+  !>   fields:   (type_fields) JOREK fields
   !>   t:        (real8) current time
   !>   dt:       (real8) time step
   !>   mass:     (real8) GC mass in AMU
@@ -290,7 +290,7 @@ contains
   !>   particle: (particle_gc_relativistic) pushed GC
   subroutine runge_kutta_fixed_dt_gc_push_jorek_radreact(fields,t,dt,mass,particle)
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_find_rz_nearby
     use mod_runge_kutta, only: runge_kutta_fixed_dt
     implicit none
@@ -298,7 +298,7 @@ contains
     type(particle_gc_relativistic), intent(inout) :: particle
     real(kind=8), intent(inout)                   :: t
     !> input variables
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real(kind=8), intent(in)       :: dt, mass
     !> internal variables
     integer                    :: ifail, i_elm_new 
@@ -333,7 +333,7 @@ contains
   !> This procedure pushes a relativistic guiding center in analytical fields
   !> using a standard Runge-Kutta integrator without time step control
   !> inputs:
-  !>   fields:   (fields_base) analytical fields
+  !>   fields:   (type_fields) analytical fields
   !>   t:        (real8) current time
   !>   dt:       (real8) time step
   !>   mass:     (real8) particle mass in AMU
@@ -343,14 +343,14 @@ contains
   !>   particle: (particle_gc_relativistic) pushed particle
   subroutine runge_kutta_fixed_dt_gc_push(fields,t,dt,mass,particle)
     !> load modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_runge_kutta, only: runge_kutta_fixed_dt
     implicit none
     !> declare input/output varibales
     real(kind=8),intent(inout) :: t
     type(particle_gc_relativistic), intent(inout) :: particle
     !> declare input variables
-    class(fields_base), intent(in) :: fields
+    class(type_fields), intent(in) :: fields
     real(kind=8), intent(in)       :: dt, mass
     !> declare internal variables
     integer                    :: ifail
@@ -371,7 +371,7 @@ contains
   !> This procedure computes the derivatives at a given Runge-Kutta step required  
   !> for the Runge-Kutta integration of a relativistic guiding center in JOREK fields.
   !> inputs:
-  !>   fields:            (fields_base) JOREK fields
+  !>   fields:            (type_fields) JOREK fields
   !>   n_variables:       (integer) number of variables describing the GC = 4
   !>   n_int_parameters:  (integer) number of integer parameters = 2
   !>   n_real_parameters: (integer) number of real parameters = 4
@@ -391,12 +391,12 @@ contains
     int_parameters,real_parameters,derivatives,ifail)
     !> load modules
     use constants, only: SPEED_OF_LIGHT, EL_CHG, ATOMIC_MASS_UNIT
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_math_operators, only: cross_product
     use mod_find_rz_nearby
     implicit none
     !> declare input variables
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
     integer, dimension(n_variables), intent(in)            :: int_parameters
     real(kind=8), intent(in)                               :: t
@@ -440,7 +440,7 @@ contains
   !> is no longer a parameter but variable.
   !>
   !> inputs:
-  !>   fields:            (fields_base) JOREK fields
+  !>   fields:            (type_fields) JOREK fields
   !>   n_variables:       (integer) number of variables describing the GC = 5
   !>   n_int_parameters:  (integer) number of integer parameters = 2
   !>   n_real_parameters: (integer) number of real parameters = 3
@@ -460,12 +460,12 @@ contains
     int_parameters,real_parameters,derivatives,ifail)
     !> load modules
     use constants, only: SPEED_OF_LIGHT, EL_CHG, ATOMIC_MASS_UNIT
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     use mod_math_operators, only: cross_product
     use mod_find_rz_nearby
     implicit none
     !> declare input variables
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
     integer, dimension(n_variables), intent(in)            :: int_parameters
     real(kind=8), intent(in)                               :: t
@@ -516,7 +516,7 @@ contains
   !> for the Runge-Kutta integration of a relativistic guiding center in analytical fields.
   !> This is mainly used for testing models.
   !> inputs:
-  !>   fields:            (fields_base) analytical fields
+  !>   fields:            (type_fields) analytical fields
   !>   n_variables:       (n_variables) number of variables describing the GC
   !>   n_int_parameters:  (integer) number of integer parameters = 1
   !>   n_real_parameters: (integer) number of real parameters = 2
@@ -532,10 +532,10 @@ contains
     n_int_parameters,n_real_parameters,t,solution_old,solution,           &
     int_parameters,real_parameters,derivatives,ifail)
     !> load modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     implicit none
     !> declare input variables
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
     real(kind=8), intent(in)                               :: t
     real(kind=8), dimension(n_variables), intent(in)       :: solution_old, solution
@@ -772,7 +772,7 @@ contains
     real*8, intent(in)                         :: energy !< Particle energy in eV (including rest energy)
     real*8, intent(in)                         :: ksi    !< Cosine of particle pitch-angle 
     real*8, intent(in)                         :: mass   !< Particle mass in AMU
-    class(fields_base), intent(in)             :: fields
+    class(type_fields), intent(in)             :: fields
     real*8, intent(in)                         :: time
 
     !> output variables

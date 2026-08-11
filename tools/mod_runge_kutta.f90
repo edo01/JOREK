@@ -40,7 +40,7 @@ module mod_runge_kutta
        n_int_parameters,n_real_parameters,t,solution_old,solution, &
        int_parameters,real_parameters,derivatives,ifail)
        !> load modules
-       use mod_fields, only: fields_base
+       use mod_fields, only: type_fields
        implicit none
        !> input variables
        integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
@@ -48,7 +48,7 @@ module mod_runge_kutta
        real(kind=8), intent(in)                               :: t
        real(kind=8), dimension(n_variables), intent(in)       :: solution_old, solution
        real(kind=8), dimension(n_real_parameters), intent(in) :: real_parameters
-       class(fields_base), intent(in)                         :: fields
+       class(type_fields), intent(in)                         :: fields
        !> output variables
        integer,intent(out)                               :: ifail
        real(kind=8), dimension(n_variables), intent(out) :: derivatives
@@ -71,10 +71,10 @@ module mod_runge_kutta
         n_real_parameters,t,solution_1,solution_2,int_parameters,     &
         real_parameters) result(maximum_norm_error)
        !> modules
-       use mod_fields, only: fields_base
+       use mod_fields, only: type_fields
        implicit none
        !> input variables
-       class(fields_base), intent(in)                         :: fields
+       class(type_fields), intent(in)                         :: fields
        integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
        real(kind=8), intent(in)                               :: t
        real(kind=8), dimension(n_variables), intent(in)       :: solution_1, solution_2
@@ -101,10 +101,10 @@ module mod_runge_kutta
        n_real_parameters,t,dt,solution,int_parameters,             &
        real_parameters) result(dt_new)
        !> modules
-       use mod_fields, only: fields_base
+       use mod_fields, only: type_fields
        implicit none
        !> input variables
-       class(fields_base), intent(in)                         :: fields
+       class(type_fields), intent(in)                         :: fields
        integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
        real(kind=8), intent(in)                               :: t, dt
        real(kind=8), dimension(n_variables), intent(in)       :: solution
@@ -123,7 +123,7 @@ contains
   !> inputs:
   !>   compute_rhs:       (procedure) subroutine for computing
   !>                      the ODE(s) right hand side
-  !>   fields:            (fields_base) JOREK fields structure
+  !>   fields:            (type_fields) JOREK fields structure
   !>   n_variables:       (integer) number of variables describing the particle
   !>   n_int_parameters:  (integer) number of integer parameters
   !>   n_real_parameters: (integer) number of real parameters
@@ -156,7 +156,7 @@ contains
     int_parameters,real_parameters,tolerances,dt_new,solution,ifail,compute_user_err)
 #endif
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     implicit none
     !> parameters
     integer, parameter :: maximum_iteration=100
@@ -170,7 +170,7 @@ contains
     !> input variables
     procedure(compute_runge_kutta_rhs)                     :: compute_rhs
     procedure(compute_user_error), optional                :: compute_user_err
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
     real(kind=8), intent(in)                               :: t, t_stop
     real(kind=8), dimension(n_variables), intent(in)       :: solution_old, tolerances
@@ -265,7 +265,7 @@ contains
   !>                      the ODE(s) right hand side
   !>   compute_dt:        (procedure) function for computing
   !>                      the new time step
-  !>   fields:            (fields_base) JOREK fields structure
+  !>   fields:            (type_fields) JOREK fields structure
   !>   n_variables:       (integer) number of variables describing the particle
   !>   n_int_parameters:  (integer) number of integer parameters
   !>   n_real_parameters: (integer) number of real parameters
@@ -286,14 +286,14 @@ contains
     t,t_stop,dt,solution_old,int_parameters,real_parameters,   &
     solution,ifail)
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     implicit none
     !> input/output variables
     real(kind=8), intent(inout) :: dt
     !> input variables
     procedure(compute_runge_kutta_rhs)                     :: compute_rhs
     procedure(adapt_time_step)                             :: compute_dt
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
     real(kind=8), intent(in)                               :: t, t_stop
     real(kind=8), dimension(n_variables), intent(in)       :: solution_old
@@ -329,7 +329,7 @@ contains
   !> inputs:
   !>   compute_rhs:       (procedure) subroutine for computing
   !>                      the ODE(s) right hand side
-  !>   fields:            (fields_base) JOREK fields structure
+  !>   fields:            (type_fields) JOREK fields structure
   !>   n_variables:       (integer) number of variables describing the particle
   !>   n_int_parameters:  (integer) number of integer parameters
   !>   n_real_parameters: (integer) number of real parameters
@@ -347,11 +347,11 @@ contains
     n_int_parameters,n_real_parameters,t,dt,solution_old,         &
     int_parameters,real_parameters,solution,ifail)
     !> modules
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     implicit none
     !> input variables
     procedure(compute_runge_kutta_rhs)                     :: compute_rhs
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
     real(kind=8), intent(in)                               :: t, dt
     real(kind=8), dimension(n_variables), intent(in)       :: solution_old
@@ -387,7 +387,7 @@ contains
   !>   solution_old:      (real8)(n_variables) initial solution
   !>   int_parameters:    (integer)(n_int_parameters) integer parameters
   !>   real_parameters:   (real8)(n_real_parameters) real parameters
-  !>   fields:            (fields_base) fields for particle tracking
+  !>   fields:            (type_fields) fields for particle tracking
   !> outputs:
   !>   differentials: (real8)(n_varibales*(n_stages+1)) differentials
   !>   ifail:               (integer) if 0 integration failed
@@ -396,7 +396,7 @@ contains
     t,dt,solution_old,int_parameters,real_parameters,       &
     differentials,ifail)
     !> load module
-    use mod_fields, only: fields_base
+    use mod_fields, only: type_fields
     implicit none
     !> step coefficients
     real(kind=8), dimension(5), parameter :: A_vect=[2.d-1,3.d-1,6.d-1,1.d0,8.75d-1]
@@ -412,7 +412,7 @@ contains
     real(kind=8), intent(in)                               :: t, dt
     real(kind=8), dimension(n_variables), intent(in)       :: solution_old
     real(kind=8), dimension(n_real_parameters), intent(in) :: real_parameters
-    class(fields_base), intent(in)                         :: fields
+    class(type_fields), intent(in)                         :: fields
     !> output variables
     integer,intent(out)                                        :: ifail
     real(kind=8), dimension(n_variables*n_stages), intent(out) :: differentials

@@ -183,7 +183,7 @@ end subroutine allocate_particle_list
 !>   x:            (real8)(nx) random state to accept
 !>   i_elm:        (integer) jorek mesh element number
 !>   st:           (real8)(2) local mesh coordinates
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
 !>   n_real_param: (integer) N# of real input parameters of the pdf
@@ -194,7 +194,7 @@ end subroutine allocate_particle_list
 !>   pdf: (real8) value of the probability density, equal to 1
 function pdf_psi_H_mu(nx,x,st,time,i_elm,fields,x_min,x_max,&
 n_real_param,real_param,n_int_param,int_param) result(pdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,i_elm,n_real_param
@@ -203,7 +203,7 @@ n_real_param,real_param,n_int_param,int_param) result(pdf)
   real*8,intent(in)                           :: time
   real*8,dimension(nx),intent(in)             :: x,x_min,x_max
   real*8,dimension(2),intent(in)              :: st
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   real*8,dimension(:),allocatable,intent(in)  :: real_param
   !> Outputs:
   real*8 :: pdf
@@ -223,7 +223,7 @@ end function pdf_psi_H_mu
 !>   sup_pdf:      (real8) value of the probability density upper bound
 function sup_pdf_psi_H_mu(nx,x_min,x_max,n_real_param,real_param,&
 n_int_param,int_param) result(sup_pdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,n_real_param
@@ -243,7 +243,7 @@ end function sup_pdf_psi_H_mu
 !>   x:            (real8)(nx) random state to accept
 !>   i_elm:        (integer) jorek mesh element number
 !>   st:           (real8)(2) local mesh coordinates
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
 !>   n_real_param: (integer) N# of real input parameters of the pdf
@@ -255,7 +255,7 @@ end function sup_pdf_psi_H_mu
 !>   gdf: (real8) value of the sampler probability density 
 function gdf_psi_H_mu(nx,x,st,time,i_elm,fields,x_min,x_max,&
 n_real_param,real_param,n_int_param,int_param) result(gdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,i_elm,n_real_param
@@ -264,7 +264,7 @@ n_real_param,real_param,n_int_param,int_param) result(gdf)
   real*8,intent(in)                           :: time
   real*8,dimension(nx),intent(in)             :: x,x_min,x_max
   real*8,dimension(2),intent(in)              :: st
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   real*8,dimension(:),allocatable,intent(in)  :: real_param
   !> Outputs:
   real*8 :: gdf
@@ -285,7 +285,7 @@ end function gdf_psi_H_mu
 !>   sup_gdf:      (real8) value of the probability density upper bound
 function sup_gdf_psi_H_mu(nx,x_min,x_max,n_real_param,real_param,&
 n_int_param,int_param) result(sup_gdf)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in)                          :: nx,n_real_param
@@ -306,7 +306,7 @@ end function sup_gdf_psi_H_mu
 !>   x:            (real8)(n_x) uniform random numbers in [0,1)
 !>   st:           (real8)(2) local particle coordinates 
 !>   i_elm:        (integer) jorek element
-!>   fields:       (fields_base) JOREK MHD field class
+!>   fields:       (type_fields) JOREK MHD field class
 !>   x_min:        (real8)(n_x) lower bound uniform sampling, 1) poloidal flux
 !>                 2) poloidal angle, 3) toroidal angle, 4) not used, 5) not used
 !>                 6) gyro angle, 7) charge
@@ -333,7 +333,7 @@ n_real_param,real_param,n_int_param,int_param)
   use phys_module,        only: central_density
   use mod_model_settings, only: var_T,var_Vpar
   use mod_sampling,       only: sample_chi_squared_3
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   implicit none
   !> Inputs:
   integer,intent(in) :: n_x,n_real_param,n_int_param
@@ -341,7 +341,7 @@ n_real_param,real_param,n_int_param,int_param)
   real*8,intent(in)                           :: time
   real*8,dimension(n_x),intent(in)            :: x_min,x_max
   real*8,dimension(:),allocatable,intent(in)  :: real_param
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   !> Inputs-Outputs:
   integer,intent(inout)               :: i_elm
   real*8,dimension(2),intent(inout)   :: st
@@ -394,7 +394,7 @@ end subroutine gdf_psi_H_mu_sampler
 !>   time:         (real8) physical time at wich the particle is sampled
 !>   x_min:        (real8)(nx) lower bound of the phase space interval
 !>   x_max:        (real8)(nx) upper bound of the phase space interval
-!>   fields:       (fields_base) jorek MHD fields
+!>   fields:       (type_fields) jorek MHD fields
 !>   n_real_param: (integer) N# of real input parameters
 !>   real_param:   (real8)(n_real_param) real weight parameters
 !>   n_int_param:  (integer) N# of integer input parameters
@@ -403,10 +403,10 @@ end subroutine gdf_psi_H_mu_sampler
 !>   weight:       (real) particle weight
 function particle_weight_psi_H_mu(nx,x,st,time,i_elm,fields,&
 x_min,x_max,n_real_param,real_param,n_int_param,int_param) result(weight)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: nx,i_elm,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -428,7 +428,7 @@ end function particle_weight_psi_H_mu
 !>   n_x:          (integer) size of the phase space sample: 7
 !>   x:            (real8)(n_x) H mu psi sample
 !>   time:         (real8) time of the simulation
-!>   fields:       (fields_base) JOREK MHD fields
+!>   fields:       (type_fields) JOREK MHD fields
 !>   n_real_param: (integer) number of real parameters: 1
 !>   real_param:   (real8)(n_real_param) real parameters: 1: mass
 !>   n_int_param:  (integer) number of integer parameters: 0
@@ -442,12 +442,12 @@ n_x,x,time,fields,n_real_param,real_param,n_int_param,int_param)
   use mod_particle_types,        only: particle_kinetic_leapfrog
   use mod_boris,                 only: gc_to_kinetic_leapfrog
   use mod_gc_variational,        only: convert_gc_to_gc_vpar
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   implicit none
   !> Inputs-Outputs:
   class(particle_base),intent(inout) :: p_inout
   !> Inputs:
-  class(fields_base),intent(in)               :: fields
+  class(type_fields),intent(in)               :: fields
   integer,intent(in)                          :: n_x,n_real_param,n_int_param
   integer,dimension(:),allocatable,intent(in) :: int_param
   real*8,intent(in)                           :: time
@@ -477,16 +477,16 @@ end subroutine copy_H_mu_psi_sample_to_p_gc
 
 !> extract minimum and maximum poloidal flux for each mesh element
 !> inputs:
-!>   fields: (fields_base) JOREK MHD fields
+!>   fields: (type_fields) JOREK MHD fields
 !> outputs:
 !>   psi_minmax_list_1d: (real8)(2*n_elements) mimimum (1:n_elements)
 !>                       and maximum (n_elements+1:2*n_elements)
 !>                       poloidal flux values for each element
 subroutine extract_element_psi_minmax(fields,psi_minmax_list_1d)
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> inputs:
-  class(fields_base),intent(in)  :: fields
+  class(type_fields),intent(in)  :: fields
   !> outputs:
   real*8,dimension(2*fields%element_list%n_elements),intent(out) :: psi_minmax_list_1d
   !> variables:

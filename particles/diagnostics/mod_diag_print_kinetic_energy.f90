@@ -105,7 +105,7 @@ impure elemental function gc_relativistic_kinetic_energy(particle,mass,fields,ti
   use mod_fields
   class(particle_gc_relativistic), intent(in) :: particle  
   real(kind=8), intent(in)                    :: mass !< in AMU
-  class(fields_base), intent(in)              :: fields
+  class(type_fields), intent(in)              :: fields
   real(kind=8), intent(in)                    :: time 
   real(kind=8)                                :: energy 
   ! internal variables

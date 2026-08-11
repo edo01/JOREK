@@ -104,7 +104,7 @@ subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail
   class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   ! declare internal variables
   real(kind=8) :: psi, U
   real(kind=8),dimension(3) :: B, E
@@ -167,7 +167,7 @@ subroutine volume_preserving_radiation_push_jorek(particle,fields,mass,time,time
   class(particle_kinetic_relativistic), intent(inout) :: particle !< relativistic particle
   ! declare input variables
   real(kind=8),intent(in) :: mass, time, timestep
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   ! declare internal variables
   real(kind=8) :: psi, U
   real(kind=8),dimension(3) :: B, E
@@ -221,7 +221,7 @@ end subroutine volume_preserving_radiation_push_jorek
 !> magnetic and electric fields. Not for production.
 !> inputs:
 !>   particle: (particle_kinetic_relativistic) particle to integrate
-!>   fields:   (fields_base) jorek fields
+!>   fields:   (type_fields) jorek fields
 !>   mass:     (real8) particle mass
 !>   time:     (real8) time integration 
 !>   timestep: (real8) time step
@@ -237,7 +237,7 @@ pure subroutine volume_preserving_push_analytical(particle,fields,&
   !> declare input/output varibales
   type(particle_kinetic_relativistic),intent(inout) :: particle
   !> declare inputs
-  class(fields_base),intent(in) :: fields
+  class(type_fields),intent(in) :: fields
   real(kind=8),intent(in) :: mass,time,timestep
   !> declare variables
   real(kind=8) :: scaling_factor,psi,U
@@ -317,7 +317,7 @@ end subroutine volume_preserving_push_cartesian
 !> This subroutine integrates a relativistic particle trajectory
 !> in JOREK fields using the Runge-Kutta integrator
 !> inputs
-!>  fields:    (fields_base) JOREK fields
+!>  fields:    (type_fields) JOREK fields
 !>  t:         (real8) current time
 !>  dt:        (real8) time step
 !>  mass:      (real8) particle mass
@@ -328,13 +328,13 @@ subroutine runge_kutta_fixed_dt_relativistic_particle_push_jorek( &
   fields,t,dt,mass,particle)
   !> load modules
   use mod_find_rz_nearby
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   use mod_runge_kutta, only: runge_kutta_fixed_dt
   implicit none
   !> declare input/output variables
   type(particle_kinetic_relativistic), intent(inout) :: particle
   !> declare input variables
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real(kind=8), intent(in)       :: t, dt, mass
   !> declare internal variables
   integer                    :: i_elm_new, ifail
@@ -368,7 +368,7 @@ end subroutine runge_kutta_fixed_dt_relativistic_particle_push_jorek
 !> This subroutine integrates a relativistic particle trajectory
 !> in analytical fields using the Runge-Kutta integrator
 !> inputs:
-!>   fields:   (fields_base) analytical fields
+!>   fields:   (type_fields) analytical fields
 !>   t:        (real8) current time
 !>   dt:       (real8) time step
 !>   mass:     (real8) particle mass
@@ -379,13 +379,13 @@ end subroutine runge_kutta_fixed_dt_relativistic_particle_push_jorek
 subroutine runge_kutta_fixed_dt_relativistic_particle_push(fields,t,dt, &
   mass,particle)
   !> load modules
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   use mod_runge_kutta, only: runge_kutta_fixed_dt
   implicit none
   !> declare input/output variables
   type(particle_kinetic_relativistic),intent(inout) :: particle
   !> delcare input variables
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real(kind=8), intent(in)       :: t, dt, mass
   !> declare internal variables
   integer                    :: ifail
@@ -407,7 +407,7 @@ end subroutine runge_kutta_fixed_dt_relativistic_particle_push
 !> This procedure computes derivatives for the full orbit particles
 !> to be used by the Runge-Kutta integrator in JOREK fields
 !> inputs:
-!>   fields:            (fields_base) JOREK fields
+!>   fields:            (type_fields) JOREK fields
 !>   n_variables:       (integer) number of variables describing the particle = 6
 !>   n_int_parameters:  (integer) number of integer parameters = 2
 !>   n_real_parameters: (integer) number of real parameters = 3
@@ -426,10 +426,10 @@ subroutine compute_relativistic_particle_derivatives_jorek(fields, &
   solution,int_parameters,real_parameters,derivatives,ifail)
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   use mod_find_rz_nearby
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> input variables
-  class(fields_base), intent(in)                         :: fields
+  class(type_fields), intent(in)                         :: fields
   integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
   real(kind=8), intent(in)                               :: t
   real(kind=8), dimension(n_variables), intent(in)       :: solution_old, solution
@@ -467,7 +467,7 @@ end subroutine compute_relativistic_particle_derivatives_jorek
 !> This procedure computes derivatives for the Runge-Kutta full orbit integrator
 !> of relativistic particles in analytical fields.
 !> inputs:
-!>   fields:           (fields_base) analytical fields
+!>   fields:           (type_fields) analytical fields
 !>   n_variables:      (integer) number of variables describing the particle = 6
 !>   n_int_parameters: (integer) number of integer parameters = 1
 !>   n_real_paramters: (integer) number of real parameters = 1
@@ -487,10 +487,10 @@ subroutine  compute_relativistic_particle_derivatives(fields,n_variables, &
   int_parameters,real_parameters,derivatives,ifail)
   !> load modules
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
-  use mod_fields, only: fields_base
+  use mod_fields, only: type_fields
   implicit none
   !> declare input variables
-  class(fields_base), intent(in)                         :: fields
+  class(type_fields), intent(in)                         :: fields
   integer, intent(in)                                    :: n_variables, n_int_parameters, n_real_parameters
   real(kind=8), intent(in)                               :: t
   real(kind=8), dimension(n_variables), intent(in)       :: solution, solution_old

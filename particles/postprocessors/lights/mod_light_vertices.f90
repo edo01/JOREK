@@ -121,20 +121,20 @@ interface
   !> compute the JOREK MHD fields at a given location
   !> inputs:
   !>   light_vert:   (light_vertices) light vertices
-  !>   fields:       (fields_base) JOREK MHD fields data structure
+  !>   fields:       (type_fields) JOREK MHD fields data structure
   !>   particle:     (particle_base) JOREK particle base 
   !>   time_id:      (integer) id of the particle simulation time
   !>   mass:         (real8) particle mass
   !> outputs:
   !>   mhd_fields:   (real8)(n_mhd) interpolated JOREK MHD fields
   subroutine comp_mhd_fields(light_vert,fields,particle_in,time_id,mass,mhd_fields)
-    use mod_fields,         only: fields_base
+    use mod_fields,         only: type_fields
     use mod_particle_types, only: particle_base
     IMPORT :: light_vertices
     implicit none
     !> inputs
     class(light_vertices),intent(in)          :: light_vert
-    class(fields_base),intent(in)             :: fields
+    class(type_fields),intent(in)             :: fields
     class(particle_base),intent(in)           :: particle_in
     integer,intent(in)                        :: time_id
     real*8,intent(in)                         :: mass
@@ -158,7 +158,7 @@ interface
   !> Reconstruct a particle given a light property
   !> inputs: 
   !>   light_vert:   (light_vertices) light vertices
-  !>   fields:       (fields_base) JOREK MHD fields data structure
+  !>   fields:       (type_fields) JOREK MHD fields data structure
   !>   light_id:     (integer) index of the light to treat 
   !>   time_id:      (integer) index of the time light to treat
   !>   mass:         (real8) particle mass
@@ -166,13 +166,13 @@ interface
   !>   particle_out: (particle_base) reconstructed particle 
   subroutine comp_particle_from_light(light_vert,&
   fields,light_id,time_id,mass,particle_out)
-  use mod_fields,         only: fields_base
+  use mod_fields,         only: type_fields
   use mod_particle_types, only: particle_base
   IMPORT :: light_vertices
   implicit none
   !> inputs
   class(light_vertices),intent(in) :: light_vert
-  class(fields_base),intent(in)    :: fields
+  class(type_fields),intent(in)    :: fields
   integer,intent(in)               :: light_id,time_id
   real*8,intent(in)                :: mass
   !> outputs:

@@ -305,7 +305,7 @@ end subroutine init_markers
 subroutine check_and_store_crossing(fields, iprt, time, mileage, i_elm, st, x, phiprev, zprev, raxis, zaxis, ndata, &
      nextslot, ncross, rvals, zvals, phivals, psivals, milvals, pncrid)
   implicit none
-  class(fields_base), intent(in) :: fields !< The field structure for evaluating psi
+  class(type_fields), intent(in) :: fields !< The field structure for evaluating psi
   integer*4, intent(in) :: iprt    !< Marker position in the sim%group array
   real*8, intent(in)    :: time    !< Current time
   real*8, intent(in)    :: mileage !< Distance marker has travelled
@@ -473,7 +473,7 @@ end subroutine write_poincare_hdf5
 subroutine get_psi_n0(field, i_elm, s, t, z, psin)
   implicit none
 
-  class(fields_base),  intent(in) :: field !< Field data
+  class(type_fields),  intent(in) :: field !< Field data
   integer, intent(in) :: i_elm             !< Corresponding element
   real*8, intent(in)  :: s, t, z           !< Position in element coordinates and z
   real*8, intent(out) :: psin              !< Normalized psi

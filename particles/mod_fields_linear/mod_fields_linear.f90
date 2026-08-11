@@ -394,7 +394,7 @@ subroutine do_read(this, sim, ev)
   call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
 
   ! Check that the fields and the right interpolator are allocated in sim
-  if (.not. allocated(sim%fields)) allocate(fields_base::sim%fields)
+  if (.not. allocated(sim%fields)) allocate(type_fields::sim%fields)
   if (allocated(sim%fields%interp)) then
     select type (f => sim%fields%interp)
     type is (jorek_fields_interp_linear) ! do nothing

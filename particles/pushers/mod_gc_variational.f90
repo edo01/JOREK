@@ -244,9 +244,9 @@ end subroutine convert_gc_vpar_to_kinetic
 subroutine initialise_gc_Qin(fields, particle_Qin, mass, timestep)
 ! initialising backward in time
 use mod_particle_types
-use mod_fields, only: fields_base
+use mod_fields, only: type_fields
 implicit none
-class(fields_base)      :: fields
+class(type_fields)      :: fields
 type(particle_gc_Qin)  :: particle_Qin
 real*8, intent(in)     :: timestep ! [s]
 real*8, intent(in)     :: mass     ! [amu]
@@ -294,9 +294,9 @@ end
 subroutine push_gc_Qin(fields, particle_Qin, mass, timestep, n_steps)
 use nodes_elements
 use mod_find_rz_nearby
-use mod_fields, only: fields_base
+use mod_fields, only: type_fields
 implicit none
-class(fields_base)      :: fields
+class(type_fields)      :: fields
 type(particle_gc_Qin)  :: particle_Qin
 real*8, intent(in)     :: timestep ! [s]
 real*8, intent(in)     :: mass     ! [amu]
@@ -425,9 +425,9 @@ end
 subroutine push_gc_rk4(fields, particle_gc, mass, timestep, n_steps, n_gyro_phases, gyro_shift)
 use nodes_elements
 use mod_find_rz_nearby
-use mod_fields, only: fields_base
+use mod_fields, only: type_fields
 implicit none
-class(fields_base)     :: fields
+class(type_fields)     :: fields
 type(particle_gc_vpar) :: particle_gc
 real*8, intent(in)     :: timestep      ! [s]
 real*8, intent(in)     :: mass          ! [amu]

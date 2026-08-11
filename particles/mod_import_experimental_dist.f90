@@ -34,7 +34,7 @@ subroutine import_particles(particles,fields,filename, rng_base,mass, n_phi_plan
 
   implicit none
   class(particle_base), dimension(:), intent(inout) :: particles
-  class(fields_base),    intent(in)                 :: fields
+  class(type_fields),    intent(in)                 :: fields
   class(type_rng),       intent(in)                 :: rng_base !< What type of random number generator to use (will be reseeded here)
   character*(*),         intent(in)                 :: filename
   real*8,                intent(in)                 :: mass, fraction_phi_planes
@@ -374,7 +374,7 @@ end function
 
 pure function calculate_B(fields, i_elm,s,t,phi) result(B)
   use phys_module, only: F0
-  class(fields_base),                  intent(in)    :: fields
+  class(type_fields),                  intent(in)    :: fields
   integer,                             intent(in)    :: i_elm
   real*8,                              intent(in)    :: s,t,phi
 

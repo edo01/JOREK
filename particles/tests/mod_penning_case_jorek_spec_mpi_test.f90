@@ -2,7 +2,7 @@ module mod_penning_case_jorek_spec_mpi_test
 use fruit
 use fruit_mpi
 use data_structure
-use mod_fields, only: fields_base
+use mod_fields, only: type_fields
 implicit none
 private
 public :: run_fruit_penning_case_jorek_spec_mpi
@@ -67,7 +67,7 @@ subroutine test_penning_case_jorek_square_10_10()
   use mod_projection_helpers_test_tools, only: default_square_grid
   use mod_penning_case_jorek,            only: jorek_penning_fields
   implicit none
-  type(fields_base) :: fields
+  type(type_fields) :: fields
   character(len=message_len),parameter :: message='penning case jorek square 10 10 test'
   allocate(jorek_fields_interp_linear::fields%interp)
   allocate(fields%node_list,fields%element_list)
@@ -86,7 +86,7 @@ subroutine test_penning_case_jorek_polar_30_32()
   use mod_projection_helpers_test_tools, only: default_polar_grid
   use mod_penning_case_jorek,            only: jorek_penning_fields
   implicit none
-  type(fields_base) :: fields
+  type(type_fields) :: fields
   character(len=message_len),parameter :: message='penning case jorek polar 30 32 test'
   allocate(jorek_fields_interp_linear::fields%interp)
   allocate(fields%node_list,fields%element_list)
@@ -109,7 +109,7 @@ subroutine verify_solution(fields,message_in)
   use mod_penning_case,  only: case_penning_cylindrical
   implicit none
   type(case_penning_cylindrical),parameter    :: ref = case_penning_cylindrical()
-  type(fields_base),intent(in)                :: fields
+  type(type_fields),intent(in)                :: fields
   character(len=*)             :: message_in
   integer                      :: i_elm
   real*8                       :: psi,U,R,Z

@@ -4,7 +4,7 @@ module mod_fields
   use data_structure
   implicit none
   private
-  public fields_base, fields_interpolator
+  public type_fields, fields_interpolator
   public grad_st_to_RZ, EB_from_psiU
 
 !> Base type for a time interpolation strategy.
@@ -25,7 +25,7 @@ module mod_fields
 !> interpolate them in time.
 !> node_list and element_list should be the currently-valid representation of the grid
 !> (values themselves should not be used, only for find_RZ etc)
-  type :: fields_base
+  type :: type_fields
     type(type_node_list),pointer         :: node_list    => null() !< Current node list
     type(type_element_list), pointer     :: element_list => null() !< Current element list
     class(fields_interpolator), allocatable :: interp !< Time interpolation strategy
@@ -45,7 +45,7 @@ module mod_fields
     procedure, public :: calc_analytical_EBpsiU
     procedure, public :: calc_analytical_EBNormBGradBCurlbDbdt
     procedure, public :: set_flag_dpsidt
-  end type fields_base
+  end type type_fields
 
   interface
     !> Interpolate a variable at s, t, phi in i_elm, returning first
@@ -107,7 +107,7 @@ subroutine calc_EBpsiU_reduced(fields, time, i_elm, st, phi, E, B, psi, U)
   use phys_module, only: F0, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
   ! Routine parameters
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8, intent(in)  :: time
   integer, intent(in) :: i_elm !< JOREK element index
   real*8, intent(in)  :: st(2) !< element-local coordinates
@@ -158,7 +158,7 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   use mod_coordinate_transforms, only: transform_derivatives_st_to_RZ
   use mod_chi
   ! Routine parameters
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8, intent(in)  :: time
   integer, intent(in) :: i_elm !< JOREK element index
   real*8, intent(in)  :: st(2) !< element-local coordinates
@@ -274,7 +274,7 @@ pure subroutine calc_F_profile(fields,i_elm,s,t,phi,Fprof)
   use data_structure
   use phys_module, only : mode, F0
   use mod_basisfunctions
-  class(fields_base),         intent(in)     :: fields
+  class(type_fields),         intent(in)     :: fields
   integer,                    intent(in)     :: i_elm
   real*8,                     intent(in)     :: s,t, phi
   real*8,                     intent(out)    :: Fprof
@@ -302,7 +302,7 @@ end subroutine calc_F_profile
 !> Wrapper around the general Te/Ti routine to avoid code duplication.
 !> We use keyword arguments to map inputs correctly and skip Ti-related outputs.
 subroutine calc_NeTe(fields, time, i_elm, st, phi, n_e, T_e, n_e_raw, T_e_raw, grad_T_e)
-  class(fields_base), intent(in)                    :: fields
+  class(type_fields), intent(in)                    :: fields
   integer, intent(in)                               :: i_elm
   real*8, intent(in)                                :: time, st(2), phi
   real*8, intent(out)                               :: n_e 
@@ -331,7 +331,7 @@ subroutine calc_NeTeTi(fields,time,i_elm,st,phi,                   &
                             grad_T_e,grad_T_i)
   use phys_module, only: central_density
   use constants
-  class(fields_base), intent(in)                    :: fields
+  class(type_fields), intent(in)                    :: fields
   integer, intent(in)                               :: i_elm
   real*8, intent(in)                                :: time, st(2), phi
   real*8, intent(out)                               :: n_e                  !< corrected ne [m^-3]
@@ -444,7 +444,7 @@ end subroutine calc_NeTeTi
 subroutine calc_NeTevpar(fields, time, i_elm, st, phi, n_e, T_e, vpar, grad_T_e)
   use phys_module, only: central_density, central_mass
   use constants
-  class(fields_base), intent(in)                    :: fields
+  class(type_fields), intent(in)                    :: fields
   integer, intent(in)                               :: i_elm
   real*8, intent(in)                                :: time, st(2), phi
   real*8, intent(out)                               :: n_e !< electron density [m^-3]
@@ -495,7 +495,7 @@ end subroutine calc_NeTevpar
 subroutine calc_NjTj(fields, time, i_elm, st, phi, m_i_over_m_imp, ne, te, ni, ti)
   use phys_module, only: central_density, imp_cor
   use constants
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   integer, intent(in)            :: i_elm
   real*8, intent(in)             :: time, st(2), phi
   real*8, intent(in)             :: m_i_over_m_imp !< main ion mass / mass of the impurity (used only if impurities present)
@@ -558,7 +558,7 @@ subroutine calc_gyro_average_E(fields, time, particles, n_phases, E_average)
   use constants, only: mu_zero, atomic_mass_unit
   use mod_particle_types
   ! Routine parameters
-  class(fields_base), intent(in)             :: fields
+  class(type_fields), intent(in)             :: fields
   real*8, intent(in)                         :: time
   type(particle_kinetic_leapfrog),intent(in) :: particles(n_phases)
   integer, intent(in)                        :: n_phases     ! the number of points used in the gyro orbit average
@@ -620,7 +620,7 @@ use phys_module, only: F0, mode, central_mass, central_density
 use constants, only: mu_zero, atomic_mass_unit
 use mod_coordinate_transforms, only: transform_derivatives_st_to_RZ
 ! Routine parameters
-class(fields_base), intent(in) :: fields
+class(type_fields), intent(in) :: fields
 real*8, intent(in)  :: time
 integer, intent(in) :: i_elm !< JOREK element index
 real*8, intent(in)  :: st(2) !< element-local coordinates
@@ -680,7 +680,7 @@ end
 pure subroutine calc_RK4_analytic(fields, R, Z, phi, A_out, dA_out, B_out, dB_out, B_norm, dB_norm, bn, dBn, E)
   use phys_module, only: mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   ! Routine parameters
   real*8, intent(in)  :: R,Z, phi      !< position in  [m,m,rad]
   real*8, intent(out) :: E(3)          !< Electric field [V/m]
@@ -781,7 +781,7 @@ subroutine calc_RK4(fields, time, i_elm, st, phi, A, dA, B, dB, Bnorm, dBnorm, b
   use phys_module, only: F0, mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
 ! Routine parameters
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8, intent(in)  :: time
   integer, intent(in) :: i_elm       !< JOREK element index
   real*8, intent(in)  :: st(2)       !< element-local coordinates
@@ -913,7 +913,7 @@ subroutine check_consistency_RK4(fields, i_elm, st)
   use phys_module, only: F0, mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
   use mod_find_rz_nearby
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8  :: time
   integer :: i_elm       !< JOREK element index
   real*8  :: st(2)       !< element-local coordinates
@@ -1054,7 +1054,7 @@ end subroutine check_consistency_RK4
 pure subroutine calc_Qin_analytic(fields, R, Z, phi, A_out, dA_out, B_out, dB_out, B_norm, dB_norm, bn, dBn, E)
   use phys_module, only: mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   ! Routine parameters
   real*8, intent(in)  :: R,Z, phi      !< position in  [m,m,rad]
   real*8, intent(out) :: E(3)          !< Electric field [V/m]
@@ -1175,7 +1175,7 @@ subroutine calc_Qin(fields, time, i_elm, st, phi, A, dA, B, dB, Bnorm, dBnorm, b
   use phys_module, only: F0, mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
   ! Routine parameters
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8, intent(in)  :: time
   integer, intent(in) :: i_elm       !< JOREK element index
   real*8, intent(in)  :: st(2)       !< element-local coordinates
@@ -1320,7 +1320,7 @@ subroutine check_consistency_Qin(fields, i_elm, st)
   use phys_module, only: F0, mode, central_mass, central_density
   use constants, only: mu_zero, atomic_mass_unit
   use mod_find_rz_nearby
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real*8  :: time
   integer :: i_elm       !< JOREK element index
   real*8  :: st(2)       !< element-local coordinates
@@ -1452,7 +1452,7 @@ pure subroutine calc_EBNormBGradBCurlbDbdt(fields,time,i_elm,st,phi,E,b, &
   implicit none
 
   !> declare input variables
-  class(fields_base), intent(in)         :: fields
+  class(type_fields), intent(in)         :: fields
   real(kind=8), intent(in)               :: time
   integer, intent(in)                    :: i_elm
   real(kind=8), dimension(2), intent(in) :: st
@@ -1561,7 +1561,7 @@ pure subroutine calc_analytical_EBpsiU(fields,RZ,E,B,psi,U)
   !> set magnetic axis position
   real(kind=8), dimension(2), parameter :: RZ0=[3.d0,0.d0]
   !> delcare input variables
-  class(fields_base), intent(in) :: fields
+  class(type_fields), intent(in) :: fields
   real(kind=8), dimension(2), intent(in) :: RZ
   !> declare output variables:
   real(kind=8), intent(out) :: psi, U
@@ -1604,7 +1604,7 @@ pure subroutine calc_analytical_EBNormBGradBCurlbDbdt(fields, &
   real(kind=8), parameter               :: U0=0.d0  !< reference electric potential
   real(kind=8), dimension(2), parameter :: RZ0=[3.d0,0.d0]
   !> input variables
-  class(fields_base), intent(in)         :: fields
+  class(type_fields), intent(in)         :: fields
   real(kind=8), dimension(2), intent(in) :: RZ
   !> output variables
   real(kind=8), intent(out)               :: normB
@@ -1637,7 +1637,7 @@ end subroutine calc_analytical_EBNormBGradBCurlbDbdt
 
 ! This subroutine sets a flag to force dpsi/dt to 0
 pure subroutine set_flag_dpsidt(this,flag_dpsidt_to_zero)
-  class(fields_base),intent(inout) :: this !< fields object
+  class(type_fields),intent(inout) :: this !< fields object
   logical,intent(in)               :: flag_dpsidt_to_zero !< flag value
 
   this%interp%flag_zero_dpsidt = flag_dpsidt_to_zero

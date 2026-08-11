@@ -156,7 +156,7 @@ end subroutine gyroaverage_synchrotron_spectral_irradiance
 !> inputs:
 !>   light_vert:  (gyroaverage_synchrotron_light_dist) 
 !>                gyroaverage synchrotron light class
-!>   fields:      (fields_base) JOREK MHD fields
+!>   fields:      (type_fields) JOREK MHD fields
 !>   particle_in: (particle_base) JOREK particle class
 !>   time_id:     (integer) particle simulation time index
 !>   mass:        (real8) particle mass
@@ -170,7 +170,7 @@ end subroutine gyroaverage_synchrotron_spectral_irradiance
 !>                 14-16: R,Z,phi components of the b time derivative
 subroutine compute_gyroaverage_synchrotron_mhd_fields(light_vert,fields,&
 particle_in,time_id,mass,mhd_fields)
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_particle_types,        only: particle_base
   use mod_coordinate_transforms, only: vector_cylindrical_to_cartesian
   !> used only for unit testing but it is required for compilation
@@ -178,7 +178,7 @@ particle_in,time_id,mass,mhd_fields)
   implicit none
   !> Inputs:
   class(gyroaverage_synchrotron_light_dist),intent(in) :: light_vert
-  class(fields_base),intent(in)                        :: fields
+  class(type_fields),intent(in)                        :: fields
   class(particle_base),intent(in)                      :: particle_in
   integer,intent(in)                                   :: time_id
   real*8,intent(in)                                    :: mass
@@ -305,7 +305,7 @@ end subroutine setup_gyroaverage_synchrotron_light_class
 !> inputs:
 !>   light_vert:   (gyroaverage_synchrotron_light_dist) gyroaverage synchrotron lights
 !>                 with empty synchrotron properties
-!>   fields:       (fields_base) JOREK MHD fields data structure
+!>   fields:       (type_fields) JOREK MHD fields data structure
 !>   light_id:     (integer) index of the light to be treated
 !>   time_id:      (integer) time index
 !>   mass:         (real8) particle mass
@@ -315,14 +315,14 @@ subroutine compute_particle_from_gyroaverage_synchrotron_light(&
 light_vert,fields,light_id,time_id,mass,particle_out)
   use constants,                 only: TWOPI,PI,EL_CHG,EPS_ZERO,ATOMIC_MASS_UNIT,SPEED_OF_LIGHT
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
-  use mod_fields,                only: fields_base
+  use mod_fields,                only: type_fields
   use mod_particle_types,        only: particle_base,particle_gc_relativistic
   !> used only for unit testing but it is required for compilation
   use mod_particle_common_test_tools, only: compute_test_E_B_fields
   implicit none
   !> inputs
   class(gyroaverage_synchrotron_light_dist),intent(in) :: light_vert
-  class(fields_base),intent(in)                        :: fields
+  class(type_fields),intent(in)                        :: fields
   integer,intent(in)                                   :: light_id,time_id
   real*8,intent(in)                                    :: mass
   !> outputs
