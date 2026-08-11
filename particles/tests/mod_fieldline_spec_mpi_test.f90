@@ -6,6 +6,7 @@ use data_structure
 use mod_particle_types
 use mod_sobseq_rng
 use mod_initialise_particles
+use mod_fields, only: fields_base
 use mod_fields_linear
 use mod_fieldline_euler
 use mod_neighbours
@@ -21,7 +22,7 @@ real*8,parameter  :: Z_init=2.d-1
 integer :: rank_loc,n_tasks_loc,ifail_loc
 type(type_node_list),target      :: node_list_sol
 type(type_element_list),target   :: element_list_sol
-type(jorek_fields_interp_linear) :: fields_sol
+type(fields_base) :: fields_sol
 contains
 !> Fruit basket -----------------------------------
 subroutine run_fruit_fieldline_spec_mpi(rank,n_tasks,ifail)
@@ -49,6 +50,7 @@ subroutine setup(rank,n_tasks,ifail)
   rank_loc = rank; n_tasks_loc = n_tasks; ifail_loc = ifail;
   call init_node_list(node_list_sol, n_nodes_max, node_list_sol%n_dof, n_var)
 
+  if (.not. allocated(fields_sol%interp)) allocate(jorek_fields_interp_linear::fields_sol%interp)
   fields_sol%node_list    => node_list_sol
   fields_sol%element_list => element_list_sol
   !> compute the MHD equilibrium and define the flux grid

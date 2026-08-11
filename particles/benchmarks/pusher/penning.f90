@@ -17,6 +17,7 @@ use particle_tracer
 use mod_coordinate_transforms ! For solution of penning trap trajectory
 use mod_parameters
 use constants
+use mod_fields, only: fields_base
 use mod_fields_linear
 use mod_export_restart
 use mod_neighbours
@@ -57,11 +58,9 @@ qom     = real(charge) * el_chg / (mass * atomic_mass_unit)
 B0      = omega_b/qom ! In T
 Phi0    = epsilon*omega_e**2/qom/2.d0*t_norm ! In JOREK units: E_SI*t_norm
 
-allocate(jorek_fields_interp_linear::sim%fields)
-select type (p => sim%fields)
-type is (jorek_fields_interp_linear)
-  p%static = .true.
-end select
+allocate(fields_base::sim%fields)
+allocate(jorek_fields_interp_linear::sim%fields%interp)
+sim%fields%interp%static = .true.
 allocate(sim%fields%node_list, sim%fields%element_list)
 call init_node_list(sim%fields%node_list, n_nodes_max, sim%fields%node_list%n_dof, n_var)
 

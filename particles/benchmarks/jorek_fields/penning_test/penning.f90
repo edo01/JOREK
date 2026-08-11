@@ -17,6 +17,7 @@ use particle_tracer
 use mod_coordinate_transforms ! For solution of penning trap trajectory
 use mod_parameters
 use constants
+use mod_fields, only: fields_base
 use mod_fields_linear
 use mod_export_restart
 use mod_neighbours
@@ -24,7 +25,7 @@ use mod_find_rz_nearby
 
 implicit none
 
-type(jorek_fields_interp_linear) :: fields
+type(fields_base) :: fields
 
 ! Define our particle list
 type(particle_kinetic_leapfrog) :: particle
@@ -69,7 +70,8 @@ qom     = real(charge) * el_chg / (mass * atomic_mass_unit)
 B0      = omega_b/qom ! In T
 Phi0    = epsilon*omega_e**2/qom/2.d0*t_norm ! In JOREK units: E_SI*t_norm
 
-fields%static = .true.
+allocate(jorek_fields_interp_linear::fields%interp)
+fields%interp%static = .true.
 rst_hdf5 = 1
 
 ! Only 1 toroidal mode (n=0)

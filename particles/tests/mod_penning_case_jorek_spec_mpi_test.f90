@@ -2,6 +2,7 @@ module mod_penning_case_jorek_spec_mpi_test
 use fruit
 use fruit_mpi
 use data_structure
+use mod_fields, only: fields_base
 implicit none
 private
 public :: run_fruit_penning_case_jorek_spec_mpi
@@ -66,8 +67,9 @@ subroutine test_penning_case_jorek_square_10_10()
   use mod_projection_helpers_test_tools, only: default_square_grid
   use mod_penning_case_jorek,            only: jorek_penning_fields
   implicit none
-  type(jorek_fields_interp_linear) :: fields 
+  type(fields_base) :: fields
   character(len=message_len),parameter :: message='penning case jorek square 10 10 test'
+  allocate(jorek_fields_interp_linear::fields%interp)
   allocate(fields%node_list,fields%element_list)
   call init_node_list(fields%node_list, n_nodes_max, fields%node_list%n_dof, n_var)
   call default_square_grid(rank_loc,n_tasks_loc,nx,ny,fields%node_list,&
@@ -84,8 +86,9 @@ subroutine test_penning_case_jorek_polar_30_32()
   use mod_projection_helpers_test_tools, only: default_polar_grid
   use mod_penning_case_jorek,            only: jorek_penning_fields
   implicit none
-  type(jorek_fields_interp_linear) :: fields
+  type(fields_base) :: fields
   character(len=message_len),parameter :: message='penning case jorek polar 30 32 test'
+  allocate(jorek_fields_interp_linear::fields%interp)
   allocate(fields%node_list,fields%element_list)
   call init_node_list(fields%node_list, n_nodes_max, fields%node_list%n_dof, n_var)
   call default_polar_grid(rank_loc,n_tasks_loc,npol,nrad,&
@@ -103,11 +106,10 @@ end subroutine test_penning_case_jorek_polar_30_32
 subroutine verify_solution(fields,message_in)
   use phys_module,       only: F0
   use mod_interp,        only: interp_RZ
-  use mod_fields_linear, only: jorek_fields_interp_linear
   use mod_penning_case,  only: case_penning_cylindrical
   implicit none
   type(case_penning_cylindrical),parameter    :: ref = case_penning_cylindrical()
-  type(jorek_fields_interp_linear),intent(in) :: fields
+  type(fields_base),intent(in)                :: fields
   character(len=*)             :: message_in
   integer                      :: i_elm
   real*8                       :: psi,U,R,Z

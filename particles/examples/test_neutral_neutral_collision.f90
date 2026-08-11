@@ -22,6 +22,7 @@ program test_NNC
   use nodes_elements
   use mod_boundary,   only: boundary_from_grid
   use equil_info
+  use mod_fields, only: fields_base
   use mod_fields_linear, only: jorek_fields_interp_linear
   use constants
   use mod_sampling, only: boxmueller_transform
@@ -85,7 +86,8 @@ program test_NNC
   call grid_bezier_square(n, n, R_0-length,R_0+length, Z_0-length, Z_0+length, .true., node_list, element_list)
 
   ! setup sim
-  allocate(jorek_fields_interp_linear::sim%fields)
+  allocate(fields_base::sim%fields)
+  allocate(jorek_fields_interp_linear::sim%fields%interp)
   if (.not. associated(sim%fields%node_list))    sim%fields%node_list    => node_list
   if (.not. associated(sim%fields%element_list)) sim%fields%element_list => element_list
   
