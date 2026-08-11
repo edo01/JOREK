@@ -73,7 +73,8 @@ function proj_f_combined_energy(sim, i_group,  particle) result(combined_energy)
   select type (pa => particle)
   type is (particle_kinetic_leapfrog)
     
-    call sim%fields%interp_PRZ(sim%time, particle%i_elm, [5], 1, particle%st(1), particle%st(2), particle%x(3), &
+    call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, &
+      sim%time, particle%i_elm, [5], 1, particle%st(1), particle%st(2), particle%x(3), &
         rho, rho_s, rho_t, rho_phi, rho_time, R, R_s, R_t, Z, Z_s, Z_t)
     combined_energy = rho(1) * MU_ZERO**(3.d0/2.d0) * sqrt(CENTRAL_MASS * CENTRAL_DENSITY * 1.d20 * ATOMIC_MASS_UNIT) &
                   * proj_f_combined_energy_SI(sim, i_group, particle) 
@@ -109,7 +110,8 @@ function proj_f_combined_par_momentum(sim, i_group,  particle) result(combined_p
  
   select type (pa => particle)
   type is (particle_kinetic_leapfrog)
-    call sim%fields%interp_PRZ(sim%time, particle%i_elm, [5], 1, particle%st(1), particle%st(2), particle%x(3), &
+    call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, &
+      sim%time, particle%i_elm, [5], 1, particle%st(1), particle%st(2), particle%x(3), &
         rho, rho_s, rho_t, rho_phi, rho_time, R, R_s, R_t, Z, Z_s, Z_t)
     call sim%fields%calc_EBpsiU(sim%time, particle%i_elm, &
             particle%st, particle%x(3), E, B, psi, U)

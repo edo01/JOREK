@@ -59,7 +59,8 @@ subroutine do_save_E(this, sim, ev)
   ! calculate current J0 to compare jphi - jphi0, since that is what we solve for
   call find_axis(0, sim%fields%node_list, sim%fields%element_list, psi_axis, R_axis, Z_axis, i_elm, s, t, ifail)
   ! T_ref = T_axis
-  call sim%fields%interp_PRZ(sim%time, i_elm, [6], 1, &
+  call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, &
+    sim%time, i_elm, [6], 1, &
     s, t, 0.d0, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
   T_ref = P(1)
 
@@ -70,7 +71,8 @@ subroutine do_save_E(this, sim, ev)
       if (sim%groups(i)%particles(j)%i_elm .gt. 0) then
         ! Interpolate the fields to get psi and U at the current position (and the
         ! changes u_n - u(n-1))
-        call sim%fields%interp_PRZ(sim%time, sim%groups(i)%particles(j)%i_elm, [1,2,3,6], 4, &
+        call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, &
+          sim%time, sim%groups(i)%particles(j)%i_elm, [1,2,3,6], 4, &
           sim%groups(i)%particles(j)%st(1), sim%groups(i)%particles(j)%st(2), &
           sim%groups(i)%particles(j)%x(3), &
           P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)

@@ -30,9 +30,6 @@ module mod_fields
     type(type_element_list), pointer     :: element_list => null() !< Current element list
     class(fields_interpolator), allocatable :: interp !< Time interpolation strategy
   contains
-    procedure, public :: interp_PRZ    => fields_interp_PRZ
-    procedure, public :: interp_PRZ_2  => fields_interp_PRZ_2
-    procedure, public :: interp_PRZP_1 => fields_interp_PRZP_1
     procedure, public :: calc_NeTe
     procedure, public :: calc_NeTevpar
     procedure, public :: calc_NeTeTi
@@ -133,7 +130,8 @@ subroutine calc_EBpsiU_reduced(fields, time, i_elm, st, phi, E, B, psi, U)
 
   ! Interpolate the fields to get psi and U at the current position (and the
   ! changes u_n - u(n-1))
-  call fields%interp_PRZ(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
 
   ! Calculate the derivatives to R and Z
   call grad_st_to_RZ(2, P_s, P_t, R_s, R_t, Z_s, Z_t, P_R, P_Z)
@@ -151,54 +149,6 @@ subroutine calc_EBpsiU_reduced(fields, time, i_elm, st, phi, E, B, psi, U)
   call EB_from_psiU(1.d0/R, F0, t_norm, P_R(1), P_Z(1), P_R(2), P_Z(2), P_phi(2), psi_time, E, B)
 
 end subroutine calc_EBpsiU_reduced
-
-!> Interpolate through the strategy, on the grid the fields carry.
-pure subroutine fields_interp_PRZ(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-  class(fields_base),       intent(in)  :: this
-  real*8,                   intent(in)  :: time !< Time at which to calculate this variable
-  integer,                  intent(in)  :: i_elm
-  integer,                  intent(in)  :: n_v, i_v(n_v)
-  real*8,                   intent(in)  :: s, t, phi
-  real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_time(n_v)
-  real*8,                   intent(out) :: R, R_s, R_t, Z, Z_s, Z_t
-  real*8,                   intent(out) :: P_phi(n_v)
-
-  call this%interp%interp_PRZ(this%node_list, this%element_list, time, i_elm, i_v, n_v, &
-    s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
-end subroutine fields_interp_PRZ
-
-!> Interpolate through the strategy, on the grid the fields carry.
-pure subroutine fields_interp_PRZ_2(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, &
-                                    P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime, &
-                                    R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
-  class(fields_base), intent(in)      :: this
-  real(kind=8), intent(in)            :: time, s, t, phi
-  integer, intent(in)                 :: i_elm, n_v
-  integer, dimension(n_v), intent(in) :: i_v
-  real(kind=8), intent(out)                 :: R, R_s, R_t, R_ss, R_st, R_tt
-  real(kind=8), intent(out)                 :: Z, Z_s, Z_t, Z_ss, Z_st, Z_tt
-  real(kind=8), dimension(n_v), intent(out) :: P, P_s, P_t, P_phi, P_time
-  real(kind=8), dimension(n_v), intent(out) :: P_ss, P_st, P_tt, P_sphi, P_tphi
-  real(kind=8), dimension(n_v), intent(out) :: P_stime, P_ttime
-
-  call this%interp%interp_PRZ_2(this%node_list, this%element_list, time, i_elm, i_v, n_v, &
-    s, t, phi, P, P_s, P_t, P_phi, P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime, &
-    R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
-end subroutine fields_interp_PRZ_2
-
-!> Interpolate through the strategy, on the grid the fields carry.
-pure subroutine fields_interp_PRZP_1(this, time, i_elm, i_v, n_v, s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-  class(fields_base),       intent(in)  :: this
-  real*8,                   intent(in)  :: time !< Time at which to calculate this variable
-  integer,                  intent(in)  :: i_elm
-  integer,                  intent(in)  :: n_v, i_v(n_v)
-  real*8,                   intent(in)  :: s, t, phi
-  real*8,                   intent(out) :: P(n_v), P_s(n_v), P_t(n_v), P_phi(n_v), P_time(n_v)
-  real*8,                   intent(out) :: R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi
-
-  call this%interp%interp_PRZP_1(this%node_list, this%element_list, time, i_elm, i_v, n_v, &
-    s, t, phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
-end subroutine fields_interp_PRZP_1
 
 !> Calculates the electric and magnetic fields at a specific position
 !> in the jorek element `i_elm` at `st`.
@@ -247,7 +197,8 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   ! E=\partial_t A
   !
   !Interpolating A^3=psi=1, AR=2, AZ=3, including time derivatives
-  call fields%interp_PRZ(time, i_elm, i_var,3, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time, i_elm, i_var,3, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
 
   R_inv = 1.d0/R
   inv_st_jac = 1.d0/(R_s * Z_t - R_t * Z_s)
@@ -271,10 +222,12 @@ subroutine calc_EBpsiU(fields, time, i_elm, st, phi, E, B, psi, U)
   E=[-AR_t, -AZ_t, -R_inv*A3_t]
 #else
 #if STELLARATOR_MODEL
-  call fields%interp_PRZP_1(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
+  call fields%interp%interp_PRZP_1(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi)
 #else
   R_phi = 0.0; Z_phi = 0.0
-  call fields%interp_PRZ(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
 #endif
   ! Calculate the derivatives to R and Z
 
@@ -418,12 +371,14 @@ subroutine calc_NeTeTi(fields,time,i_elm,st,phi,                   &
 
   ! interpolate fields
 #ifdef WITH_TiTe
-  call fields%interp_PRZ(time,i_elm,[var_rho,var_Ti,var_Te],3,st(1),st(2),phi, &
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time,i_elm,[var_rho,var_Ti,var_Te],3,st(1),st(2),phi, &
                          P,P_s,P_t,P_phi,P_time,                               &
                          R,R_s,R_t,Z,Z_s,Z_t)
   ii_Ti = 2; ii_Te = 3
 #else
-  call fields%interp_PRZ(time,i_elm,[var_rho,var_T],2,st(1),st(2),phi,         &
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time,i_elm,[var_rho,var_T],2,st(1),st(2),phi,         &
                          P,P_s,P_t,P_phi,P_time,                               &
                          R,R_s,R_t,Z,Z_s,Z_t)
   ii_Ti = 2; ii_Te = 2
@@ -505,10 +460,12 @@ subroutine calc_NeTevpar(fields, time, i_elm, st, phi, n_e, T_e, vpar, grad_T_e)
 
 #if (JOREK_MODEL == 400)
   ! electron temperature
-  call fields%interp_PRZ(time,i_elm,[5,8,7],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time,i_elm,[5,8,7],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
 #else
   ! electron temperature + ion temperature (assumed equal)
-  call fields%interp_PRZ(time,i_elm,[5,6,7],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time,i_elm,[5,6,7],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
 #endif
 
   n_e = max(central_density * P(1) * 1d20,1d16)                           ! plasma density [1/m^3], capped against negative
@@ -554,19 +511,23 @@ subroutine calc_NjTj(fields, time, i_elm, st, phi, m_i_over_m_imp, ne, te, ni, t
   ! Interpolate needed quantities depending on case and evaluate temperature(s)
   if(with_TiTe) then
      if(with_impurities) then
-        call fields%interp_PRZ(time,i_elm,[var_rho,var_Te,var_rhoimp,var_Ti],4,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
+        call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+          time,i_elm,[var_rho,var_Te,var_rhoimp,var_Ti],4,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
         Ti = max(P(4)/(K_BOLTZ*MU_ZERO*central_density*1.d20), 1.d0)
      else
-        call fields%interp_PRZ(time,i_elm,[var_rho,var_Te,var_Ti],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
+        call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+          time,i_elm,[var_rho,var_Te,var_Ti],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
         Ti = max(P(3)/(K_BOLTZ*MU_ZERO*central_density*1.d20), 1.d0)
      end if
      Te = max(P(2)/(K_BOLTZ*MU_ZERO*central_density*1.d20), 1.d0)
 
   else
      if(with_impurities) then
-        call fields%interp_PRZ(time,i_elm,[var_rho,var_T,var_rhoimp],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
+        call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+          time,i_elm,[var_rho,var_T,var_rhoimp],3,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
      else
-        call fields%interp_PRZ(time,i_elm,[var_rho,var_T],2,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
+        call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+          time,i_elm,[var_rho,var_T],2,st(1),st(2),phi,P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
      end if
 
      Te = max(P(2)/(2.d0*K_BOLTZ*MU_ZERO*central_density*1.d20), 1.d0)
@@ -623,7 +584,8 @@ subroutine calc_gyro_average_E(fields, time, particles, n_phases, E_average)
 
   do i=1, n_phases
 
-    call fields%interp_PRZ(time, particles(i)%i_elm, i_var, 1, particles(i)%st(1), particles(i)%st(2), particles(i)%x(3), P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+    call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+      time, particles(i)%i_elm, i_var, 1, particles(i)%st(1), particles(i)%st(2), particles(i)%x(3), P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
 
     P_time(1) = 0.d0
 
@@ -681,7 +643,8 @@ t_norm  = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d
 
 ! Interpolate the fields to get psi and U at the current position (and the
 ! changes u_n - u(n-1))
-call fields%interp_PRZ(time, i_elm, i_var, 3, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
+call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+  time, i_elm, i_var, 3, st(1), st(2), phi, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
 
 R_inv = 1.d0/R
 inv_st_jac = 1.d0/jac(R_s,R_t,Z_s,Z_t)
@@ -845,7 +808,8 @@ subroutine calc_RK4(fields, time, i_elm, st, phi, A, dA, B, dB, Bnorm, dBnorm, b
 
   t_norm  = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
 
-  call fields%interp_PRZ_2(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
+  call fields%interp%interp_PRZ_2(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
                        P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime,   &
                        R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
 
@@ -986,7 +950,8 @@ subroutine check_consistency_RK4(fields, i_elm, st)
 
   delta = 1.d-5
 
-  call fields%interp_PRZ_2(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
+  call fields%interp%interp_PRZ_2(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
                          P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime,   &
                          R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
 
@@ -1237,7 +1202,8 @@ subroutine calc_Qin(fields, time, i_elm, st, phi, A, dA, B, dB, Bnorm, dBnorm, b
 
   t_norm  = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) ! 1 jorek time unit in seconds
 
-  call fields%interp_PRZ_2(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
+  call fields%interp%interp_PRZ_2(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
                          P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime,   &
                          R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
 
@@ -1391,7 +1357,8 @@ subroutine check_consistency_Qin(fields, i_elm, st)
 
   delta = 1.d-5
 
-  call fields%interp_PRZ_2(time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
+  call fields%interp%interp_PRZ_2(fields%node_list, fields%element_list, &
+    time, i_elm, i_var, 2, st(1), st(2), phi, P, P_s, P_t, P_phi, &
                           P_time, P_ss, P_st, P_tt, P_sphi, P_tphi, P_stime, P_ttime,   &
                           R, R_s, R_t, R_ss, R_st, R_tt, Z, Z_s, Z_t, Z_ss, Z_st, Z_tt)
 
@@ -1508,7 +1475,8 @@ pure subroutine calc_EBNormBGradBCurlbDbdt(fields,time,i_elm,st,phi,E,b, &
   real(kind=8), dimension(12) :: psi
 
   !> interpolate the stream function
-  call fields%interp_PRZ(time,i_elm,[2],1,st(1),st(2),phi,U(1),U(2),U(3), &
+  call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+    time,i_elm,[2],1,st(1),st(2),phi,U(1),U(2),U(3), &
     U(4),U(5),RZ(1),RZ(2),RZ(3),RZ(7),RZ(8),RZ(9))
 
   !> convert the electric potential into SI units
@@ -1519,7 +1487,8 @@ pure subroutine calc_EBNormBGradBCurlbDbdt(fields,time,i_elm,st,phi,E,b, &
     RZ(2),RZ(3),RZ(8),RZ(9))
 
   !> interpolate the poloidal flux
-  call fields%interp_PRZ_2(time,i_elm,[1],1,st(1),st(2),phi,psi(1),psi(2),&
+  call fields%interp%interp_PRZ_2(fields%node_list, fields%element_list, &
+    time,i_elm,[1],1,st(1),st(2),phi,psi(1),psi(2),&
        psi(3),psi(4),psi(5),psi(6),psi(7),psi(8),psi(9),psi(10),psi(11),&
        psi(12),RZ(1),RZ(2),RZ(3),RZ(4),RZ(5),RZ(6),RZ(7),RZ(8),RZ(9),&
        RZ(10),RZ(11),RZ(12))

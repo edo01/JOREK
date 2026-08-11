@@ -35,7 +35,8 @@ function proj_Lz(sim, group, particle)
 
 #if (defined WITH_Neutrals) && (!defined WITH_Impurities)
   ! Calculate neutral_density if model5XX (model501 has n_imp in 8)
-  call sim%fields%interp_PRZ(sim%time,particle%i_elm,[var_rhon],1,particle%st(1), &
+  call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, &
+    sim%time,particle%i_elm,[var_rhon],1,particle%st(1), &
       particle%st(2),particle%x(3),P,P_s,P_t,P_phi,P_time,R,R_s,R_t,Z,Z_s,Z_t)
   n_n = P(1)
 #endif

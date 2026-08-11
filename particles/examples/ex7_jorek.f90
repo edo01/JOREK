@@ -133,7 +133,7 @@ do while (.not. sim%stop_now)
 !          write(*,*) 'Particle momenta: ', particles(j)%p(1), particles(j)%p(2)
 
 !	  if (modulo(k-1,10000)==0) then	                
-!	    call sim%fields%interp_PRZ(sim%time, 1000, [1], 1, 0.5, 0.5, 0.5, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)	
+!	    call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, sim%time, 1000, [1], 1, 0.5, 0.5, 0.5, P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)	
 !	    write(22,'(7e26.16)') sim%time, P, P_time, R, Z
 !	  end if
 

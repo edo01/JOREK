@@ -70,7 +70,8 @@ real*8, intent(out)                               :: T_e !< electron temperature
 
 real*8, dimension(2) :: P, P_s, P_t, P_phi, P_time
 real*8               :: R, R_s, R_t, Z, Z_s, Z_t
-call fields%interp_PRZ(time,i_elm,&
+call fields%interp%interp_PRZ(fields%node_list, fields%element_list, &
+  time,i_elm,&
 #ifdef WITH_TiTe
       [var_rho,var_Te],& ! electron temperature
 #else

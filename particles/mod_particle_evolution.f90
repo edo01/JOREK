@@ -604,7 +604,8 @@ contains
               coulomb_log = min(20.d0, coulomb_log)
 
               !> Get parallel flow velocity
-              call sim%fields%interp_PRZ(t, particle_tmp%i_elm, [var_Vpar], 1, particle_tmp%st(1), particle_tmp%st(2), &
+              call sim%fields%interp%interp_PRZ(sim%fields%node_list, sim%fields%element_list, &
+                t, particle_tmp%i_elm, [var_Vpar], 1, particle_tmp%st(1), particle_tmp%st(2), &
                   particle_tmp%x(3), P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t)
               
               do l=1,n_coll
