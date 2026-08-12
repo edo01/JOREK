@@ -2,6 +2,9 @@ module mod_find_rz_nearby
   implicit none
   private
   public :: find_rz_nearby
+  !> For callers that reach the kernel directly rather than through the facade
+  !> below -- see particles/pushers/mod_kinetic_relativistic.f90.
+  public :: find_RZ_nearby_phi_search, find_RZ_nearby_report
 
   !> Interface only -- the body is in C++ (mod_find_rz_nearby/find_rz_nearby_shim.cpp).
   interface
@@ -66,9 +69,6 @@ contains
 subroutine find_RZ_nearby(node_list, element_list, R_old, Z_old, s_old, t_old, i_elm_old, &
         R_new, Z_new, s_new, t_new, i_elm_new, ifail, phi)
 use data_structure
-use constants, only: PI
-use phys_module, only: i_plane_rtree
-use mod_parameters, only: n_period, n_plane, n_coord_period
 use, intrinsic :: iso_c_binding, only: c_double, c_int32_t, c_ptr, c_loc
 implicit none
 !> Input parameters
@@ -97,14 +97,7 @@ else
   p = 0.0
 endif
 
-! The angle the global fallback searches at. find_RZ built it from the plane
-! index and ignored p; find_RZP wrapped p into one coordinate period. That is
-! the whole of the difference between the two configurations.
-#if STELLARATOR_MODEL
-phi_search = p - (PI * 2.d0 / n_coord_period) * floor(p / (PI * 2.d0 / n_coord_period))
-#else
-phi_search = 2.d0*pi*float(i_plane_rtree - 1)/float(n_period*n_plane)
-#endif
+phi_search = find_RZ_nearby_phi_search(p)
 
 call jgx_host_find_RZ_nearby(c_loc(element_list%element(1)),          &
                              int(element_list%n_elements, c_int32_t), &
@@ -119,7 +112,35 @@ call jgx_host_find_RZ_nearby(c_loc(element_list%element(1)),          &
 i_elm_new = int(c_i_elm_new)
 ifail     = int(c_ifail)
 
-! The kernel cannot print, so it hands its two diagnostics back instead.
+call find_RZ_nearby_report(not_found, bad_i_from, bad_i_to, R_old, Z_old)
+end subroutine find_RZ_nearby
+
+!> The angle the global fallback searches at. find_RZ built it from the plane
+!> index and ignored p; find_RZP wrapped p into one coordinate period. That is
+!> the whole of the difference between the two configurations.
+pure function find_RZ_nearby_phi_search(p) result(phi_search)
+use constants, only: PI
+use phys_module, only: i_plane_rtree
+use mod_parameters, only: n_period, n_plane, n_coord_period
+implicit none
+real*8, intent(in) :: p !< the toroidal angle the local interpolation runs at
+real*8             :: phi_search
+
+#if STELLARATOR_MODEL
+phi_search = p - (PI * 2.d0 / n_coord_period) * floor(p / (PI * 2.d0 / n_coord_period))
+#else
+phi_search = 2.d0*pi*float(i_plane_rtree - 1)/float(n_period*n_plane)
+#endif
+end function find_RZ_nearby_phi_search
+
+!> The kernel cannot print, so it hands its two diagnostics back and whoever
+!> called it writes them out here.
+subroutine find_RZ_nearby_report(not_found, bad_i_from, bad_i_to, R_old, Z_old)
+implicit none
+integer, intent(in) :: not_found        !< the search ran out and the fallback failed
+integer, intent(in) :: bad_i_from, bad_i_to !< the element pair that disagreed
+real*8,  intent(in) :: R_old, Z_old     !< where the failed search started from
+
 if (bad_i_to /= 0) write(*,"(A,i5,A,i5)") &
   "ERROR IN element_list%element(", bad_i_from, ")%neighbours to ", bad_i_to
 
@@ -130,5 +151,5 @@ if (not_found /= 0) then
     write(*,"(A)") "enough to find the domain boundary element closest to it. Consider using a larger find_RZ_nearby_iter."
   !$omp end critical
 endif
-end subroutine find_RZ_nearby
+end subroutine find_RZ_nearby_report
 end module mod_find_rz_nearby
