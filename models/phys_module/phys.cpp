@@ -35,11 +35,15 @@ const phys_state& phys() {
 extern "C" {
 
 void jgx_c_set_phys(double F0, double central_mass, double central_density,
-                    double tstep) {
+                    double tstep, int find_RZ_nearby_iter,
+                    double find_RZ_nearby_tol) {
   g_phys.F0              = F0;
   g_phys.central_mass    = central_mass;
   g_phys.central_density = central_density;
   g_phys.tstep           = tstep;
+
+  g_phys.find_RZ_nearby_iter = find_RZ_nearby_iter;
+  g_phys.find_RZ_nearby_tol  = find_RZ_nearby_tol;
 
   /* As phys_module's callers spell it, left to right:
    *   t_norm = sqrt(mu_zero * ATOMIC_MASS_UNIT * central_mass * central_density * 1.d20) */

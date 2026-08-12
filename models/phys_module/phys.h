@@ -23,6 +23,11 @@ struct phys_state {
   double central_density = 0;  /* density on axis [10^20 m^-3] */
   double tstep           = 0;  /* fluid time step [JOREK units] */
 
+  /* Namelist inputs rather than per-step values, but they reach ported kernels
+   * the same way: find_RZ_nearby's loop bound and convergence threshold. */
+  int    find_RZ_nearby_iter = 0;  /* max newton iterations */
+  double find_RZ_nearby_tol  = 0;  /* squared element tolerance [element size] */
+
   /* Derived here rather than passed, so the seam carries state and not results.
    * Same expression and same association as phys_module's callers use. */
   double t_norm          = 0;  /* one JOREK time unit [s] */
