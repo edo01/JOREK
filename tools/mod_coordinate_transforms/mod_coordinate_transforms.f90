@@ -135,6 +135,10 @@ contains
   end function cartesian_to_cylindrical_r4
 
   !> convert a position in xyz coordinates to RZPhi coordinates
+  !>
+  !> DUPLICATED IN C++ as coordinate_transforms::cartesian_to_cylindrical, in
+  !> tools/mod_coordinate_transforms/coordinate_transforms.h. Keep the two in
+  !> step.
   pure function cartesian_to_cylindrical_r8(xyz) result(cyl)
     real*8, intent(in)           :: xyz(3) !< The position in xyz coordinates
     real*8                       :: cyl(3) !< The position in RZPhi coordinates
@@ -155,6 +159,10 @@ contains
   end function cylindrical_to_cartesian_real4
 
  !> converts a position in RZPhi coordinates to xyz coordinates
+  !>
+  !> DUPLICATED IN C++ as coordinate_transforms::cylindrical_to_cartesian, in
+  !> tools/mod_coordinate_transforms/coordinate_transforms.h. Keep the two in
+  !> step.
   pure function cylindrical_to_cartesian_real8(cyl) result(xyz)
     real*8, intent(in)           :: cyl(3) !< The vector components in RZPhi coordinates
     real*8                       :: xyz(3) !< The vector components in xyz coordinates
@@ -383,6 +391,11 @@ contains
   end function vector_cartesian_to_cylindrical  
 
   !> convert a vector in (eR,eZ,ephi) basis into (ex,ey,ez)  basis
+  !>
+  !> DUPLICATED IN C++ as
+  !> coordinate_transforms::vector_cylindrical_to_cartesian, in
+  !> tools/mod_coordinate_transforms/coordinate_transforms.h. Keep the two in
+  !> step.
   pure function vector_cylindrical_to_cartesian(phi,a) result(b)
     real*8, intent(in)               :: phi !< The local toroidal angle
     real*8, dimension(3), intent(in) :: a   !< The vector components in (eR,eZ,ephi) basis

@@ -73,6 +73,8 @@ DIRS := diagnostics				\
 	particles/mod_fields_linear		\
 	particles/particle_types		\
 	particles/pushers			\
+	particles/pushers/mod_kinetic_relativistic \
+	particles/pushers/mod_pusher_tools	\
 	particles/examples			\
 	particles/diagnostics			\
 	particles/tests				\
@@ -104,6 +106,7 @@ DIRS := diagnostics				\
 	diagnostics/postproc			\
 	tools					\
 	tools/fruit				\
+	tools/mod_coordinate_transforms		\
 	tools/tests				\
 	non_regression_tests/unit_tests		\
 	datatypes				\

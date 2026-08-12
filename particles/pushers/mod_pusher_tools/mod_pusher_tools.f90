@@ -39,11 +39,14 @@ end subroutine get_orthonormals
 
 !---------------------------------------------------------------------------
 
-!> This function computes the right-handed Cayley transform of a vector vec multiplied 
+!> This function computes the right-handed Cayley transform of a vector vec multiplied
 !> by a scalar alpha. The Cayley transform is defined as:
 !> cayley(alpha*B) = (I-alpha*B)^(-1) * (I+alpha*B)
 !> where B is the vector product skew symmetric matrix of the vector vec
 !> and I is the identity matrix.
+!>
+!> DUPLICATED IN C++ as pusher_tools::cayley_transform, in
+!> particles/pushers/mod_pusher_tools/pusher_tools.h. Keep the two in step.
 pure function cayley_transform(alpha,vec)
   ! defining input variables
   real(kind=8),intent(in) :: alpha !< multiplicative constant
