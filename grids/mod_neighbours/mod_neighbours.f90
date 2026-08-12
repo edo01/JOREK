@@ -3,6 +3,20 @@ module mod_neighbours
   use mod_element_rtree, only: get_vertex_pos_in_rtree_plane
   implicit none
   private
+
+  !> Interface only -- the body is in C++ (grids/mod_neighbours/neighbours_shim.cpp).
+  interface
+    subroutine jgx_host_coord_in_neighbour(el_base, n_elements, i_from0, i_to, st, bad_i_to) &
+        bind(C, name="jgx_host_coord_in_neighbour")
+      use, intrinsic :: iso_c_binding, only: c_double, c_int32_t, c_ptr
+      implicit none
+      type(c_ptr),        value, intent(in)  :: el_base
+      integer(c_int32_t), value, intent(in)  :: n_elements, i_from0
+      integer(c_int32_t),        intent(out) :: i_to, bad_i_to
+      real(c_double),          intent(inout) :: st(2)
+    end subroutine
+  end interface
+
   public :: neighbours, update_neighbours
   public :: coord_in_neighbour
 contains
@@ -71,53 +85,6 @@ pure function node_same_pos(node_list, i1, i2) result(same)
 end function node_same_pos
 
 
-!> Find if two elements (elm1, elm2 which is on side1 of elm1) have the same
-!> orientation. Element node numbering must always be consecutive when going
-!> co or counter-clockwise around the element.
-subroutine neighbours_side_co_counter(element_list,elm1,elm2,side1,side2,neighbours,co)
-  type (type_element_list), intent(in) :: element_list
-  integer, intent(in)               :: elm1, elm2
-  integer, intent(in)               :: side1
-  integer, intent(out)              :: side2
-  logical, intent(out)              :: neighbours
-  logical, intent(out)              :: co !< True if elements are both clockwise or
-!< counter-clockwise (i.e. they have the same direction)
-  integer :: i, n1(2), n2(2)
-
-  co = .false. ! does not mean anything if not neighbours
-  neighbours = .false.
-
-  ! Find the side in elm2 pointing to elm1
-  ! If elm2 has no neighbour == elm1 use the last one that is 0 (i.e. the one on
-  ! the axis itself.)
-  side2 = 0
-  do i=1,n_vertex_max
-    if (element_list%element(elm2)%neighbours(i) .eq. elm1) then
-      side2 = i
-      exit ! loop
-    end if
-  end do
-  if (side2 .gt. 0) then
-    neighbours = .true.
-
-    ! Determine node numbers of the sides
-    ! node numbers are related to sides as node1=mod(side-1,4)+1, node2=mod(side,4)+1
-    n1 = element_list%element(elm1)%vertex(mod([side1-1,side1],4)+1)
-    n2 = element_list%element(elm2)%vertex(mod([side2-1,side2],4)+1)
-    ! Find if match cross or straight (i.e. 1->2/2->1 or 1->1/2->2)
-    ! We do not need to check the node position since there is only one option
-    ! and one of the node numbers must match.
-    if      (n1(1) .eq. n2(2)) then
-      co = .true.
-    else if (n1(2) .eq. n2(1)) then
-      co = .true.
-    else if (n1(1) .eq. n2(1)) then
-      co = .false.
-    else if (n1(2) .eq. n2(2)) then
-      co = .false.
-    end if
-  end if
-end subroutine neighbours_side_co_counter
 
 
 !> Convert s,t coordinates on the boundary of element i_from into s,t coordinates
@@ -137,66 +104,27 @@ end subroutine neighbours_side_co_counter
 !> On the boundary between elements the following is guaranteed:
 !> * One of the local coordinates (s,t) is either 0 or 1 (1: t=0, 2: s=1, 3: t=1, 4: s=0)
 !> * The other coordinates x_i, x_j (elements i and j) are related: |dx_i/dx_j| = 1
+!> Facade only -- the body is in C++ (grids/mod_neighbours/neighbours_shim.cpp), together with
+!> the private neighbours_side_co_counter it used.
 subroutine coord_in_neighbour(node_list,element_list,i_from,i_to,st)
-  type (type_node_list), intent(in)    :: node_list
-  type (type_element_list), intent(in) :: element_list
+  use, intrinsic :: iso_c_binding, only: c_int32_t, c_ptr, c_loc
+  type (type_node_list), intent(in)            :: node_list !< unused, kept for the callers
+  type (type_element_list), target, intent(in) :: element_list
   integer, intent(in)                  :: i_from
   integer, intent(out)                 :: i_to !<  >0 if a neighbour exists on that side, -1 if search
   real*8, intent(inout)                :: st(2)
 
-  integer :: q_from, q_to !< Quadrants
-  logical :: nb, co !< .true. if they have the same orientation (co or counter clockwise)
-  real*8  :: x
+  integer(c_int32_t) :: c_i_to, bad_i_to
 
-  if (st(1) .gt. st(2)) then ! 1 or 2
-    if (1.d0 - st(1) .gt. st(2)) then
-      q_from = 1
-    else
-      q_from = 2
-    end if
-  else
-    if (1.d0 - st(1) .le. st(2)) then
-      q_from = 3
-    else
-      q_from = 4
-    end if
-  end if
+  call jgx_host_coord_in_neighbour(c_loc(element_list%element(1)),          &
+                                   int(element_list%n_elements, c_int32_t), &
+                                   int(i_from - 1, c_int32_t), c_i_to, st, bad_i_to)
 
-  i_to = element_list%element(i_from)%neighbours(q_from)
-  if (i_to .le. 0) return
+  i_to = int(c_i_to)
 
-  ! Check once more that they are neighbours and determine the orientation
-  call neighbours_side_co_counter(element_list,i_from,i_to,q_from,q_to,nb,co)
-  if (.not. nb .or. q_to .eq. 0) then
-    write(*,"(A,i5,A,i5)") "ERROR IN element_list%element(", i_from, ")%neighbours to ", i_to
-    i_to = 0
-    return
-  end if
-
-  ! x is the coordinate along the boundary from vertex i_side to i_side+1
-  select case (q_from)
-  case (1)
-    x = st(1)
-  case (2)
-    x = st(2)
-  case (3)
-    x = 1.d0 - st(1)
-  case (4)
-    x = 1.d0 - st(2)
-  end select
-
-  if (co) x = 1.d0-x ! if the vectors along the boundary are antiparallel
-
-  select case (q_to)
-  case (1)
-    st = [x,0.d0]
-  case (2)
-    st = [1.d0,x]
-  case (3)
-    st = [1.d0-x,1.d0]
-  case (4)
-    st = [0.d0,1.d0-x]
-  end select
+  ! The kernel cannot print, so it hands the offending element back instead.
+  if (bad_i_to /= 0) write(*,"(A,i5,A,i5)") &
+    "ERROR IN element_list%element(", i_from, ")%neighbours to ", bad_i_to
 end subroutine coord_in_neighbour
 
 
