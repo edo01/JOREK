@@ -258,6 +258,87 @@ namespace interp
             }
         }
     } // interp_PRZP_1
+
+    /**
+     * mod_interp::interp_RZP_1 -- the geometry alone: (R,Z) at (s,t,phi) inside
+     * element ie, with their s/t/phi first derivatives. No variables, so no
+     * physics toroidal basis; only the coordinate expansion over n_coord_tor.
+     *
+     * @warning The coordinate basis here is NOT sincosperiod_moivre_ncoord.
+     * HZ_coord agrees (mode_coord(itor) = int(itor/2)*n_coord_period, which is
+     * the n = n_coord_period*i that function uses), but the derivatives differ
+     * in sign: this one is the true d/dphi of HZ_coord, whereas
+     * sincosperiod_moivre_ncoord reuses the sincosperiod_moivre_explicit
+     * formula and comes out negated -- see the @todo on it above. The Fortran
+     * has the same split (interp_RZP_1 builds its series inline, interp_PRZP_1
+     * calls sincosperiod_moivre_ncoord), and this port reproduces it rather
+     * than picking a winner. For n_coord_tor == 1 the loop is empty and the
+     * two agree trivially, which is why nothing has caught it.
+     *
+     * @param el          element set
+     * @param nd          node set
+     * @param ie          element index into el
+     * @param s, t        element-local coordinates
+     * @param phi         toroidal angle
+     * @param[out] R, R_s, R_t, R_phi, Z, Z_s, Z_t, Z_phi  geometry and its derivatives
+     */
+    template<class ES, class NS, class Real = double>
+    JGX_HD inline void interp_RZP_1(const ES& el, const NS& nd,
+                                    const std::size_t ie,
+                                    const double s, const double t, const double phi,
+                                    double& R, double& R_s, double& R_t, double& R_phi,
+                                    double& Z, double& Z_s, double& Z_t, double& Z_phi) {
+        constexpr std::size_t n_vertex_max   = JGX_N_VERTEX_MAX;
+        constexpr std::size_t n_degrees      = JGX_N_DEGREES;
+        constexpr std::size_t n_coord_tor    = JGX_N_COORD_TOR;
+        constexpr int         n_coord_period = JGX_N_COORD_PERIOD;
+
+        const std::size_t he[2] = { n_degrees, n_vertex_max };
+        Real H_[n_degrees*n_vertex_max], H_s_[n_degrees*n_vertex_max], H_t_[n_degrees*n_vertex_max];
+        const jgx::view<Real, 2> H(H_, he), H_s(H_s_, he), H_t(H_t_, he);
+
+        basisfunctions::basisfunctions_2D_1_T(s, t, H, H_s, H_t);
+
+        // The coordinate series, built inline as the Fortran does (see @warning)
+        Real HZ_coord[n_coord_tor], HZ_coord_p[n_coord_tor];
+        HZ_coord[0]   = 1.0;
+        HZ_coord_p[0] = 0.0;
+        for (std::size_t i = 1; i <= (n_coord_tor - 1)/2; ++i) {
+            const Real n     = static_cast<Real>(n_coord_period*i);
+            const Real phase = n*phi;
+            HZ_coord  [2*i - 1] =  cos(phase);
+            HZ_coord_p[2*i - 1] = -n*sin(phase);
+            HZ_coord  [2*i    ] = -sin(phase);
+            HZ_coord_p[2*i    ] = -n*cos(phase);
+        }
+
+        R = 0.0; R_s = 0.0; R_t = 0.0; R_phi = 0.0;
+        Z = 0.0; Z_s = 0.0; Z_t = 0.0; Z_phi = 0.0;
+
+        for (std::size_t kv = 0; kv < n_vertex_max; ++kv) {
+            const std::size_t iv =
+                static_cast<std::size_t>(el.vertex(ie, kv)) - 1;  // 1-based in the mesh
+
+            for (std::size_t kf = 0; kf < n_degrees; ++kf) {
+                const Real sz = el.size(ie, kv, kf);
+                const Real h  = H  (kf, kv);
+                const Real hs = H_s(kf, kv);
+                const Real ht = H_t(kf, kv);
+
+                Real xR = 0.0, xR_phi = 0.0, xZ = 0.0, xZ_phi = 0.0;
+                for (std::size_t kc = 0; kc < n_coord_tor; ++kc) {
+                    const Real cR = nd.x(iv, kc, kf, 0) * sz;
+                    const Real cZ = nd.x(iv, kc, kf, 1) * sz;
+                    xR     += cR * HZ_coord  [kc];
+                    xR_phi += cR * HZ_coord_p[kc];
+                    xZ     += cZ * HZ_coord  [kc];
+                    xZ_phi += cZ * HZ_coord_p[kc];
+                }
+                R += xR * h;  R_s += xR * hs;  R_t += xR * ht;  R_phi += xR_phi * h;
+                Z += xZ * h;  Z_s += xZ * hs;  Z_t += xZ * ht;  Z_phi += xZ_phi * h;
+            }
+        }
+    } // interp_RZP_1
 } // namespace interp
 
 

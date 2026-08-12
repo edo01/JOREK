@@ -95,6 +95,21 @@ interface
   end subroutine
 end interface
 
+!> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
+interface
+  pure subroutine jgx_host_interp_RZP_1(el_base, n_elements, nd_base, n_nodes, &
+                                        i_elm0, s, t, phi,                     &
+                                        R, R_s, R_t, R_p, Z, Z_s, Z_t, Z_p)    &
+      bind(C, name="jgx_host_interp_RZP_1")
+    import :: c_double, c_int32_t, c_ptr
+    implicit none
+    type(c_ptr),        value, intent(in) :: el_base, nd_base
+    integer(c_int32_t), value, intent(in) :: n_elements, n_nodes, i_elm0
+    real(c_double),     value, intent(in) :: s, t, phi
+    real(c_double),           intent(out) :: R, R_s, R_t, R_p, Z, Z_s, Z_t, Z_p
+  end subroutine
+end interface
+
 interface interp
   module procedure interp_2,interp_1,interp_0_single_harmonic
 end interface interp
@@ -1100,53 +1115,20 @@ end subroutine interp_RZP_0
 
 
 !> Calculates the interpolation within one element (i_elm) for a given position (s,t) in local coordinates
+!> Facade only -- the body is in C++ (mod_interp/interp_shim.cpp).
 pure subroutine interp_RZP_1(node_list,element_list,i_elm,s,t,phi,R,R_s,R_t,R_p,Z,Z_s,Z_t,Z_p)
-type (type_node_list),    intent(in)  :: node_list
-type (type_element_list), intent(in)  :: element_list
+type (type_node_list),    target, intent(in)  :: node_list
+type (type_element_list), target, intent(in)  :: element_list
 integer,                  intent(in)  :: i_elm
 real*8,                   intent(in)  :: s,t,phi
 real*8,                   intent(out) :: R, R_s, R_t, R_p, Z, Z_s, Z_t, Z_p
 
-! --- Local variables
-real*8  :: G(4,n_degrees), G_s(4,n_degrees), G_t(4,n_degrees)
-real*8  :: HZ_coord(n_coord_tor), HZ_coord_p(n_coord_tor), HZ_coord_pp(n_coord_tor)
-real*8  :: xx1, xx2, ss
-integer :: kv, iv, kf, i_tor
-
-! Get toroidal and poloidal basis functions in (s, t, phi)
-call basisfunctions(s,t,G,G_s,G_t)
-HZ_coord(1)      = 1.d0
-HZ_coord_p(1)    = 0.d0
-do i_tor=1,(n_coord_tor-1)/2
-  HZ_coord(2*i_tor)        = + cos(mode_coord(2*i_tor)  *phi)
-  HZ_coord_p(2*i_tor)      = - float(mode_coord(2*i_tor))      * sin(mode_coord(2*i_tor)  *phi)
-  HZ_coord(2*i_tor+1)      = - sin(mode_coord(2*i_tor+1)*phi)
-  HZ_coord_p(2*i_tor+1)    = - float(mode_coord(2*i_tor+1))    * cos(mode_coord(2*i_tor+1)*phi)
-enddo
-
-R = 0.d0; R_s = 0.d0; R_t = 0.d0; R_p = 0.d0
-Z = 0.d0; Z_s = 0.d0; Z_t = 0.d0; Z_p = 0.d0
-
-do kv = 1,n_vertex_max  ! 4 vertices
-  iv = element_list%element(i_elm)%vertex(kv)  ! the node number
-  do kf = 1, n_degrees       ! 4 basis functions
-    do i_tor=1, n_coord_tor
-      xx1 = node_list%node(iv)%x(i_tor,kf,1)
-      xx2 = node_list%node(iv)%x(i_tor,kf,2)
-      ss  = element_list%element(i_elm)%size(kv,kf)
-      
-      R    = R    + xx1 * ss * G(kv,kf)    * HZ_coord(i_tor)
-      R_s  = R_s  + xx1 * ss * G_s(kv,kf)  * HZ_coord(i_tor)
-      R_t  = R_t  + xx1 * ss * G_t(kv,kf)  * HZ_coord(i_tor)
-      R_p  = R_p  + xx1 * ss * G(kv,kf)    * HZ_coord_p(i_tor)
-
-      Z    = Z    + xx2 * ss * G(kv,kf)    * HZ_coord(i_tor)
-      Z_s  = Z_s  + xx2 * ss * G_s(kv,kf)  * HZ_coord(i_tor)
-      Z_t  = Z_t  + xx2 * ss * G_t(kv,kf)  * HZ_coord(i_tor)
-      Z_p  = Z_p  + xx2 * ss * G(kv,kf)    * HZ_coord_p(i_tor)
-    end do
-  end do
-end do
+call jgx_host_interp_RZP_1(c_loc(element_list%element(1)),          &
+                           int(element_list%n_elements, c_int32_t), &
+                           c_loc(node_list%node(1)),                &
+                           int(node_list%n_nodes, c_int32_t),       &
+                           int(i_elm - 1, c_int32_t), s, t, phi,    &
+                           R, R_s, R_t, R_p, Z, Z_s, Z_t, Z_p)
 end subroutine interp_RZP_1
 
 !> Calculates the interpolation within one element (i_elm) for a given position (s,t) in local coordinates

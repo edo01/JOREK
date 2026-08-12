@@ -95,4 +95,19 @@ extern "C" {
                               use_deltas != 0, Pv, Psv, Ptv, Ppv,
                               *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);
     }
+
+    /* mod_interp::interp_RZP_1 -- the geometry half alone, no variables. */
+    void jgx_host_interp_RZP_1(void* el_base, const int32_t n_elements,
+                               void* nd_base, const int32_t n_nodes,
+                               const int32_t i_elm0,
+                               const double s, const double t, const double phi,
+                               double* R, double* R_s, double* R_t, double* R_phi,
+                               double* Z, double* Z_s, double* Z_t, double* Z_phi) {
+
+        const auto el = jorek::element_set_from_registry(el_base, static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+
+        interp::interp_RZP_1(el, nd, static_cast<std::size_t>(i_elm0), s, t, phi,
+                             *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);
+    }
 }
