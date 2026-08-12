@@ -377,6 +377,11 @@ contains
     sin(rthetachi(2))*sin(rthetachi(3)),cos(rthetachi(2))/)
   end function spherical_colatitude_to_cartesian_std_real8
 
+  !> convert a vector in (ex,ey,ez) basis into (eR,eZ,ephi) basis
+  !>
+  !> DUPLICATED IN C++ as coordinate_transforms::vector_cartesian_to_cylindrical,
+  !> in tools/mod_coordinate_transforms/coordinate_transforms.h. Keep the two in
+  !> step.
   pure function vector_cartesian_to_cylindrical(phi,a) result(b)
     real*8, intent(in)               :: phi !< The local toroidal angle
     real*8, dimension(3), intent(in) :: a   !< The vector components in (ex,ey,ez) basis

@@ -38,6 +38,18 @@ JGX_HD inline void cylindrical_to_cartesian(const double cyl[3], double xyz[3]) 
     xyz[2] = Z;
 }
 
+/* mod_coordinate_transforms::vector_cartesian_to_cylindrical -- a vector from
+ * the (ex,ey,ez) basis into (eR,eZ,ephi). */
+JGX_HD inline void vector_cartesian_to_cylindrical(const double phi,
+                                                   const double a[3], double b[3]) {
+    const double sin_phi = std::sin(phi), cos_phi = std::cos(phi);
+    const double a1 = a[0], a2 = a[1], a3 = a[2];
+
+    b[0] = a1*cos_phi - a2*sin_phi;
+    b[1] = a3;
+    b[2] = -1.0*(a1*sin_phi + a2*cos_phi);
+}
+
 /* mod_coordinate_transforms::vector_cylindrical_to_cartesian -- a vector from
  * the (eR,eZ,ephi) basis into (ex,ey,ez). */
 JGX_HD inline void vector_cylindrical_to_cartesian(const double phi,
