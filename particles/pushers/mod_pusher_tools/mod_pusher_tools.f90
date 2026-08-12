@@ -9,6 +9,28 @@ private
 public get_orthonormals
 public cayley_transform, approximated_cayley_transform
 public gc_position_to_particle, particle_position_to_gc
+
+!> Interface only -- the body is in C++ (mod_pusher_tools/pusher_tools.h, via
+!> pusher_tools_shim.cpp).
+interface
+  !> This subroutine computes the right-handed Cayley transform of a vector vec
+  !> multiplied by a scalar alpha. The Cayley transform is defined as:
+  !> cayley(alpha*B) = (I-alpha*B)^(-1) * (I+alpha*B)
+  !> where B is the vector product skew symmetric matrix of the vector vec
+  !> and I is the identity matrix.
+  !>
+  !> A subroutine rather than the function it used to be: a bind(C) function
+  !> cannot return an array, so the transform comes back as an argument.
+  pure subroutine cayley_transform(alpha, vec, M) &
+      bind(C, name="jgx_host_pusher_tools_cayley_transform")
+    use, intrinsic :: iso_c_binding, only: c_double
+    implicit none
+    real(c_double), value, intent(in)  :: alpha  !< multiplicative constant
+    real(c_double),        intent(in)  :: vec(3) !< vector to be transformed
+    real(c_double),        intent(out) :: M(3,3) !< Cayley transform of vec
+  end subroutine cayley_transform
+end interface
+
 contains
 
 !---------------------------------------------------------------------------
@@ -39,44 +61,7 @@ end subroutine get_orthonormals
 
 !---------------------------------------------------------------------------
 
-!> This function computes the right-handed Cayley transform of a vector vec multiplied
-!> by a scalar alpha. The Cayley transform is defined as:
-!> cayley(alpha*B) = (I-alpha*B)^(-1) * (I+alpha*B)
-!> where B is the vector product skew symmetric matrix of the vector vec
-!> and I is the identity matrix.
-!>
-!> DUPLICATED IN C++ as pusher_tools::cayley_transform, in
-!> particles/pushers/mod_pusher_tools/pusher_tools.h. Keep the two in step.
-pure function cayley_transform(alpha,vec)
-  ! defining input variables
-  real(kind=8),intent(in) :: alpha !< multiplicative constant
-  real(kind=8),dimension(3),intent(in) :: vec !< vector to be transformed
-  ! defining output variables
-  real(kind=8),dimension(3,3) :: cayley_transform !< Cayley transform of vec
-  ! defining internal variables
-  real(kind=8),dimension(3,3) :: A,B !< (I-alpha*B)^(-1) and (I+alpha*B)
-
-! computing (I+alpha*B)
-  B(1:3,1) = (/1.d0,-alpha*vec(3),alpha*vec(2)/)
-  B(1:3,2) = (/alpha*vec(3),1.d0,-alpha*vec(1)/)
-  B(1:3,3) = (/-alpha*vec(2),alpha*vec(1),1.d0/)
-
-! computing (I-alpha*B)^(-1)
-  A(1:3,1) = (/(1.0 + alpha*alpha*vec(1)*vec(1)),(alpha*(alpha*vec(1)*vec(2) - vec(3))),&
-            (alpha*(alpha*vec(3)*vec(1) + vec(2)))/)
-  A(1:3,2) = (/(alpha*(alpha*vec(2)*vec(1) + vec(3))),(1.0 + alpha*alpha*vec(2)*vec(2)),&
-            (alpha*(alpha*vec(3)*vec(2) - vec(1)))/)
-  A(1:3,3) = (/(alpha*(alpha*vec(3)*vec(1) - vec(2))),(alpha*(alpha*vec(2)*vec(3) + vec(1))),&
-            (1.0 + alpha*alpha*vec(3)*vec(3))/)
-
-! computing the Cayley transform
-  cayley_transform = (matmul(A,B))/(1.d0 + alpha*alpha*(vec(1)*vec(1)+vec(2)*vec(2)+vec(3)*vec(3)))
-
-end function cayley_transform
-
-!---------------------------------------------------------------------------
-
-!> This function computes the approximated Cayley transform a vector vec 
+!> This function computes the approximated Cayley transform a vector vec
 !> multiplied by a constant alpha as reported in R. Zhang et al., Phys. Plasmas 22 (2015) 044501.
 pure function approximated_cayley_transform(alpha,vec)
   ! defining input variables

@@ -106,12 +106,15 @@ pure subroutine volume_preserving_second_half_step_jorek(particle,&
   ! define input variables
   real(kind=8),dimension(3),intent(in) :: B, E
   real(kind=8),intent(in) :: scaling_factor, mass, dt
+  ! internal variable
+  real(kind=8),dimension(3,3) :: cayley !< the rotation applied below
 
   ! compute momentum at t_(i+1/2)
   particle%p = particle%p + scaling_factor*E
   ! rotate momentum with respect to the magnetic field
-  particle%p = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/&
-    (sqrt(1.d0+dot_product(particle%p,particle%p))),B),particle%p)
+  call cayley_transform(SPEED_OF_LIGHT*scaling_factor/&
+    (sqrt(1.d0+dot_product(particle%p,particle%p))),B,cayley)
+  particle%p = matmul(cayley,particle%p)
   ! compute momentum at t_(i+1)
   particle%p = particle%p + scaling_factor*E
   ! update position at t_(i+1)
@@ -380,8 +383,9 @@ pure subroutine volume_preserving_push_cartesian(particle,mass,E,B,dt)
   ! define input variables
   real(kind=8), intent(in) :: mass, dt !< mass and time step
   real(kind=8), dimension(3), intent(in) :: E, B !< electric and magnetic fields
-  ! internal variable
+  ! internal variables
   real(kind=8) :: scaling_factor !< in [s^2*C/(kg*m)]
+  real(kind=8), dimension(3,3) :: cayley !< the rotation applied below
 
   scaling_factor = 5.d-1*dt*particle%q*EL_CHG/(ATOMIC_MASS_UNIT*mass*SPEED_OF_LIGHT)
 
@@ -396,8 +400,9 @@ pure subroutine volume_preserving_push_cartesian(particle,mass,E,B,dt)
   particle%p = particle%p + scaling_factor*E
   
   ! rotate momentum with respect to the magnetic field
-  particle%p = matmul(cayley_transform(SPEED_OF_LIGHT*scaling_factor/&
-    (sqrt(1.d0+dot_product(particle%p,particle%p))),B),particle%p)
+  call cayley_transform(SPEED_OF_LIGHT*scaling_factor/&
+    (sqrt(1.d0+dot_product(particle%p,particle%p))),B,cayley)
+  particle%p = matmul(cayley,particle%p)
 
   ! compute momentum at t_(i+1)
   particle%p = particle%p + scaling_factor*E

@@ -1,9 +1,6 @@
 /* particles/pushers/mod_pusher_tools/pusher_tools.h -- the pusher helpers of
- * mod_pusher_tools.f90, next door.
+ * mod_pusher_tools.f90.
  *
- * DUPLICATED FROM that file's cayley_transform, which is tagged to point back
- * here. Keep the two in step. It keeps its Fortran body because
- * volume_preserving_push_cartesian, which is not ported, still calls it.
  */
 #ifndef JOREK_PUSHER_TOOLS_H
 #define JOREK_PUSHER_TOOLS_H
