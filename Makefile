@@ -60,6 +60,7 @@ DIRS := diagnostics				\
 	communication/tests             	\
 	grids/grid_utils			\
 	grids/grid_utils/find_RZ		\
+	grids/grid_utils/mod_find_rz_nearby	\
 	grids/mod_neighbours			\
 	grids/tests   				\
 	solvers					\
