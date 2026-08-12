@@ -33,6 +33,23 @@ namespace interp
         }
     } // sincosperiod_moivre_explicit
 
+    /** The HZ half of sincosperiod_moivre_explicit, for callers with no use for
+     *  the derivative. */
+    template<class BasisFunctionsView>
+    JGX_HD inline void mode_moivre_explicit(const double phi, BasisFunctionsView HZ_view,
+                                            const int n_tor_in, const int n_period_in) {
+        const int n_mode = (n_tor_in - 1)/2; // number of modes excluding 0
+
+        HZ_view(0) = 1.0;
+
+        for (int i = 1; i <= n_mode; ++i) {
+            const double phase = static_cast<double>(n_period_in*i)*phi;
+            // exp(i*phase) = cos(phase) + i*sin(phase)
+            HZ_view(2*i - 1) = cos(phase);
+            HZ_view(2*i    ) = sin(phase);
+        }
+    } // mode_moivre_explicit
+
     /**
      * @todo: dHZ_coord is not the phi derivative of HZ_coord. The phase carries
      * the -1 factor but the derivative reuses the formula of

@@ -33,6 +33,18 @@ end interface
 
 !> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
 interface
+  pure subroutine mode_moivre_explicit(phi,HZ,n_tor_in,n_period_in) &
+      bind(C, name="jgx_host_mode_moivre_explicit")
+    import :: c_double, c_int
+    implicit none
+    real(c_double), value, intent(in) :: phi
+    integer(c_int), value, intent(in) :: n_tor_in,n_period_in
+    real(c_double), intent(out)       :: HZ(n_tor_in)
+  end subroutine
+end interface
+
+!> Interface only -- the body is in C++ (mod_interp/interp_shim.cpp).
+interface
   pure subroutine jgx_host_sincosperiod_moivre_ncoord(phi,HZ_coord,dHZ_coord, &
                                                       n_coord_tor_in,n_coord_period_in) &
       bind(C, name="jgx_host_sincosperiod_moivre_ncoord")
@@ -111,7 +123,8 @@ interface sincosperiod_moivre
 end interface sincosperiod_moivre
 
 interface mode_moivre
-  module procedure mode_moivre_default, mode_moivre_explicit
+  module procedure mode_moivre_default
+  procedure mode_moivre_explicit
 end interface mode_moivre
 
 interface interp_RZP
@@ -585,37 +598,6 @@ pure subroutine mode_moivre_default(phi,HZ)
 
   call mode_moivre_explicit(phi,HZ,n_tor,n_period)
 end subroutine mode_moivre_default
-
-!> Explicit version: n_tor and n_period are passed in (used by the unit tests)
-pure subroutine mode_moivre_explicit(phi,HZ,n_tor_in,n_period_in)
-  real*8, intent(in)  :: phi
-  integer,intent(in)  :: n_tor_in,n_period_in
-  real*8, intent(out) :: HZ(n_tor_in)
-  real*8     :: phase
-  complex*16 :: H_complex
-  integer    :: i, n_mode
-
-  n_mode = (n_tor_in-1)/2 ! number of modes excluding 0
-
-  HZ(1) = 1.d0
-
-  do i=1, n_mode
-    phase     = real(n_period_in*i,8)*phi
-    H_complex = exp(cmplx(0.d0,1.d0)*phase)
-    HZ(2*i)   = real(H_complex)
-    HZ(2*i+1) = aimag(H_complex)
-  enddo
-
-!  if (n_mode .gt. 0) then
-!    HZ(2) = cos(n_period*phi)
-!    HZ(3) = sin(n_period*phi)  
-!!DIR$ NOVECTOR
-!    do i=2,n_mode
-!      call moivre(HZ(2),HZ(3), HZ(2*i-2),HZ(2*i-1), HZ(2*i),HZ(2*i+1))
-!    end do
-!  end if
-end subroutine mode_moivre_explicit
-
 
 
 !> subroutine calculates the interpolation within one element (i_elm) for a given position
