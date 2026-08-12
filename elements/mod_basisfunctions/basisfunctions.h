@@ -5,12 +5,16 @@
 #include "jgx/macros.h"
 #include "jgx/view.h"
 
+/* The _T suffix names the index order of the views: (degree, vertex), as in the
+ * Fortran basisfunctions_2D_1_T. The non-transposed Fortran entries share these
+ * same bodies -- the shim hands them a layout_right view, which reads a Fortran
+ * H(4,n_degrees) buffer transposed.
+ */
 namespace basisfunctions{
 
     template<class BasisFunctionsZView>
-    JGX_HD inline void basisfunctions_2D_1_T(const double s, const double t, 
-                                            BasisFunctionsZView H_view, BasisFunctionsZView H_s_view, 
-                                            BasisFunctionsZView H_t_view) {
+    JGX_HD inline void basisfunctions_2D_0_T(const double s, const double t,
+                                             BasisFunctionsZView H_view) {
 #if JGX_N_ORDER == 3
         // --- CUBIC
         const double sm  = s - 1.0;
@@ -22,56 +26,24 @@ namespace basisfunctions{
 
         //---------------------------------------------------------- vertex (1)
         H_view  (0,0) =       sm2*(1.0 + 2.0*s)*tm2*(1.0 + 2.0*t);
-        H_s_view(0,0) =  6.0*sm*s            *tm2*(1.0 + 2.0*t);
-        H_t_view(0,0) =  6.0*sm2*(1.0 + 2.0*s)*tm*t;
         H_view  (1,0) =  3.0*sm2*s            *tm2*(1.0 + 2.0*t);
-        H_s_view(1,0) =  3.0*sm*(3.0*s - 1.0) *tm2*(1.0 + 2.0*t);
-        H_t_view(1,0) = 18.0*sm2*s            *tm*t;
         H_view  (2,0) =  3.0*sm2*(1.0 + 2.0*s)*tm2*t;
-        H_s_view(2,0) = 18.0*sm*s            *tm2*t;
-        H_t_view(2,0) =  3.0*sm2*(1.0 + 2.0*s)*tm*(3.0*t - 1.0);
         H_view  (3,0) =  9.0*sm2*s            *tm2*t;
-        H_s_view(3,0) =  9.0*sm*(3.0*s - 1.0) *tm2*t;
-        H_t_view(3,0) =  9.0*sm2*s            *tm*(3.0*t - 1.0);
         //---------------------------------------------------------- vertex (2)
         H_view  (0,1) = -       s2*(2.0*s - 3.0)*tm2*(1.0 + 2.0*t);
-        H_s_view(0,1) = -  6.0*sm*s             *tm2*(1.0 + 2.0*t);
-        H_t_view(0,1) = -  6.0*s2*(2.0*s - 3.0)*tm*t;
         H_view  (1,1) = -  3.0*sm*s2            *tm2*(1.0 + 2.0*t);
-        H_s_view(1,1) = -  3.0*s*(3.0*s - 2.0)  *tm2*(1.0 + 2.0*t);
-        H_t_view(1,1) = - 18.0*sm*s2            *tm*t;
         H_view  (2,1) = -  3.0*s2*(2.0*s - 3.0)*tm2*t;
-        H_s_view(2,1) = - 18.0*sm*s             *tm2*t;
-        H_t_view(2,1) =    3.0*s2*(2.0*s - 3.0)*(1.0 - 3.0*t)*tm;
         H_view  (3,1) = -  9.0*sm*s2            *tm2*t;
-        H_s_view(3,1) = -  9.0*s*(3.0*s - 2.0)  *tm2*t;
-        H_t_view(3,1) =    9.0*sm*s2            *(1.0 - 3.0*t)*tm;
         //---------------------------------------------------------- vertex (3)
         H_view  (0,2) =       s2*(2.0*s - 3.0)*t2*(2.0*t - 3.0);
-        H_s_view(0,2) =  6.0*sm*s             *t2*(2.0*t - 3.0);
-        H_t_view(0,2) =  6.0*s2*(2.0*s - 3.0)*tm*t;
         H_view  (1,2) =  3.0*sm*s2            *t2*(2.0*t - 3.0);
-        H_s_view(1,2) =  3.0*s*(3.0*s - 2.0)  *t2*(2.0*t - 3.0);
-        H_t_view(1,2) = 18.0*sm*s2            *tm*t;
         H_view  (2,2) =  3.0*s2*(2.0*s - 3.0)*tm*t2;
-        H_s_view(2,2) = 18.0*sm*s             *tm*t2;
-        H_t_view(2,2) =  3.0*s2*(2.0*s - 3.0)*t*(3.0*t - 2.0);
         H_view  (3,2) =  9.0*sm*s2            *tm*t2;
-        H_s_view(3,2) =  9.0*s*(3.0*s - 2.0)  *tm*t2;
-        H_t_view(3,2) =  9.0*sm*s2            *t*(3.0*t - 2.0);
         //---------------------------------------------------------- vertex (4)
         H_view  (0,3) = -       sm2*(1.0 + 2.0*s)*t2*(2.0*t - 3.0);
-        H_s_view(0,3) = -  6.0*sm*s             *t2*(2.0*t - 3.0);
-        H_t_view(0,3) = -  6.0*sm2*(1.0 + 2.0*s)*tm*t;
         H_view  (1,3) = -  3.0*sm2*s             *t2*(2.0*t - 3.0);
-        H_s_view(1,3) =    3.0*(1.0 - 3.0*s)*sm  *t2*(2.0*t - 3.0);
-        H_t_view(1,3) = - 18.0*sm2*s             *tm*t;
         H_view  (2,3) = -  3.0*sm2*(1.0 + 2.0*s)*tm*t2;
-        H_s_view(2,3) = - 18.0*sm*s             *tm*t2;
-        H_t_view(2,3) = -  3.0*sm2*(1.0 + 2.0*s)*t*(3.0*t - 2.0);
         H_view  (3,3) = -  9.0*sm2*s             *tm*t2;
-        H_s_view(3,3) =    9.0*(1.0 - 3.0*s)*sm  *tm*t2;
-        H_t_view(3,3) = -  9.0*sm2*s             *t*(3.0*t - 2.0);
 #else
         // --- QUINTIC
         const double u  = 1.0 - s;
@@ -96,7 +68,6 @@ namespace basisfunctions{
         H_view  (6,0) = 200.0 * s2 * t2 * u3 * v3 + 50.0 * s2 * t * u3 * v4;
         H_view  (7,0) = 200.0 * s2 * t2 * u3 * v3 + 50.0 * s * t2 * u4 * v3;
         H_view  (8,0) = 100.0 * s2 * t2 * u3 * v3;
-
         //---------------------------------------------------------- Main values on node 2
         H_view  (0,1) = 10.0 * s5 * t2 * v3 + 5.0 * s5 * t * v4 + 1.0 * s5 * v5 + 50.0 * s4 * t2 * u * v3
                         + 25.0 * s4 * t * u * v4 + 5.0 * s4 * u * v5 + 100.0 * s3 * t2 * u2 * v3
@@ -112,7 +83,6 @@ namespace basisfunctions{
         H_view  (6,1) = 200.0 * s3 * t2 * u2 * v3 + 50.0 * s3 * t * u2 * v4;
         H_view  (7,1) = 50.0 * s4 * t2 * u * v3 + 200.0 * s3 * t2 * u2 * v3;
         H_view  (8,1) = 100.0 * s3 * t2 * u2 * v3;
-
         //---------------------------------------------------------- Main values on node 3
         H_view  (0,2) = 1.0 * s5 * t5 + 5.0 * s5 * t4 * v + 10.0 * s5 * t3 * v2 + 5.0 * s4 * t5 * u
                         + 25.0 * s4 * t4 * u * v + 50.0 * s4 * t3 * u * v2 + 10.0 * s3 * t5 * u2
@@ -128,7 +98,6 @@ namespace basisfunctions{
         H_view  (6,2) = 50.0 * s3 * t4 * u2 * v + 200.0 * s3 * t3 * u2 * v2;
         H_view  (7,2) = 50.0 * s4 * t3 * u * v2 + 200.0 * s3 * t3 * u2 * v2;
         H_view  (8,2) = 100.0 * s3 * t3 * u2 * v2;
-
         //---------------------------------------------------------- Main values on node 4
         H_view  (0,3) = 10.0 * s2 * t5 * u3 + 50.0 * s2 * t4 * u3 * v + 100.0 * s2 * t3 * u3 * v2
                         + 5.0 * s * t5 * u4 + 25.0 * s * t4 * u4 * v + 50.0 * s * t3 * u4 * v2 + 1.0 * t5 * u5
@@ -144,7 +113,82 @@ namespace basisfunctions{
         H_view  (6,3) = 50.0 * s2 * t4 * u3 * v + 200.0 * s2 * t3 * u3 * v2;
         H_view  (7,3) = 200.0 * s2 * t3 * u3 * v2 + 50.0 * s * t3 * u4 * v2;
         H_view  (8,3) = 100.0 * s2 * t3 * u3 * v2;
+        //---------------------------------------------------------- Derivatives _t on node 1
+        //---------------------------------------------------------- Derivatives _t on node 2
+        //---------------------------------------------------------- Derivatives _t on node 3
+        //---------------------------------------------------------- Derivatives _t on node 4
+        //---------------------------------------------------------- Derivatives _s on node 1
+        //---------------------------------------------------------- Derivatives _s on node 2
+        //---------------------------------------------------------- Derivatives _s on node 3
+        //---------------------------------------------------------- Derivatives _s on node 4
+#endif
 
+    } // basisfunctions_2D_0_T
+
+    template<class BasisFunctionsZView>
+    JGX_HD inline void basisfunctions_2D_1_T(const double s, const double t, 
+                                            BasisFunctionsZView H_view, BasisFunctionsZView H_s_view, 
+                                            BasisFunctionsZView H_t_view) {
+        basisfunctions_2D_0_T(s, t, H_view);
+
+#if JGX_N_ORDER == 3
+        // --- CUBIC
+        const double sm  = s - 1.0;
+        const double tm  = t - 1.0;
+        const double sm2 = sm*sm;
+        const double tm2 = tm*tm;
+        const double s2  = s*s;
+        const double t2  = t*t;
+
+        //---------------------------------------------------------- vertex (1)
+        H_s_view(0,0) =  6.0*sm*s            *tm2*(1.0 + 2.0*t);
+        H_t_view(0,0) =  6.0*sm2*(1.0 + 2.0*s)*tm*t;
+        H_s_view(1,0) =  3.0*sm*(3.0*s - 1.0) *tm2*(1.0 + 2.0*t);
+        H_t_view(1,0) = 18.0*sm2*s            *tm*t;
+        H_s_view(2,0) = 18.0*sm*s            *tm2*t;
+        H_t_view(2,0) =  3.0*sm2*(1.0 + 2.0*s)*tm*(3.0*t - 1.0);
+        H_s_view(3,0) =  9.0*sm*(3.0*s - 1.0) *tm2*t;
+        H_t_view(3,0) =  9.0*sm2*s            *tm*(3.0*t - 1.0);
+        //---------------------------------------------------------- vertex (2)
+        H_s_view(0,1) = -  6.0*sm*s             *tm2*(1.0 + 2.0*t);
+        H_t_view(0,1) = -  6.0*s2*(2.0*s - 3.0)*tm*t;
+        H_s_view(1,1) = -  3.0*s*(3.0*s - 2.0)  *tm2*(1.0 + 2.0*t);
+        H_t_view(1,1) = - 18.0*sm*s2            *tm*t;
+        H_s_view(2,1) = - 18.0*sm*s             *tm2*t;
+        H_t_view(2,1) =    3.0*s2*(2.0*s - 3.0)*(1.0 - 3.0*t)*tm;
+        H_s_view(3,1) = -  9.0*s*(3.0*s - 2.0)  *tm2*t;
+        H_t_view(3,1) =    9.0*sm*s2            *(1.0 - 3.0*t)*tm;
+        //---------------------------------------------------------- vertex (3)
+        H_s_view(0,2) =  6.0*sm*s             *t2*(2.0*t - 3.0);
+        H_t_view(0,2) =  6.0*s2*(2.0*s - 3.0)*tm*t;
+        H_s_view(1,2) =  3.0*s*(3.0*s - 2.0)  *t2*(2.0*t - 3.0);
+        H_t_view(1,2) = 18.0*sm*s2            *tm*t;
+        H_s_view(2,2) = 18.0*sm*s             *tm*t2;
+        H_t_view(2,2) =  3.0*s2*(2.0*s - 3.0)*t*(3.0*t - 2.0);
+        H_s_view(3,2) =  9.0*s*(3.0*s - 2.0)  *tm*t2;
+        H_t_view(3,2) =  9.0*sm*s2            *t*(3.0*t - 2.0);
+        //---------------------------------------------------------- vertex (4)
+        H_s_view(0,3) = -  6.0*sm*s             *t2*(2.0*t - 3.0);
+        H_t_view(0,3) = -  6.0*sm2*(1.0 + 2.0*s)*tm*t;
+        H_s_view(1,3) =    3.0*(1.0 - 3.0*s)*sm  *t2*(2.0*t - 3.0);
+        H_t_view(1,3) = - 18.0*sm2*s             *tm*t;
+        H_s_view(2,3) = - 18.0*sm*s             *tm*t2;
+        H_t_view(2,3) = -  3.0*sm2*(1.0 + 2.0*s)*t*(3.0*t - 2.0);
+        H_s_view(3,3) =    9.0*(1.0 - 3.0*s)*sm  *tm*t2;
+        H_t_view(3,3) = -  9.0*sm2*s             *t*(3.0*t - 2.0);
+#else
+        // --- QUINTIC
+        const double u  = 1.0 - s;
+        const double v  = 1.0 - t;
+        const double s2 = s*s,  s3 = s2*s, s4 = s3*s, s5 = s4*s;
+        const double t2 = t*t,  t3 = t2*t, t4 = t3*t, t5 = t4*t;
+        const double u2 = u*u,  u3 = u2*u, u4 = u3*u, u5 = u4*u;
+        const double v2 = v*v,  v3 = v2*v, v4 = v3*v, v5 = v4*v;
+
+        //---------------------------------------------------------- Main values on node 1
+        //---------------------------------------------------------- Main values on node 2
+        //---------------------------------------------------------- Main values on node 3
+        //---------------------------------------------------------- Main values on node 4
         //---------------------------------------------------------- Derivatives _t on node 1
         H_t_view(0,0) = -300.0 * s2 * t2 * u3 * v2 - 150.0 * s * t2 * u4 * v2 - 30.0 * t2 * u5 * v2;
         H_t_view(1,0) = -600.0 * s2 * t2 * u3 * v2 - 150.0 * s * t2 * u4 * v2;
@@ -160,7 +204,6 @@ namespace basisfunctions{
         H_t_view(7,0) = -600.0 * s2 * t2 * u3 * v2 + 400.0 * s2 * t * u3 * v3 - 150.0 * s * t2 * u4 * v2
                         + 100.0 * s * t * u4 * v3;
         H_t_view(8,0) = -300.0 * s2 * t2 * u3 * v2 + 200.0 * s2 * t * u3 * v3;
-
         //---------------------------------------------------------- Derivatives _t on node 2
         H_t_view(0,1) = -30.0 * s5 * t2 * v2 - 150.0 * s4 * t2 * u * v2 - 300.0 * s3 * t2 * u2 * v2;
         H_t_view(1,1) = -150.0 * s4 * t2 * u * v2 - 600.0 * s3 * t2 * u2 * v2;
@@ -176,7 +219,6 @@ namespace basisfunctions{
         H_t_view(7,1) = -150.0 * s4 * t2 * u * v2 + 100.0 * s4 * t * u * v3 - 600.0 * s3 * t2 * u2 * v2
                         + 400.0 * s3 * t * u2 * v3;
         H_t_view(8,1) = -300.0 * s3 * t2 * u2 * v2 + 200.0 * s3 * t * u2 * v3;
-
         //---------------------------------------------------------- Derivatives _t on node 3
         H_t_view(0,2) = 20.0 * s5 * t3 * v + 10.0 * s5 * t3 * (-2.0*v) + 30.0 * s5 * t2 * v2
                         + 100.0 * s4 * t3 * u * v + 50.0 * s4 * t3 * u * (-2.0*v) + 150.0 * s4 * t2 * u * v2
@@ -198,7 +240,6 @@ namespace basisfunctions{
         H_t_view(7,2) = 50.0 * s4 * t3 * u * (-2.0*v) + 150.0 * s4 * t2 * u * v2 + 200.0 * s3 * t3 * u2 * (-2.0*v)
                         + 600.0 * s3 * t2 * u2 * v2;
         H_t_view(8,2) = 100.0 * s3 * t3 * u2 * (-2.0*v) + 300.0 * s3 * t2 * u2 * v2;
-
         //---------------------------------------------------------- Derivatives _t on node 4
         H_t_view(0,3) = 200.0 * s2 * t3 * u3 * v + 100.0 * s2 * t3 * u3 * (-2.0*v) + 300.0 * s2 * t2 * u3 * v2
                         + 100.0 * s * t3 * u4 * v + 50.0 * s * t3 * u4 * (-2.0*v) + 150.0 * s * t2 * u4 * v2
@@ -220,7 +261,6 @@ namespace basisfunctions{
         H_t_view(7,3) = 200.0 * s2 * t3 * u3 * (-2.0*v) + 600.0 * s2 * t2 * u3 * v2 + 50.0 * s * t3 * u4 * (-2.0*v)
                         + 150.0 * s * t2 * u4 * v2;
         H_t_view(8,3) = 100.0 * s2 * t3 * u3 * (-2.0*v) + 300.0 * s2 * t2 * u3 * v2;
-
         //---------------------------------------------------------- Derivatives _s on node 1
         H_s_view(0,0) = -300.0 * s2 * t2 * u2 * v3 - 150.0 * s2 * t * u2 * v4 - 30.0 * s2 * u2 * v5;
         H_s_view(1,0) = -600.0 * s2 * t2 * u2 * v3 - 300.0 * s2 * t * u2 * v4 - 60.0 * s2 * u2 * v5
@@ -236,7 +276,6 @@ namespace basisfunctions{
                         + 100.0 * s * t * u3 * v4;
         H_s_view(7,0) = -600.0 * s2 * t2 * u2 * v3 + 200.0 * s * t2 * u3 * v3 + 50.0 * t2 * u4 * v3;
         H_s_view(8,0) = -300.0 * s2 * t2 * u2 * v3 + 200.0 * s * t2 * u3 * v3;
-
         //---------------------------------------------------------- Derivatives _s on node 2
         H_s_view(0,1) = 200.0 * s3 * t2 * u * v3 + 100.0 * s3 * t2 * v3 * (-2.0*u) + 100.0 * s3 * t * u * v4
                         + 50.0 * s3 * t * v4 * (-2.0*u) + 20.0 * s3 * u * v5 + 10.0 * s3 * v5 * (-2.0*u)
@@ -258,7 +297,6 @@ namespace basisfunctions{
         H_s_view(7,1) = -50.0 * s4 * t2 * v3 + 200.0 * s3 * t2 * u * v3 + 200.0 * s3 * t2 * v3 * (-2.0*u)
                         + 600.0 * s2 * t2 * u2 * v3;
         H_s_view(8,1) = 100.0 * s3 * t2 * v3 * (-2.0*u) + 300.0 * s2 * t2 * u2 * v3;
-
         //---------------------------------------------------------- Derivatives _s on node 3
         H_s_view(0,2) = 20.0 * s3 * t5 * u + 10.0 * s3 * t5 * (-2.0*u) + 100.0 * s3 * t4 * u * v
                         + 50.0 * s3 * t4 * v * (-2.0*u) + 200.0 * s3 * t3 * u * v2 + 100.0 * s3 * t3 * v2 * (-2.0*u)
@@ -280,7 +318,6 @@ namespace basisfunctions{
         H_s_view(7,2) = -50.0 * s4 * t3 * v2 + 200.0 * s3 * t3 * u * v2 + 200.0 * s3 * t3 * v2 * (-2.0*u)
                         + 600.0 * s2 * t3 * u2 * v2;
         H_s_view(8,2) = 100.0 * s3 * t3 * v2 * (-2.0*u) + 300.0 * s2 * t3 * u2 * v2;
-
         //---------------------------------------------------------- Derivatives _s on node 4
         H_s_view(0,3) = -30.0 * s2 * t5 * u2 - 150.0 * s2 * t4 * u2 * v - 300.0 * s2 * t3 * u2 * v2;
         H_s_view(1,3) = -60.0 * s2 * t5 * u2 - 300.0 * s2 * t4 * u2 * v - 600.0 * s2 * t3 * u2 * v2
