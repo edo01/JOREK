@@ -59,6 +59,7 @@ DIRS := diagnostics				\
 	communication/IMAS			\
 	communication/tests             	\
 	grids/grid_utils			\
+	grids/mod_neighbours			\
 	grids/tests   				\
 	solvers					\
 	models/$(MODEL)				\

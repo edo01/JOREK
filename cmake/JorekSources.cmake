@@ -22,6 +22,7 @@ set(JOREK_SOURCE_DIRS
   elements/mod_basisfunctions
   elements/mod_interp
   grids
+  grids/mod_neighbours
   grids/grid_utils
   jgx/cpp/src
   jgx/fortran/record
