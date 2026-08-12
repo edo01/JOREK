@@ -21,28 +21,6 @@ public :: runge_kutta_fixed_dt_relativistic_particle_push_jorek
 public :: volume_preserving_push_analytical
 public :: compute_relativistic_kinetic_orbital_basis_cartesian
 
-!> Interface only -- the body is in C++ (kinetic_relativistic_shim.cpp next door).
-interface
-  subroutine jgx_host_volume_preserving_push_jorek(part_base,                &
-                                                   el_base, n_elements,      &
-                                                   nd_base, n_nodes,         &
-                                                   interp_base,              &
-                                                   mass, time, timestep,     &
-                                                   phi_search, ifail,        &
-                                                   not_found, nf_R, nf_Z,    &
-                                                   bad_i_from, bad_i_to)     &
-      bind(C, name="jgx_host_volume_preserving_push_jorek")
-    use, intrinsic :: iso_c_binding, only: c_double, c_int32_t, c_ptr
-    implicit none
-    type(c_ptr),        value, intent(in)    :: part_base, el_base, nd_base, interp_base
-    integer(c_int32_t), value, intent(in)    :: n_elements, n_nodes
-    real(c_double),     value, intent(in)    :: mass, time, timestep, phi_search
-    integer(c_int32_t),        intent(inout) :: ifail
-    integer(c_int32_t),        intent(out)   :: not_found, bad_i_from, bad_i_to
-    real(c_double),            intent(out)   :: nf_R, nf_Z
-  end subroutine
-end interface
-
 contains
 
 !---------------------------------------------------------------------------
@@ -128,72 +106,11 @@ end subroutine volume_preserving_second_half_step_jorek
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA)
 !>
-!> Facade only in the configuration the port covers -- the body is in C++
-!> (kinetic_relativistic.h next door). The C++ takes its fields from
-!> fields_set%calc_EBpsiU_reduced, which is the reduced-MHD branch of
-!> calc_EBpsiU and needs the linear interpolation strategy, so full MHD,
-!> stellarator models and any other strategy keep the Fortran body below.
-!>
-!> particle is `type` rather than `class`: c_loc rejects a polymorphic entity,
-!> and nothing extends particle_kinetic_relativistic. Every caller reaches this
-!> from inside a `type is (particle_kinetic_relativistic)` guard, where the
-!> associate name is not polymorphic either.
+!> DUPLICATED IN C++ as kinetic_relativistic::volume_preserving_push_jorek, in
+!> kinetic_relativistic.h -- keep the two in step. The C++ covers only
+!> reduced MHD with jorek_fields_interp_linear, since it takes its fields from
+!> fields_set::calc_EBpsiU_reduced; this body is the general path.
 subroutine volume_preserving_push_jorek(particle,fields,mass,time,timestep,ifail)
-  use mod_fields, only: type_fields
-  use mod_fields_linear, only: jorek_fields_interp_linear
-  use mod_find_rz_nearby, only: find_RZ_nearby_phi_search, find_RZ_nearby_report
-  use, intrinsic :: iso_c_binding, only: c_double, c_int32_t, c_loc
-  ! declare input/output variables
-  integer(kind=4),intent(inout) :: ifail
-  type(particle_kinetic_relativistic), target, intent(inout) :: particle !< relativistic particle
-  ! declare input variables
-  real(kind=8),intent(in) :: mass, time, timestep
-  class(type_fields), target, intent(in) :: fields
-  ! declare internal variables
-  integer(c_int32_t) :: c_ifail, not_found, bad_i_from, bad_i_to
-  real(c_double)     :: nf_R, nf_Z
-
-#if defined(fullmhd) || STELLARATOR_MODEL
-  call volume_preserving_push_jorek_general(particle,fields,mass,time,timestep,ifail)
-#else
-  select type (fi => fields%interp)
-  type is (jorek_fields_interp_linear)
-    c_ifail = int(ifail, c_int32_t)
-
-    !> @todo The strategy cannot change between particles, so this select type
-    !> belongs in evolve_REs together with the loop over them -- which is also
-    !> where the field set stops being rebuilt per call.
-    call jgx_host_volume_preserving_push_jorek(c_loc(particle),                   &
-                                               c_loc(fields%element_list%element(1)), &
-                                               int(fields%element_list%n_elements, c_int32_t), &
-                                               c_loc(fields%node_list%node(1)),   &
-                                               int(fields%node_list%n_nodes, c_int32_t), &
-                                               c_loc(fi),                         &
-                                               mass, time, timestep,              &
-                                               find_RZ_nearby_phi_search(0.d0),   &
-                                               c_ifail, not_found, nf_R, nf_Z,    &
-                                               bad_i_from, bad_i_to)
-
-    ifail = int(c_ifail)
-
-    ! The kernel cannot print; find_RZ_nearby's diagnostics come back instead.
-    call find_RZ_nearby_report(int(not_found), int(bad_i_from), int(bad_i_to), nf_R, nf_Z)
-  class default
-    call volume_preserving_push_jorek_general(particle,fields,mass,time,timestep,ifail)
-  end select
-#endif
-end subroutine volume_preserving_push_jorek
-
-!---------------------------------------------------------------------------
-!> The original Fortran body of volume_preserving_push_jorek, kept for the
-!> configurations the C++ port does not cover: full MHD, stellarator models,
-!> and interpolation strategies other than jorek_fields_interp_linear.
-!>
-!> DUPLICATED IN C++ by kinetic_relativistic.h next door -- keep the two in step.
-!> So are the two half-steps it calls, which stay Fortran here because
-!> volume_preserving_radiation_push_jorek and volume_preserving_push_analytical
-!> still use them.
-subroutine volume_preserving_push_jorek_general(particle,fields,mass,time,timestep,ifail)
   ! load functions
   use mod_coordinate_transforms, only: cartesian_to_cylindrical
   use mod_coordinate_transforms, only: cylindrical_to_cartesian
@@ -249,7 +166,7 @@ subroutine volume_preserving_push_jorek_general(particle,fields,mass,time,timest
     particle%i_elm,ifail)
   ! copy new RZPHI position into particle
   particle%x = half_position(4:6)
-end subroutine volume_preserving_push_jorek_general
+end subroutine volume_preserving_push_jorek
 
 
 !---------------------------------------------------------------------------
