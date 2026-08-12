@@ -24,6 +24,7 @@ set(JOREK_SOURCE_DIRS
   grids
   grids/mod_neighbours
   grids/grid_utils
+  grids/grid_utils/find_RZ
   jgx/cpp/src
   jgx/fortran/record
   jgx/jorek
