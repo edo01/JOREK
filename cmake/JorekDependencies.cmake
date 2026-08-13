@@ -7,7 +7,10 @@ set(JOREK_LIBRARIES "")
 # --- MPI --------------------------------------------------------------------
 find_package(MPI REQUIRED COMPONENTS Fortran C)
 list(APPEND JOREK_LIBRARIES MPI::MPI_Fortran MPI::MPI_C)
-list(APPEND JOREK_LIBRARIES OpenMP::OpenMP_Fortran)
+# CXX as well as Fortran: the ported kernels carry the `!$omp parallel do` of
+# the routine they replace, so the .cpp needs -qopenmp too. The Makefile puts
+# -qopenmp in FLAGS, which its .cpp rule already passes.
+list(APPEND JOREK_LIBRARIES OpenMP::OpenMP_Fortran OpenMP::OpenMP_CXX)
 
 # JOREK compiles differently against MPI-2 and MPI-3. Fortran defines
 # MPI_VERSION as an integer parameter, which cannot be used by the
