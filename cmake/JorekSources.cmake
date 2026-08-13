@@ -39,6 +39,9 @@ set(JOREK_SOURCE_DIRS
   particles
   particles/mod_fields
   particles/mod_fields_linear
+  particles/mod_epf_evolution
+  particles/mod_ncs_ics_evolution
+  particles/mod_runaway_evolution
   particles/particle_types
   particles/diagnostics
   particles/postprocessors
