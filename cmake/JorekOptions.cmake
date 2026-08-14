@@ -41,6 +41,16 @@ option(JOREK_USE_CATALYST "Build the ParaView Catalyst in-situ adaptor" OFF)
 option(JOREK_USE_STD_BESSELK "Use the C++ standard library for modified Bessel functions" OFF)
 option(JOREK_USE_BOOST "Use Boost for modified Bessel functions" OFF)
 
+# --- The JGX device backend -------------------------------------------------
+set(JGX_DEVICE "off" CACHE STRING "JGX device backend: off | hip")
+set_property(CACHE JGX_DEVICE PROPERTY STRINGS off hip)
+
+# A list is allowed, and each
+# entry is in its vendor's own spelling -- sm_90, gfx942 -- so that a preset can
+# name an AMD target without a translation table in between.
+set(JGX_DEVICE_ARCH "" CACHE STRING
+  "Device architecture(s) for the JGX backend, in the vendor's spelling (e.g. sm_90, gfx942)")
+
 # --- What to build ----------------------------------------------------------
 option(JOREK_BUILD_TESTS "Compile the FRUIT unit-test modules into the core library" OFF)
 option(JOREK_BUILD_EXAMPLES "Compile the particle examples and benchmarks" OFF)
@@ -69,6 +79,10 @@ set(JOREK_SCALAPACK_LIBRARIES "" CACHE STRING "Override the detected ScaLAPACK/B
 # --- Consistency checks -----------------------------------------------------
 if(JOREK_USE_QUADTREE AND JOREK_USE_NO_TREE)
   message(FATAL_ERROR "JOREK_USE_QUADTREE and JOREK_USE_NO_TREE are mutually exclusive")
+endif()
+
+if(NOT JGX_DEVICE MATCHES "^(off|hip)$")
+  message(FATAL_ERROR "JGX_DEVICE must be 'off' or 'hip', not '${JGX_DEVICE}'")
 endif()
 
 if(JOREK_USE_STD_BESSELK AND JOREK_USE_BOOST)

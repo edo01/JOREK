@@ -45,6 +45,12 @@ target_include_directories(jorek_common INTERFACE
 target_compile_definitions(jorek_common INTERFACE ${JOREK_DEFINES})
 target_link_libraries(jorek_common INTERFACE ${JOREK_LIBRARIES})
 
+# --- The JGX device backend -------------------------------------------------
+#
+# After jorek_common (which it uses) and before jorek_core (which links it).
+# A no-op unless JGX_DEVICE is set.
+include(JgxDevice)
+
 # --- The code generator (semianalytical models only) ------------------------
 #
 # Built before, and independently of, the core library -- see JorekSources for
@@ -97,6 +103,14 @@ add_library(jorek_core STATIC ${JOREK_LIB_SOURCES})
 add_dependencies(jorek_core jorek_version_header)
 target_link_libraries(jorek_core PUBLIC jorek_common)
 target_include_directories(jorek_core PUBLIC "${CMAKE_Fortran_MODULE_DIRECTORY}")
+
+# The device archive goes after jorek_core on every link line: jorek_core calls
+# into it (jgx_c_*, the phys mirror) and not the other way round. A device
+# translation unit that needed a jorek_core symbol would break that ordering --
+# it must not, being reachable only through the extern "C" seam.
+if(TARGET jgx_device)
+  target_link_libraries(jorek_core PUBLIC jgx_device)
+endif()
 
 if(JOREK_SEMIANALYTICAL)
   add_dependencies(jorek_core jorek_generated_code)

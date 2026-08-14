@@ -109,6 +109,11 @@ foreach(_dir IN LISTS JOREK_SOURCE_DIRS)
   list(APPEND _all_sources ${_found})
 endforeach()
 
+# Device translation units belong to jgx_device (cmake/JgxDevice.cmake), which
+# lists them explicitly and compiles them with the device toolchain. 
+list(FILTER _all_sources EXCLUDE REGEX "\\.hip\\.cpp$")
+
+
 # The Catalyst adaptor is guarded by USE_CATALYST but its .cpp does not compile
 # at all without the Catalyst headers, so drop it rather than rely on #ifdef.
 if(NOT JOREK_USE_CATALYST)

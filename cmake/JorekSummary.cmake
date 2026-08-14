@@ -11,6 +11,13 @@ message(STATUS "  Executable        : jorek_model${JOREK_MODEL_NUMBER}")
 message(STATUS "  Fortran compiler  : ${CMAKE_Fortran_COMPILER} (${CMAKE_Fortran_COMPILER_ID})")
 message(STATUS "  C / C++ compiler  : ${CMAKE_C_COMPILER_ID} / ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "  MPI               : ${MPI_Fortran_VERSION}")
+if(JGX_DEVICE STREQUAL "off")
+  message(STATUS "  JGX device        : off (host only)")
+else()
+  message(STATUS "  JGX device        : ${JGX_DEVICE} (${JGX_DEVICE_ARCH}), "
+                 "compiled as ${CMAKE_CUDA_COMPILER_ID} CUDA ${CMAKE_CUDA_COMPILER_VERSION}")
+endif()
+#@TODO: AMD branch
 message(STATUS "  BLAS/LAPACK       : ${JOREK_BLAS_LAPACK_SUMMARY}")
 if(JOREK_USE_HDF5)
   message(STATUS "  HDF5              : ${JOREK_HDF5_SUMMARY}")

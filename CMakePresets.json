@@ -50,6 +50,17 @@
       }
     },
     {
+      "name": "pitagora-hip",
+      "inherits": "pitagora-intel",
+      "displayName": "Pitagora GPU - Intel oneAPI plus the JGX HIP backend (H100)",
+      "description": "Requires the pitagora-intel modules and, additively, `source hip.env`. The .hip.cpp sources are compiled by nvcc: HIP-on-NVIDIA is header-only over CUDA, so hipcc would only exec nvcc anyway.",
+      "cacheVariables": {
+        "JGX_DEVICE": "hip",
+        "JGX_DEVICE_ARCH": "sm_90",
+        "CMAKE_CUDA_FLAGS": "-Xcompiler=-mcmodel=medium"
+      }
+    },
+    {
       "name": "viper-intel",
       "inherits": "base",
       "displayName": "Viper CPU - Intel oneAPI + MKL + STRUMPACK (AMD Genoa/Zen4)",
