@@ -8,6 +8,9 @@ if(JGX_DEVICE STREQUAL "off")
   return()
 endif()
 
+# Host-visible: "a device backend is present"
+target_compile_definitions(jorek_common INTERFACE JGX_HAS_DEVICE)
+
 # --- Toolchain --------------------------------------------------------------
 find_package(hip CONFIG QUIET)
 if(hip_FOUND)
