@@ -21,7 +21,7 @@ bool              g_valid = false;
 
 namespace jorek {
 
-const phys_state& phys() {
+const phys_state& host_phys() {
   if (!g_valid) {
     std::fprintf(stderr, "phys_module: read before mod_jgx_phys pushed a copy "
                          "(call jgx_set_phys)\n");
@@ -52,6 +52,14 @@ void jgx_c_set_phys(double F0, double central_mass, double central_density,
   g_phys.t_jorek = tstep * g_phys.t_norm;
 
   g_valid = true;
+
+  /* Keep the device mirror in step with the host copy, so that a kernel and the
+   * host path of the same routine cannot read different values. Guarded because
+   * the push lives in a device translation unit -- there is no such symbol to
+   * call when JGX_DEVICE=off. */
+#ifdef JGX_HAS_DEVICE
+  jorek::phys_push_to_device(g_phys);
+#endif
 }
 
 } /* extern "C" */

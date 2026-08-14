@@ -11,9 +11,13 @@
  * runs in. Reading before the first push aborts rather than returning zeros: a
  * zero t_jorek silently disables the time interpolation instead of failing.
  *
+ * On a device build there are two copies of the same POD, one for the host 
+ * address space and for the device, and phys() picks by where it is compiled.
  */
 #ifndef JOREK_PHYS_H
 #define JOREK_PHYS_H
+
+#include "jgx/macros.h"
 
 namespace jorek {
 
@@ -34,9 +38,46 @@ struct phys_state {
   double t_jorek         = 0;  /* tstep * t_norm [s] */
 };
 
-/* The current copy. Aborts if mod_jgx_phys has not pushed one yet. */
-const phys_state& phys();
+/* The host copy. Aborts if mod_jgx_phys has not pushed one yet. */
+const phys_state& host_phys();
+
+#if defined(JGX_DEVICE_CUDA) || defined(JGX_DEVICE_HIP)
+/* The device mirror, defined in phys_device.hip.cpp and written by every
+ * jgx_c_set_phys. Declared here rather than in the backend because phys() below
+ * has to return it, and phys() is what the kernels call. Guarded because there
+ * is no such object in a host-only build. */
+extern JGX_DEVICE_VAR phys_state d_phys;
+#endif
+
+/* The copy for wherever this is compiled: the host one on the host, the mirror
+ * in device code.
+ */
+JGX_HD inline const phys_state& phys() {
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+  return d_phys;
+#else
+  return host_phys();
+#endif
+}
+
+#ifdef JGX_HAS_DEVICE
+/* Mirror the pushed copy onto the device. Called by jgx_c_set_phys after every
+ * push -- six scalars, so unconditionally rather than on a dirty bit.
+ */
+void phys_push_to_device(const phys_state& p);
+
+/* Read the mirror back, for the test. It checks the transfer only: that phys()
+ * resolves to the mirror rather than to host_phys() is a compile error under
+ * -Werror=cross-execution-space-call. */
+void phys_pull_from_device(phys_state& out);
+#endif
 
 } /* namespace jorek */
+
+/* The only writer, called from mod_jgx_phys.f90. Declared here as well as in
+ * that module's interface block so C++ callers. */
+extern "C" void jgx_c_set_phys(double F0, double central_mass,
+                               double central_density, double tstep,
+                               int find_RZ_nearby_iter, double find_RZ_nearby_tol);
 
 #endif /* JOREK_PHYS_H */
