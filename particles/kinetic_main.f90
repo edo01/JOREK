@@ -111,9 +111,9 @@ character(len=100) :: header_line
 ! Start up MPI, jorek
 call sim%initialize()
 
-! Hand type_element / type_node layouts to jgx. Measured from local records, so
-! this has no ordering constraint against grid construction -- it only has to
-! precede the first interpolation.
+! Register data layouts to jgx. Measured from local records, so
+! this has no ordering constraint against grid construction. It cannot be moved
+! to sim%initialize() because of a cyclic dependency.
 call jgx_register_jorek_records()
 
 ! Loading the jorek fields

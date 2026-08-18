@@ -1,7 +1,7 @@
 /* jgx_record_registry.cpp
  *
  * One table per record type, filled once from Fortran at startup and read-only
- * afterwards. The number of record types is bounded by JGX_MAX_RECORD_TYPES in 
+ * afterwards. The number of record types is bounded by JGX_MAX_RECORD_TYPES in
  * jgx_record_api.h. */
 #include "jgx/jgx_record_api.h"
 
@@ -13,7 +13,7 @@ namespace { // functions for internal usage
 jgx_record_desc g_record[JGX_MAX_RECORD_TYPES] = {};
 
 void fail(const char* what, int32_t record_id) {
-  std::fprintf(stderr, "jgx_record: %s (record_id=%d)\n", what, int(record_id));
+  std::fprintf(stderr, "mod_jgx_record: %s (record_id=%d)\n", what, int(record_id));
   std::abort();
 }
 

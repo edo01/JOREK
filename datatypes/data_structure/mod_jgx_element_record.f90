@@ -9,7 +9,7 @@ module mod_jgx_element_record
   use, intrinsic :: iso_c_binding
   use data_structure,     only: type_element
   use mod_jgx_record_ids, only: JGX_REC_ELEMENT
-  use jgx_record
+  use mod_jgx_record
   implicit none
   private
   public :: jgx_register_element_record

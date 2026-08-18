@@ -22,6 +22,9 @@ module mpi_mod
   !> Number of mpi tasks per node. 
   !> Will be determined by calling get_tasks_per_node.
   integer, private :: mpi_tasks_per_node = -1 
+  !> Rank of this task within its node.
+  !> Will be determined by calling get_node_local_rank.
+  integer, private :: mpi_node_local_rank = -1
   
   contains
   
@@ -56,5 +59,31 @@ module mpi_mod
     endif
     get_tasks_per_node = mpi_tasks_per_node
   end function get_tasks_per_node
-  
+
+  !> Returns the rank of this task within its own node, in [0, tasks_per_node).
+  !! Determined at the first call and cached, like get_tasks_per_node above --
+  !! and like it, the first call is collective and must be made by every task.
+  !!
+  !! This is the index an accelerator runtime wants: device ids are numbered per
+  !! node, so binding from the MPI_COMM_WORLD rank would send every task on the
+  !! second node past the end of its device list.
+  integer function get_node_local_rank()
+    integer :: comm, ierr
+    if (mpi_node_local_rank < 0) then
+#if MPI_VERSION >= 3
+      call MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, comm, ierr)
+      call MPI_Comm_rank(comm, mpi_node_local_rank, ierr)
+      call MPI_Comm_free(comm, ierr)
+#else
+      ierr = 1
+#endif
+      if (ierr .ne. 0 .or. mpi_node_local_rank < 0) then
+        ! Same fallback as get_tasks_per_node: assume one task per node. Every
+        ! task then takes device 0, which is what happened before this existed.
+        mpi_node_local_rank = 0
+      endif
+    endif
+    get_node_local_rank = mpi_node_local_rank
+  end function get_node_local_rank
+
 end module mpi_mod

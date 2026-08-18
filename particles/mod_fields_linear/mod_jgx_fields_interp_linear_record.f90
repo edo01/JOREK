@@ -28,7 +28,7 @@ module mod_jgx_fields_interp_linear_record
   use, intrinsic :: iso_c_binding
   use mod_fields_linear, only: jorek_fields_interp_linear
   use mod_jgx_record_ids, only: JGX_REC_FIELDS_INTERP_LINEAR
-  use jgx_record
+  use mod_jgx_record
   implicit none
   private
   public :: jgx_register_fields_interp_linear_record

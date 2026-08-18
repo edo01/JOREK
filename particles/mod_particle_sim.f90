@@ -163,6 +163,8 @@ end subroutine configure_particle_groups
 !> outputs:
 !>   sim: (particle_sim) the particle simulation
 subroutine initialize(sim,skip_jorek2help,my_id,n_mpi,do_jorek_init_in,skip_group_config,num_groups)
+  use mod_jgx_device,    only: jgx_device_init
+  use mpi_mod,           only: get_node_local_rank
   use mod_mpi_tools,     only: init_mpi_threads
   use mod_mpi_tools,     only: get_mpi_wtime
   use mod_parameters,    only: n_tor, n_period
@@ -185,6 +187,8 @@ subroutine initialize(sim,skip_jorek2help,my_id,n_mpi,do_jorek_init_in,skip_grou
   else
     call init_mpi_threads(sim%my_id,sim%n_mpi,ierr,sim%wtime_start)
   endif
+
+  call jgx_device_init(get_node_local_rank())
 
  !> check if the initialisation of JOREK should be performed or not
   do_jorek_init = .true.
@@ -252,6 +256,7 @@ end subroutine
 
 !> Actions to perform when stopping the simulation.
 subroutine finalize(sim)
+  use mod_jgx_device, only: jgx_device_finalize
   use mod_mpi_tools, only: finalize_mpi_threads
   use mod_startup_teardown, only: jorek_finalize => finalize
   class(particle_sim), intent(in) :: sim
@@ -261,6 +266,7 @@ subroutine finalize(sim)
   else
     write(*,"(A,g14.6,A)") "INFO: End of events at ", sim%time, " , exiting"
   end if
+  call jgx_device_finalize()
   call finalize_mpi_threads(ierr)
 end subroutine
 

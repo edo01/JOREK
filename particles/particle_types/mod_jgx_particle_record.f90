@@ -18,7 +18,7 @@ module mod_jgx_particle_record
   use, intrinsic :: iso_c_binding
   use mod_particle_types, only: particle_kinetic_relativistic
   use mod_jgx_record_ids, only: JGX_REC_PARTICLE_KIN_REL
-  use jgx_record
+  use mod_jgx_record
   implicit none
   private
   public :: jgx_register_particle_kin_rel_record

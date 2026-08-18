@@ -100,7 +100,7 @@ DIRS := diagnostics				\
 	elements/mod_interp			\
 	datatypes/data_structure		\
 	jgx/cpp/src				\
-	jgx/fortran/record			\
+	jgx/fortran				\
 	jgx/jorek				\
 	elements/tests				\
 	grids					\
