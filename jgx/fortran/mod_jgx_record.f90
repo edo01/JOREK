@@ -6,7 +6,7 @@
 !>
 !> A type is registered once at the beginning of the program and it's done once
 !> for all the instances of that type.
-module jgx_record
+module mod_jgx_record
   use, intrinsic :: iso_c_binding
   implicit none
   public
@@ -51,4 +51,4 @@ contains
     off = transfer(component_ptr, 1_c_size_t) - transfer(base_ptr, 1_c_size_t)
   end function jgx_offset_of
 
-end module jgx_record
+end module mod_jgx_record
