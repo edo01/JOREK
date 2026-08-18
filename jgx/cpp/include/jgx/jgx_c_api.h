@@ -1,9 +1,9 @@
 /* jgx_c_api.h -- the C interface to Fortran.
  *
- * Everything above this line line with any Fortran
- * compiler; everything below with any C++17 compiler or a backend compiler.
- * 
- * 
+ * Declarations only. The definitions live in exactly one backend directory
+ * (jgx/cpp/backends/<backend>/), which is the only place a vendor runtime is
+ * named. Fortran reaches these through jgx/jorek/mod_jgx_device.f90, not
+ * through this header.
  */
 #ifndef JGX_C_API_H
 #define JGX_C_API_H
@@ -15,9 +15,7 @@
 extern "C" {
 #endif
 
-#include "jgx/jgx_abi.def"   /* JGX_MAX_RANK, the record limits */
-
-/* The tag values are not restated here -- the .def files are the single source
+/* The tag values are not restated here -- elem_kind.def is the single source
  * the Fortran side reads too, so C and Fortran cannot drift apart. */
 
 enum {   /* elem_kind tags */
@@ -36,33 +34,6 @@ static inline size_t jgx_kind_size(int32_t elem_kind) {
     default: return 0;
   }
 }
-
-enum {   /* layout_tag values */
-#define JGX_ENUM_ENTRY(name, value) name = value,
-#include "jgx/enums/layout_tag.def"
-#undef JGX_ENUM_ENTRY
-  JGX_LAYOUT_COUNT
-};
-
-enum {   /* flags bits -- disjoint, so no COUNT */
-#define JGX_ENUM_ENTRY(name, value) name = value,
-#include "jgx/enums/flags.def"
-#undef JGX_ENUM_ENTRY
-  JGX_FLAG_NONE = 0
-};
-
-/* This POD layout must match the
- * bind(C) type jgx_buf_desc in jgx_types.f90 (this is checked by the ABI test). */
-typedef struct {
-  void*    device_ptr;
-  void*    host_ptr;
-  size_t   n_bytes;
-  int32_t  elem_kind;
-  int32_t  rank;
-  size_t   extents[JGX_MAX_RANK];   /* Fortran (column-major) order */
-  int32_t  layout_tag;
-  int32_t  flags;
-} jgx_buf_desc;
 
 /* ---- runtime / memory management (raw pointers + sizes) ---------------- */
 const char* jgx_c_backend_name(void);

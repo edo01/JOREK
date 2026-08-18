@@ -1,7 +1,0 @@
-/* jgx/enums/layout_tag.def -- which data layout a jgx_buf is in.
- *
- *
- * Note this cannot express layout_perm<...>.
- */
-JGX_ENUM_ENTRY(JGX_LAYOUT_COLMAJOR, 0)   /* Fortran / layout_left  */
-JGX_ENUM_ENTRY(JGX_LAYOUT_ROWMAJOR, 1)   /* C       / layout_right */

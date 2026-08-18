@@ -38,8 +38,12 @@
 
 #include "jgx/jgx_c_api.h"   /* JGX_F64 ... elem_kind tags */
 
-/* JGX_MAX_INTRA_RANK, JGX_MAX_RECORD_FIELDS, JGX_MAX_RECORD_TYPES arrive with
- * jgx_c_api.h, which includes jgx_abi.def. */
+/* The registry's fixed bounds. Raising JGX_MAX_RECORD_FIELDS or
+ * JGX_MAX_RECORD_TYPES is free. Raising JGX_MAX_INTRA_RANK resizes
+ * jgx_field_desc, so every object that touches it must be rebuilt. */
+#define JGX_MAX_INTRA_RANK      3
+#define JGX_MAX_RECORD_FIELDS  16
+#define JGX_MAX_RECORD_TYPES    8
 
 #ifdef __cplusplus
 extern "C" {

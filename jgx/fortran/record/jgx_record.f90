@@ -40,13 +40,6 @@ module jgx_record
       import :: c_int32_t
       integer(c_int32_t), value :: record_id
     end subroutine
-
-    function jgx_c_record_is_registered(record_id) &
-        bind(C, name="jgx_c_record_is_registered")
-      import :: c_int32_t
-      integer(c_int32_t), value :: record_id
-      integer(c_int32_t) :: jgx_c_record_is_registered
-    end function
   end interface
 
 contains

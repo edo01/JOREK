@@ -123,24 +123,6 @@ struct view {
   }
 };
 
-
-template <class T, int Rank, class Layout = layout_left>
-JGX_HD inline view<T, Rank, Layout> make_view(void* p,
-                                              std::array<std::size_t, Rank> ext) {
-  return view<T, Rank, Layout>(static_cast<T*>(p), ext.data());
-}
-
-/* Build a view straight from a jgx_buf_desc's device pointer + extents.
- * extents are Fortran order, so layout_left is the natural choice but it
- * can be changed by either using layout_right or layout_permutation.
- */
-template <class T, int Rank, class Layout = layout_left, class Desc>
-JGX_HD inline view<T, Rank, Layout> view_from_desc(const Desc& d) {
-  std::size_t ext[Rank];
-  for (int i = 0; i < Rank; ++i) ext[i] = d.extents[i];
-  return view<T, Rank, Layout>(static_cast<T*>(d.device_ptr), ext);
-}
-
 } /* namespace jgx */
 
 #endif /* JGX_VIEW_H */
