@@ -12,18 +12,18 @@ const char* jgx_c_backend_name(void) { return "hip"; }
 /* Which layout the buffers this backend hands out are in. The pack writes
  * slot = j*n_records + rec, i.e. layout_left over {n_records, intra...}
  * (jgx/field_view.h), so the answer is fixed at compile time for the backend as
- * a whole and not per buffer -- which is why this is a string and not a field of
- * jgx_buf_desc. */
+ * a whole and not per buffer -- which is why it is a string and not carried
+ * alongside each pointer. */
 const char* jgx_c_layout_tag(void) { return "colmajor"; }
 
 /* Rank->device binding happens above this call (jgx-gpu-backend.md, section
  * 4.6: kinetic_main, from the node-local rank) -- this just pins the process
  * to the device it was told to use. */
-void jgx_c_init(int device_id) { JGX_HIP_CHECK(hipSetDevice(device_id)); }
+void jgx_c_init_device(int device_id) { JGX_HIP_CHECK(hipSetDevice(device_id)); }
 
-/* Symmetric with jgx_c_init: releases everything the runtime holds for this
+/* Symmetric with jgx_c_init_device: releases everything the runtime holds for this
  * device on this process, rather than leaving it to process exit. */
-void jgx_c_finalize(void) { JGX_HIP_CHECK(hipDeviceReset()); }
+void jgx_c_finalize_device(void) { JGX_HIP_CHECK(hipDeviceReset()); }
 
 /* hipMalloc(&p, 0) is not guaranteed a null p across HIP versions, and every
  * caller already routes n_bytes==0 through here (jgx_backend_push/pull guard
@@ -44,6 +44,12 @@ void jgx_c_push(void* device_ptr, const void* host_ptr, size_t n_bytes) {
 
 void jgx_c_pull(void* host_ptr, const void* device_ptr, size_t n_bytes) {
   JGX_HIP_CHECK(hipMemcpy(host_ptr, device_ptr, n_bytes, hipMemcpyDeviceToHost));
+}
+
+/* Synchronous here, like the two copies above: it precedes a launch that must
+ * see the fill, and the null stream would order them anyway. */
+void jgx_c_memset(void* device_ptr, int value, size_t n_bytes) {
+  JGX_HIP_CHECK(hipMemset(device_ptr, value, n_bytes));
 }
 
 /* Both the errors a launch can produce: the one it reported on the spot, and the

@@ -1,9 +1,9 @@
 !> Registers particle_kinetic_relativistic's memory layout with jgx.
 !>
-!> The field ids below are the contract with the C++ field enum: the two lists
-!> must stay in the same order. Ids 0..5 are the components inherited from
-!> particle_base and keep the same numbering in every particle record, so C++
-!> code that only needs the base part is written once.
+!> The field list is jgx/jorek/records/particle_base_record.def followed by
+!> particle_kin_rel_record.def, expanded here and by particle_set.h -- one list,
+!> so nothing has to be kept in step by hand. The base list comes first, which is
+!> what keeps the inherited components at ids 0..5 in every particle record.
 !>
 !> Inheritance is not visible to the registry: the parent's components are
 !> ordinary fields of the concrete type, at offsets the compiler chose. They are
@@ -23,59 +23,35 @@ module mod_jgx_particle_record
   private
   public :: jgx_register_particle_kin_rel_record
 
-  !> particle_base fields -- the same ids in every particle record
-  integer(c_int32_t), parameter :: JGX_PF_X          = 0
-  integer(c_int32_t), parameter :: JGX_PF_ST         = 1
-  integer(c_int32_t), parameter :: JGX_PF_WEIGHT     = 2
-  integer(c_int32_t), parameter :: JGX_PF_I_ELM      = 3
-  integer(c_int32_t), parameter :: JGX_PF_I_LIFE     = 4
-  integer(c_int32_t), parameter :: JGX_PF_T_BIRTH    = 5
-  integer(c_int32_t), parameter :: JGX_PF_BASE_COUNT = 6
-
-  !> what particle_kinetic_relativistic adds
-  integer(c_int32_t), parameter :: JGX_PKR_P     = JGX_PF_BASE_COUNT
-  integer(c_int32_t), parameter :: JGX_PKR_Q     = JGX_PF_BASE_COUNT + 1
-  integer(c_int32_t), parameter :: JGX_PKR_COUNT = JGX_PF_BASE_COUNT + 2
-
 contains
 
   subroutine jgx_register_particle_kin_rel_record()
     type(particle_kinetic_relativistic), target :: pk(2)
-    integer(c_size_t) :: base, stride, ext(1)
+    integer(c_int32_t) :: f
+    integer(c_size_t)  :: stride
+    !> Short local so the expanded registration line stays inside the
+    !> free-form 132-column limit.
+    integer(c_int32_t), parameter :: rid = JGX_REC_PARTICLE_KIN_REL
 
-    base   = transfer(c_loc(pk(1)), 1_c_size_t)
-    stride = transfer(c_loc(pk(2)), 1_c_size_t) - base
-    call jgx_c_record_begin(JGX_REC_PARTICLE_KIN_REL, stride, JGX_PKR_COUNT)
+    !> Counted from the same lists that register below, so begin() cannot
+    !> disagree with what follows.
+    f = 0
+#define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) f = f + 1
+#include "jgx/jorek/records/particle_base_record.def"
+#include "jgx/jorek/records/particle_kin_rel_record.def"
+#undef JGX_FIELD
 
-    !> inherited from particle_base
-    ext(1) = size(pk(1)%x, kind=c_size_t)
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PF_X, &
-         jgx_offset_of(c_loc(pk(1)%x(1)), c_loc(pk(1))), JGX_F64, 1, ext)
+    stride = transfer(c_loc(pk(2)), 1_c_size_t) - transfer(c_loc(pk(1)), 1_c_size_t)
+    call jgx_c_record_begin(rid, stride, f)
 
-    ext(1) = size(pk(1)%st, kind=c_size_t)
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PF_ST, &
-         jgx_offset_of(c_loc(pk(1)%st(1)), c_loc(pk(1))), JGX_F64, 1, ext)
+    f = 0
+#define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) \
+    call jgx_add_field(rid, f, c_loc(pk(1)%comp), c_loc(pk(1)), KIND, shape(pk(1)%comp)); f = f + 1
+#include "jgx/jorek/records/particle_base_record.def"
+#include "jgx/jorek/records/particle_kin_rel_record.def"
+#undef JGX_FIELD
 
-    ext(1) = 1
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PF_WEIGHT, &
-         jgx_offset_of(c_loc(pk(1)%weight), c_loc(pk(1))), JGX_F64, 1, ext)
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PF_I_ELM, &
-         jgx_offset_of(c_loc(pk(1)%i_elm), c_loc(pk(1))), JGX_I32, 1, ext)
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PF_I_LIFE, &
-         jgx_offset_of(c_loc(pk(1)%i_life), c_loc(pk(1))), JGX_I32, 1, ext)
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PF_T_BIRTH, &
-         jgx_offset_of(c_loc(pk(1)%t_birth), c_loc(pk(1))), JGX_F32, 1, ext)
-
-    !> own components
-    ext(1) = size(pk(1)%p, kind=c_size_t)
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PKR_P, &
-         jgx_offset_of(c_loc(pk(1)%p(1)), c_loc(pk(1))), JGX_F64, 1, ext)
-
-    ext(1) = 1
-    call jgx_c_record_add_field(JGX_REC_PARTICLE_KIN_REL, JGX_PKR_Q, &
-         jgx_offset_of(c_loc(pk(1)%q), c_loc(pk(1))), JGX_I8, 1, ext)
-
-    call jgx_c_record_end(JGX_REC_PARTICLE_KIN_REL)
+    call jgx_c_record_end(rid)
   end subroutine jgx_register_particle_kin_rel_record
 
 end module mod_jgx_particle_record

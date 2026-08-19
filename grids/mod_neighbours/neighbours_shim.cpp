@@ -16,7 +16,7 @@ extern "C" {
                                      const int32_t i_from0,
                                      int32_t* i_to, double* st, int32_t* bad_i_to) {
 
-        const auto el = jorek::element_set_from_registry(el_base, static_cast<std::size_t>(n_elements));
+        const auto el = jorek::element_set_aos::from_registry(el_base, static_cast<std::size_t>(n_elements));
 
         int to = 0, bad = 0;
         neighbours::coord_in_neighbour(el, static_cast<std::size_t>(i_from0), to, st, bad);

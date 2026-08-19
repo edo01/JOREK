@@ -18,6 +18,9 @@ contains
     type(type_element), target :: e(2)
     integer(c_int32_t) :: f
     integer(c_size_t)  :: stride
+    !> Short local so the expanded registration line stays inside the
+    !> free-form 132-column limit.
+    integer(c_int32_t), parameter :: rid = JGX_REC_ELEMENT
 
     !> Counted from the same list that registers below, so begin() cannot
     !> disagree with what follows.
@@ -27,15 +30,15 @@ contains
 #undef JGX_FIELD
 
     stride = transfer(c_loc(e(2)), 1_c_size_t) - transfer(c_loc(e(1)), 1_c_size_t)
-    call jgx_c_record_begin(JGX_REC_ELEMENT, stride, f)
+    call jgx_c_record_begin(rid, stride, f)
 
     f = 0
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) \
-    call jgx_add_field(JGX_REC_ELEMENT, f, c_loc(e(1)%comp), c_loc(e(1)), KIND, shape(e(1)%comp)); f = f + 1
+    call jgx_add_field(rid, f, c_loc(e(1)%comp), c_loc(e(1)), KIND, shape(e(1)%comp)); f = f + 1
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
 
-    call jgx_c_record_end(JGX_REC_ELEMENT)
+    call jgx_c_record_end(rid)
   end subroutine jgx_register_element_record
 
 end module mod_jgx_element_record

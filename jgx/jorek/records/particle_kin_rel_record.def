@@ -1,0 +1,12 @@
+/* jgx/jorek/records/particle_kin_rel_record.def -- what
+ * particle_kinetic_relativistic adds to particle_base.
+ *
+ * Expanded on its own by the struct and the makers (which inherit the base
+ * half), and after particle_base_record.def by the field enum and by
+ * mod_jgx_particle_record.f90, which need the whole record.
+ *
+ * Column meanings are in node_record.def. q is integer*1, so its T column names
+ * the type instead of following Int.
+ */
+JGX_FIELD(P, p, Real,        1, JGX_F64, "(ip, kc)")
+JGX_FIELD(Q, q, std::int8_t, 0, JGX_I8,  "(ip)")

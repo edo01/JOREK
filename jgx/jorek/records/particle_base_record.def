@@ -1,0 +1,19 @@
+/* jgx/jorek/records/particle_base_record.def -- particle_base across the seam.
+ *
+ * The components of particle_base (particles/particle_types/mod_particle_types.f90),
+ * in declaration order. Every particle record starts with these, at the same
+ * ids, so C++ that only needs the base part is written once -- a concrete
+ * record's enum expands this list first, then its own.
+ *
+ * Inheritance is not visible to the registry: these are ordinary fields of the
+ * concrete type, at offsets the compiler chose, measured like all the others.
+ *
+ * Column meanings are in node_record.def. t_birth is real*4, so its T column
+ * names the type instead of following Real.
+ */
+JGX_FIELD(X,       x,       Real,  1, JGX_F64, "(ip, kc)")
+JGX_FIELD(ST,      st,      Real,  1, JGX_F64, "(ip, kc)")
+JGX_FIELD(WEIGHT,  weight,  Real,  0, JGX_F64, "(ip)")
+JGX_FIELD(I_ELM,   i_elm,   Int,   0, JGX_I32, "(ip)")
+JGX_FIELD(I_LIFE,  i_life,  Int,   0, JGX_I32, "(ip)")
+JGX_FIELD(T_BIRTH, t_birth, float, 0, JGX_F32, "(ip)")
