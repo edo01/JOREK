@@ -56,8 +56,12 @@ extern "C" {
                                double* Z, double* Z_s, double* Z_t) {
 
         // Extracting the AoS view from the registry
-        const auto el = jorek::element_set_aos::from_registry(el_base, static_cast<std::size_t>(n_elements));
-        const auto nd = jorek::node_set_aos::from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+        const auto el = jorek::element_set_aos::from_aos(
+            el_base, jorek::element_set_aos::record(),
+            static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_aos::from_aos(
+            nd_base, jorek::node_set_aos::record(),
+            static_cast<std::size_t>(n_nodes));
 
         const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
 
@@ -82,8 +86,12 @@ extern "C" {
                                 double* R, double* R_s, double* R_t, double* R_phi,
                                 double* Z, double* Z_s, double* Z_t, double* Z_phi) {
 
-        const auto el = jorek::element_set_aos::from_registry(el_base, static_cast<std::size_t>(n_elements));
-        const auto nd = jorek::node_set_aos::from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+        const auto el = jorek::element_set_aos::from_aos(
+            el_base, jorek::element_set_aos::record(),
+            static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_aos::from_aos(
+            nd_base, jorek::node_set_aos::record(),
+            static_cast<std::size_t>(n_nodes));
 
         const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
 
@@ -104,8 +112,12 @@ extern "C" {
                                double* R, double* R_s, double* R_t, double* R_phi,
                                double* Z, double* Z_s, double* Z_t, double* Z_phi) {
 
-        const auto el = jorek::element_set_aos::from_registry(el_base, static_cast<std::size_t>(n_elements));
-        const auto nd = jorek::node_set_aos::from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+        const auto el = jorek::element_set_aos::from_aos(
+            el_base, jorek::element_set_aos::record(),
+            static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_aos::from_aos(
+            nd_base, jorek::node_set_aos::record(),
+            static_cast<std::size_t>(n_nodes));
 
         interp::interp_RZP_1(el, nd, static_cast<std::size_t>(i_elm0), s, t, phi,
                              *R, *R_s, *R_t, *R_phi, *Z, *Z_s, *Z_t, *Z_phi);

@@ -39,7 +39,7 @@ JGX_HD inline void record_extents(const jgx_field_desc& fd, std::size_t n_record
  */
 template <class T, int Rank>
 JGX_HD inline view<T, Rank, layout_stride>
-aos_field(void* record_base, const jgx_field_desc& fd,
+aos_field(void* aos_base, const jgx_field_desc& fd,
           std::size_t record_stride_bytes, std::size_t n_records) {
   std::size_t ext[Rank];
   detail::record_extents<Rank>(fd, n_records, ext);
@@ -49,7 +49,7 @@ aos_field(void* record_base, const jgx_field_desc& fd,
   for (int d = 1; d < Rank; ++d) str[d] = (d == 1) ? 1 : str[d - 1] * ext[d - 1];
 
   T* const p = reinterpret_cast<T*>(
-      static_cast<char*>(record_base) + fd.offset_bytes);
+      static_cast<char*>(aos_base) + fd.offset_bytes);
   return view<T, Rank, layout_stride>(p, ext, str);
 }
 
@@ -59,10 +59,10 @@ aos_field(void* record_base, const jgx_field_desc& fd,
  */
 template <class T, int Rank>
 JGX_HD inline view<T, Rank, layout_left>
-soa_field(void* field_base, const jgx_field_desc& fd, std::size_t n_records) {
+soa_field(void* soa_base, const jgx_field_desc& fd, std::size_t n_records) {
   std::size_t ext[Rank];
   detail::record_extents<Rank>(fd, n_records, ext);
-  return view<T, Rank, layout_left>(static_cast<T*>(field_base), ext);
+  return view<T, Rank, layout_left>(static_cast<T*>(soa_base), ext);
 }
 
 /* A scalar component of a single record, read where it lies.

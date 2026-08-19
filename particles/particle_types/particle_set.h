@@ -28,6 +28,7 @@
 #include "jgx/jgx_record_api.h"
 #include "jgx/macros.h"
 #include "jgx/field_view.h"
+#include "jgx/pack.h"
 #include "jgx/record_set.h"
 #include "jgx/view.h"
 
@@ -59,8 +60,6 @@ enum particle_kin_rel_field {
 static_assert(JGX_PKR_P == JGX_PF_BASE_COUNT,
               "the extension must continue the base numbering");
 
-using particle_kin_rel_soa_ptrs = jgx::record_ptrs<JGX_PKR_COUNT>;
-
 template <class L, class Real = double, class Int = int>
 struct particle_base_set : jgx::record_set {
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) view<T, (RANK) + 1, L> comp;
@@ -69,27 +68,27 @@ struct particle_base_set : jgx::record_set {
 
   /* The inherited half, filled the same way for any particle record: a concrete
    * record's from_aos / from_soa calls one of these, then adds its own fields.
-   *
-   * from_soa takes the raw pointer table rather than a *_soa_ptrs, whose length
-   * is the concrete record's field count -- the base cannot name it. */
+   * Both take the base the concrete maker was given -- the base fields are
+   * ordinary fields of the concrete record, at its own offsets. */
   JGX_HD static void fill_aos(particle_base_set<layout_stride, Real, Int>& s,
-                              void* record_base, const jgx_record_desc& r,
+                              void* aos_base, const jgx_record_desc& r,
                               std::size_t n_particles) {
     s.n_records = n_particles;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(record_base, r.field[JGX_PF_##TAG], \
+    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_PF_##TAG], \
                                            r.record_stride_bytes, n_particles);
 #include "jgx/jorek/records/particle_base_record.def"
 #undef JGX_FIELD
   }
 
   JGX_HD static void fill_soa(particle_base_set<layout_left, Real, Int>& s,
-                              void* const* field, const jgx_record_desc& r,
+                              void* soa_base, const jgx_record_desc& r,
                               std::size_t n_particles) {
     s.n_records = n_particles;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(field[JGX_PF_##TAG],                \
-                                           r.field[JGX_PF_##TAG], n_particles);
+    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
+        jgx::soa_field_ptr(soa_base, r, JGX_PF_##TAG, n_particles),            \
+        r.field[JGX_PF_##TAG], n_particles);
 #include "jgx/jorek/records/particle_base_record.def"
 #undef JGX_FIELD
   }
@@ -105,13 +104,13 @@ struct particle_kin_rel_set : particle_base_set<L, Real, Int> {
    * instantiation, so it returns the right set whichever alias it is reached
    * through. */
   JGX_HD static particle_kin_rel_set<layout_stride, Real, Int>
-  from_aos(void* record_base, const jgx_record_desc& r,
+  from_aos(void* aos_base, const jgx_record_desc& r,
            std::size_t n_particles) {
     particle_kin_rel_set<layout_stride, Real, Int> s;
-    particle_base_set<layout_stride, Real, Int>::fill_aos(s, record_base, r,
+    particle_base_set<layout_stride, Real, Int>::fill_aos(s, aos_base, r,
                                                           n_particles);
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(record_base, r.field[JGX_PKR_##TAG],\
+    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_PKR_##TAG],\
                                            r.record_stride_bytes, n_particles);
 #include "jgx/jorek/records/particle_kin_rel_record.def"
 #undef JGX_FIELD
@@ -119,14 +118,14 @@ struct particle_kin_rel_set : particle_base_set<L, Real, Int> {
   }
 
   JGX_HD static particle_kin_rel_set<layout_left, Real, Int>
-  from_soa(const particle_kin_rel_soa_ptrs& p, const jgx_record_desc& r,
-           std::size_t n_particles) {
+  from_soa(void* soa_base, const jgx_record_desc& r, std::size_t n_particles) {
     particle_kin_rel_set<layout_left, Real, Int> s;
-    particle_base_set<layout_left, Real, Int>::fill_soa(s, p.field, r,
+    particle_base_set<layout_left, Real, Int>::fill_soa(s, soa_base, r,
                                                         n_particles);
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(p.field[JGX_PKR_##TAG],             \
-                                           r.field[JGX_PKR_##TAG], n_particles);
+    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
+        jgx::soa_field_ptr(soa_base, r, JGX_PKR_##TAG, n_particles),           \
+        r.field[JGX_PKR_##TAG], n_particles);
 #include "jgx/jorek/records/particle_kin_rel_record.def"
 #undef JGX_FIELD
     return s;
@@ -146,13 +145,6 @@ struct particle_kin_rel_set : particle_base_set<L, Real, Int> {
     return r;
   }
 
-  /* Address an existing Fortran particle array in place. Offsets and extents
-   * come from the registry, which mod_jgx_particle_record.f90 filled with c_loc
-   * measurements. */
-  static particle_kin_rel_set<layout_stride, Real, Int>
-  from_registry(void* record_base, std::size_t n_particles) {
-    return from_aos(record_base, record(), n_particles);
-  }
 };
 
 using particle_kin_rel_set_aos = particle_kin_rel_set<layout_stride>;

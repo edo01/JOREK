@@ -35,7 +35,8 @@ extern "C" {
                                                double* nf_R, double* nf_Z,
                                                int32_t* bad_i_from, int32_t* bad_i_to) {
 
-        auto part = jorek::particle_kin_rel_set_from_registry(part_base, 1);
+        auto part = jorek::particle_kin_rel_set_aos::from_aos(
+            part_base, jorek::particle_kin_rel_set_aos::record(), 1);
 
         const auto fields = jorek::fields_linear_set_from_registry(
             el_base, static_cast<std::size_t>(n_elements),

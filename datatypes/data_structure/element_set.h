@@ -15,6 +15,7 @@
 #include "jgx/jgx_record_api.h"
 #include "jgx/macros.h"
 #include "jgx/field_view.h"
+#include "jgx/pack.h"
 #include "jgx/record_set.h"
 #include "jgx/view.h"
 
@@ -31,8 +32,6 @@ enum element_field {
   JGX_EF_COUNT
 };
 
-using element_soa_ptrs = jgx::record_ptrs<JGX_EF_COUNT>;
-
 template <class L, class Real = double, class Int = int>
 struct element_set : jgx::record_set {
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) view<T, (RANK) + 1, L> comp;
@@ -43,12 +42,12 @@ struct element_set : jgx::record_set {
    * instantiation, so it returns the right set whichever alias it is reached
    * through. */
   JGX_HD static element_set<layout_stride, Real, Int>
-  from_aos(void* record_base, const jgx_record_desc& r,
+  from_aos(void* aos_base, const jgx_record_desc& r,
            std::size_t n_elements) {
     element_set<layout_stride, Real, Int> s;
     s.n_records = n_elements;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(record_base, r.field[JGX_EF_##TAG], \
+    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_EF_##TAG], \
                                            r.record_stride_bytes, n_elements);
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
@@ -56,13 +55,13 @@ struct element_set : jgx::record_set {
   }
 
   JGX_HD static element_set<layout_left, Real, Int>
-  from_soa(const element_soa_ptrs& p, const jgx_record_desc& r,
-           std::size_t n_elements) {
+  from_soa(void* soa_base, const jgx_record_desc& r, std::size_t n_elements) {
     element_set<layout_left, Real, Int> s;
     s.n_records = n_elements;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(p.field[JGX_EF_##TAG],              \
-                                           r.field[JGX_EF_##TAG], n_elements);
+    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
+        jgx::soa_field_ptr(soa_base, r, JGX_EF_##TAG, n_elements),             \
+        r.field[JGX_EF_##TAG], n_elements);
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
     return s;
@@ -74,6 +73,9 @@ struct element_set : jgx::record_set {
   static const jgx_record_desc& record() {
     const jgx_record_desc& r =
         jgx::registered_record(JGX_REC_ELEMENT, JGX_EF_COUNT);
+/** @todo: guard this using DEBUG 
+ * 
+*/
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
     jgx::check_record_field(r, JGX_EF_##TAG, KIND, RANK, sizeof(T), #comp);
 #include "jgx/jorek/records/element_record.def"
@@ -81,13 +83,6 @@ struct element_set : jgx::record_set {
     return r;
   }
 
-  /* Address an existing Fortran element array in place. Offsets and extents
-   * come from the registry, which mod_jgx_element_record.f90 filled with c_loc
-   * measurements. */
-  static element_set<layout_stride, Real, Int>
-  from_registry(void* record_base, std::size_t n_elements) {
-    return from_aos(record_base, record(), n_elements);
-  }
 };
 
 using element_set_aos = element_set<layout_stride>;

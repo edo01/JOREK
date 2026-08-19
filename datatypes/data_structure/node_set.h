@@ -14,6 +14,7 @@
 #include "jgx/jgx_record_api.h"
 #include "jgx/macros.h"
 #include "jgx/field_view.h"
+#include "jgx/pack.h"
 #include "jgx/record_set.h"
 #include "jgx/view.h"
 
@@ -30,8 +31,6 @@ enum node_field {
   JGX_NF_COUNT
 };
 
-using node_soa_ptrs = jgx::record_ptrs<JGX_NF_COUNT>;
-
 template <class L, class Real = double, class Int = int>
 struct node_set : jgx::record_set {
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) view<T, (RANK) + 1, L> comp;
@@ -42,11 +41,11 @@ struct node_set : jgx::record_set {
    * instantiation, so it returns the right set whichever alias it is reached
    * through. */
   JGX_HD static node_set<layout_stride, Real, Int>
-  from_aos(void* record_base, const jgx_record_desc& r, std::size_t n_nodes) {
+  from_aos(void* aos_base, const jgx_record_desc& r, std::size_t n_nodes) {
     node_set<layout_stride, Real, Int> s;
     s.n_records = n_nodes;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(record_base, r.field[JGX_NF_##TAG], \
+    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_NF_##TAG], \
                                            r.record_stride_bytes, n_nodes);
 #include "jgx/jorek/records/node_record.def"
 #undef JGX_FIELD
@@ -54,13 +53,13 @@ struct node_set : jgx::record_set {
   }
 
   JGX_HD static node_set<layout_left, Real, Int>
-  from_soa(const node_soa_ptrs& p, const jgx_record_desc& r,
-           std::size_t n_nodes) {
+  from_soa(void* soa_base, const jgx_record_desc& r, std::size_t n_nodes) {
     node_set<layout_left, Real, Int> s;
     s.n_records = n_nodes;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(p.field[JGX_NF_##TAG],              \
-                                           r.field[JGX_NF_##TAG], n_nodes);
+    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
+        jgx::soa_field_ptr(soa_base, r, JGX_NF_##TAG, n_nodes),                \
+        r.field[JGX_NF_##TAG], n_nodes);
 #include "jgx/jorek/records/node_record.def"
 #undef JGX_FIELD
     return s;
@@ -79,13 +78,6 @@ struct node_set : jgx::record_set {
     return r;
   }
 
-  /* Address an existing Fortran node array in place. Offsets and extents come
-   * from the registry, which mod_jgx_node_record.f90 filled with c_loc
-   * measurements. */
-  static node_set<layout_stride, Real, Int>
-  from_registry(void* record_base, std::size_t n_nodes) {
-    return from_aos(record_base, record(), n_nodes);
-  }
 };
 
 using node_set_aos = node_set<layout_stride>;
