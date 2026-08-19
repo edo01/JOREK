@@ -35,8 +35,8 @@ extern "C" {
                                  int32_t* not_found,
                                  int32_t* bad_i_from, int32_t* bad_i_to) {
 
-        const auto el = jorek::element_set_from_registry(el_base, static_cast<std::size_t>(n_elements));
-        const auto nd = jorek::node_set_from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+        const auto el = jorek::element_set_aos::from_registry(el_base, static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_aos::from_registry(nd_base, static_cast<std::size_t>(n_nodes));
 
         int ielm = 0, fail = 0, nf = 0, bfrom = 0, bto = 0;
         find_rz_nearby::find_RZ_nearby<kFindRZNearbyDebug>(

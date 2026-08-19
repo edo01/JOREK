@@ -1,0 +1,18 @@
+/* jgx/jorek/records/element_record.def -- type_element across the seam.
+ *
+ * The nine components of type_element
+ * (datatypes/data_structure/data_structure.f90), in declaration order.
+ * Expanded by element_set.h (enum, views, both makers, the check) and by
+ * mod_jgx_element_record.f90 (the registration), so this list is the contract.
+ *
+ * Column meanings are in node_record.def.
+ */
+JGX_FIELD(VERTEX,       vertex,       Int,  1, JGX_I32, "(ie, kv)")
+JGX_FIELD(NEIGHBOURS,   neighbours,   Int,  1, JGX_I32, "(ie, kv)")
+JGX_FIELD(SIZE,         size,         Real, 2, JGX_F64, "(ie, kv, kf)")
+JGX_FIELD(FATHER,       father,       Int,  0, JGX_I32, "(ie)")
+JGX_FIELD(N_SONS,       n_sons,       Int,  0, JGX_I32, "(ie)")
+JGX_FIELD(N_GEN,        n_gen,        Int,  0, JGX_I32, "(ie)")
+JGX_FIELD(SONS,         sons,         Int,  1, JGX_I32, "(ie, ks)")
+JGX_FIELD(CONTAIN_NODE, contain_node, Int,  1, JGX_I32, "(ie, kc)")
+JGX_FIELD(NREF,         nref,         Int,  0, JGX_I32, "(ie)")

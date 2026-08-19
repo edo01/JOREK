@@ -194,8 +194,8 @@ inline fields_linear_set_aos
 fields_linear_set_from_registry(void* el_base, std::size_t n_elements,
                                 void* nd_base, std::size_t n_nodes,
                                 const void* interp_base) {
-  return make_fields_set(element_set_from_registry(el_base, n_elements),
-                         node_set_from_registry(nd_base, n_nodes),
+  return make_fields_set(element_set_aos::from_registry(el_base, n_elements),
+                         node_set_aos::from_registry(nd_base, n_nodes),
                          fields_interp_linear_set_from_registry(interp_base));
 }
 

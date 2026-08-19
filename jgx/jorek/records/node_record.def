@@ -1,0 +1,31 @@
+/* jgx/jorek/records/node_record.def -- type_node across the seam.
+ *
+ * The unconditional components of type_node
+ * (datatypes/data_structure/data_structure.f90), in declaration order.
+ * Expanded by node_set.h (enum, views, both makers, the check) and by
+ * mod_jgx_node_record.f90 (the registration), so this list is the contract.
+ *
+ * Excluded: axis_node and constrained (default `logical` has no interoperable
+ * kind), and the model-guarded components -- one offset table cannot describe a
+ * field list that moves with a preprocessor switch.
+ *
+ *   JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)
+ *
+ * TAG   suffix of the field id, JGX_NF_<TAG>
+ * comp  the Fortran component name; also the C++ member name
+ * T     C++ element type, Real or Int unless the Fortran kind pins it
+ * RANK  rank of the component inside one record; the view is RANK + 1
+ * KIND  jgx elem_kind tag, must agree with T
+ * AXES  the axis names, record index first
+ */
+JGX_FIELD(X,              x,              Real, 3, JGX_F64, "(in, kc, kf, kd)")
+JGX_FIELD(VALUES,         values,         Real, 3, JGX_F64, "(in, kt, kf, kv)")
+JGX_FIELD(DELTAS,         deltas,         Real, 3, JGX_F64, "(in, kt, kf, kv)")
+JGX_FIELD(INDEX,          index,          Int,  1, JGX_I32, "(in, kf)")
+JGX_FIELD(PARENTS,        parents,        Int,  1, JGX_I32, "(in, kp)")
+JGX_FIELD(BOUNDARY,       boundary,       Int,  0, JGX_I32, "(in)")
+JGX_FIELD(BOUNDARY_INDEX, boundary_index, Int,  0, JGX_I32, "(in)")
+JGX_FIELD(AXIS_DOF,       axis_dof,       Int,  0, JGX_I32, "(in)")
+JGX_FIELD(PARENT_ELEM,    parent_elem,    Int,  0, JGX_I32, "(in)")
+JGX_FIELD(REF_LAMBDA,     ref_lambda,     Real, 0, JGX_F64, "(in)")
+JGX_FIELD(REF_MU,         ref_mu,         Real, 0, JGX_F64, "(in)")

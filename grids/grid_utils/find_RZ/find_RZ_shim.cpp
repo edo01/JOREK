@@ -20,8 +20,8 @@ extern "C" {
                                   double* s_out, double* t_out,
                                   int32_t* ifail, int32_t* checked_elms) {
 
-        const auto el = jorek::element_set_from_registry(el_base, static_cast<std::size_t>(n_elements));
-        const auto nd = jorek::node_set_from_registry(nd_base, static_cast<std::size_t>(n_nodes));
+        const auto el = jorek::element_set_aos::from_registry(el_base, static_cast<std::size_t>(n_elements));
+        const auto nd = jorek::node_set_aos::from_registry(nd_base, static_cast<std::size_t>(n_nodes));
 
         int ielm = 0, fail = 0, checked = 0;
         find_rz::find_RZ_general(el, nd, R_find, Z_find, phi_find,

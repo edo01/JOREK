@@ -11,6 +11,9 @@ module mod_jgx_record
   implicit none
   public
 
+  !> Mirrors JGX_MAX_INTRA_RANK (jgx/jgx_record_api.h).
+  integer, parameter :: JGX_MAX_INTRA_RANK = 3
+
   !> elem_kind tags. Not mirrored by hand: the values come from the same .def
   !> file the C header expands, so the two sides cannot drift. Only the Fortran
   !> kind is chosen here.
@@ -43,6 +46,22 @@ module mod_jgx_record
   end interface
 
 contains
+
+  !> Register one component, at any rank. The rank and the extents are read off
+  !> the component itself with shape(), so the *_record.def the caller expands
+  !> states them once and this cannot disagree with the storage.
+  subroutine jgx_add_field(record_id, field_id, comp_ptr, base_ptr, elem_kind, shp)
+    integer(c_int32_t), value      :: record_id, field_id, elem_kind
+    type(c_ptr),        value      :: comp_ptr, base_ptr
+    integer,            intent(in) :: shp(:)
+    integer(c_size_t) :: ext(JGX_MAX_INTRA_RANK)
+
+    ext = 1_c_size_t
+    ext(1:size(shp)) = int(shp, c_size_t)
+    call jgx_c_record_add_field(record_id, field_id, &
+         jgx_offset_of(comp_ptr, base_ptr), elem_kind, &
+         int(size(shp), c_int32_t), ext)
+  end subroutine jgx_add_field
 
   !> Byte offset of a component relative to the record base.
   pure function jgx_offset_of(component_ptr, base_ptr) result(off)

@@ -104,7 +104,7 @@ namespace find_rz_nearby
         bad_i_to   = 0;
 
         // Check if element is valid
-        if (i_elm_old < 1 || i_elm_old > static_cast<int>(el.n_elements)) {
+        if (i_elm_old < 1 || i_elm_old > static_cast<int>(el.n_records)) {
             find_rz::find_RZ_general(el, nd, R_new, Z_new, phi_search,
                                      x_dump[0], x_dump[1], i_elm_new,
                                      s_new, t_new, ifail, checked);

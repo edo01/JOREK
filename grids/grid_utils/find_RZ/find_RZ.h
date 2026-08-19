@@ -126,7 +126,7 @@ namespace find_rz
         ielm_out = 0;
         ifail    = 99;
 
-        for (std::size_t ie = 0; ie < el.n_elements; ++ie) {
+        for (std::size_t ie = 0; ie < el.n_records; ++ie) {
             if (find_RZ_single(el, nd, ie, R_find, Z_find, phi_find,
                                R_out, Z_out, s_out, t_out, ifail)) {
                 ielm_out     = static_cast<int>(ie) + 1;  // 1-based in the mesh
@@ -135,7 +135,7 @@ namespace find_rz
             }
         }
 
-        checked_elms = static_cast<int>(el.n_elements);
+        checked_elms = static_cast<int>(el.n_records);
     } // find_RZ_general
 } // namespace find_rz
 
