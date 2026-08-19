@@ -1,12 +1,17 @@
 /* jgx_record_api.h -- registration of a Fortran derived type's memory layout.
- *                     (C/C++ side of jgx_record.f90)
+ *                     (C/C++ side of mod_jgx_record.f90)
  *
  * A Fortran array of a derived type is a strided of components of
  * different kinds at compiler-chosen offsets. Fortran measures them once
  * with c_loc and hands them over to C/C++.
  * 
- * NOTE: Fortran data structures are always assumed AoS and all the fields
- * must be known at compile time (no allocatables).
+ * IMPORTANT REQUIREMENTS:
+ * - Register only Fortran data structures that have an AoS layout.
+ * - If you want to pass a SoA structure from Fortran to C++, the only way to 
+ *   do it at the moment is by passing all the individual fields and construct
+ *   their view.
+ * - All the fields must be known at compile time (no allocatables inside the
+ *   derived type).
  *
  * What is registered is the TYPE, not an instance: offsets, the record stride
  * and the intra-record extents are the same for every array of that type. Only
@@ -18,7 +23,7 @@
  * handled as follows:
  * - the Fortran derived type is registered specifying n_fields, the number of
  *   fields it declares, and
- * - "*_set_from_registry", which extracts an instance of a registered type,
+ * - "<name>_set::record()", which fetches a registered type's descriptor,
  *   passes the length of its own field enum to registered_record, which aborts
  *   if the two differ.
  * Only the counts are compared; keeping the two field lists in the same order
@@ -83,7 +88,12 @@ int32_t jgx_c_record_is_registered(int32_t record_id);
 namespace jgx {
 /* Read a completed registration. Aborts if record_id was never registered, or
  * if expect_n_fields -- the length of the caller's own field list -- differs
- * from the count given at begin(). */
+ * from the count given at begin().
+ * 
+ * A registered type exposes <name>_set::record(), which retrieves its
+ * jgx_record_desc through this function, and <name>_set::from_registry(void*,
+ * size_t), which then builds the C++ object (jgx/record_set.h).
+ *  */
 const jgx_record_desc& registered_record(int record_id, int expect_n_fields);
 }  /* namespace jgx */
 

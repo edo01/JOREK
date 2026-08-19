@@ -1,10 +1,5 @@
 !> Fortran side of the device backend's lifetime: binding this process to one
-!> device, and letting the runtime go of it again.
-!>
-!> Application-agnostic, like the rest of jgx/ outside jgx/jorek: it does not
-!> choose the device, the caller does. Which index is the right one is site
-!> policy (on JOREK it is the node-local rank), and this module has no business
-!> knowing it.
+!> device, and finalize it.
 !>
 !> Callers use jgx_device_init / jgx_device_finalize, which are no-ops in a host
 !> build. The `#ifdef JGX_HAS_DEVICE` lives here and nowhere else, so no caller
@@ -14,6 +9,8 @@ module mod_jgx_device
   private
   public :: jgx_device_init, jgx_device_finalize
 
+!> If jgx is compiled without a device, no definitions of these methods are provided
+!> and the compilation must be guarded.
 #ifdef JGX_HAS_DEVICE
   interface
     !> Pin this process to a device, by index within its node.
