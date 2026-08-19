@@ -1,4 +1,4 @@
-/* jgx/record_set.h -- what a record set is, and what every one must provide.
+/* jgx/data/record_set.h -- what a record set is, and what every one must provide.
  *
  * A record set is the C++ face of a Fortran array of a derived type: one view
  * per registered component, extents and offsets taken from the registration
@@ -8,7 +8,7 @@
  * by the c++ code thanks to the view mechanism.
  *
  * A record <name> provides an enum <name>_field (the field ids) and one struct
- * deriving jgx::record_set that carries the field views and, as static members,
+ * deriving jgx::data::record_set that carries the field views and, as static members,
  * everything that builds it:
  *
  *   <name>_set<L, Real, Int>::from_aos(base, desc, n)  over the Fortran
@@ -36,22 +36,22 @@
  *   aos  the Fortran array itself. A component sits at its offset inside a
  *        record and repeats at the record stride, so nothing is copied and
  *        nothing is owned -- the set is valid as long as that array is.
- *   soa  one packed block, owned by a jgx::host_pack_buffers or a
- *        jgx::device_pack that must outlive the set. A component sits at
- *        jgx::soa_field_offset() and runs contiguously; the record stride plays
+ *   soa  one packed block, owned by a jgx::data::host_pack_buffers or a
+ *        jgx::data::device_pack that must outlive the set. A component sits at
+ *        jgx::data::soa_field_offset() and runs contiguously; the record stride plays
  *        no part here, only the kind and the intra extents do.
  */
-#ifndef JGX_RECORD_SET_H
-#define JGX_RECORD_SET_H
+#ifndef JGX_DATA_RECORD_SET_H
+#define JGX_DATA_RECORD_SET_H
 
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
-#include "jgx/jgx_record_api.h"
+#include "jgx/data/record_api.h"
 
-namespace jgx {
+namespace jgx::data {
 
 /* The base of every record set: the record count under one name whatever the
  * record is, and the mark that the type follows the contract above. Empty of
@@ -85,6 +85,6 @@ inline void check_record_field(const jgx_record_desc& r, int field_id,
   std::abort();
 }
 
-} /* namespace jgx */
+} /* namespace jgx::data */
 
-#endif /* JGX_RECORD_SET_H */
+#endif /* JGX_DATA_RECORD_SET_H */

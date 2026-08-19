@@ -3,7 +3,7 @@
  * One table per record type, filled once from Fortran at startup and read-only
  * afterwards. The number of record types is bounded by JGX_MAX_RECORD_TYPES in
  * jgx_record_api.h. */
-#include "jgx/jgx_record_api.h"
+#include "jgx/data/record_api.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -84,7 +84,7 @@ void jgx_c_record_end(int32_t record_id) {
 
 } /* extern "C" */
 
-namespace jgx {
+namespace jgx::data {
 
 const jgx_record_desc& registered_record(int record_id, int expect_n_fields) {
   if (!valid_id(int32_t(record_id)) || !g_record[record_id].complete)
@@ -96,4 +96,4 @@ const jgx_record_desc& registered_record(int record_id, int expect_n_fields) {
   return r;
 }
 
-} /* namespace jgx */
+} /* namespace jgx::data */

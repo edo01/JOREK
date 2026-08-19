@@ -1,18 +1,18 @@
-/* jgx/field_view.h -- build a view over one component of a record array,
+/* jgx/data/field_view.h -- build a view over one component of a record array,
  * either in place (AoS) or over its packed counterpart (SoA).
  *
  * Axis 0 is the record index; the remaining axes are the component's own axes
  * in Fortran order.
  */
-#ifndef JGX_FIELD_VIEW_H
-#define JGX_FIELD_VIEW_H
+#ifndef JGX_DATA_FIELD_VIEW_H
+#define JGX_DATA_FIELD_VIEW_H
 
 #include <cstddef>
 #include "jgx/macros.h"
-#include "jgx/jgx_record_api.h"
+#include "jgx/data/record_api.h"
 #include "jgx/view.h"
 
-namespace jgx {
+namespace jgx::data {
 
 namespace detail {
 
@@ -78,6 +78,6 @@ JGX_HD inline T record_scalar(const void* record_base, const jgx_field_desc& fd)
       static_cast<const char*>(record_base) + fd.offset_bytes);
 }
 
-} /* namespace jgx */
+} /* namespace jgx::data */
 
-#endif /* JGX_FIELD_VIEW_H */
+#endif /* JGX_DATA_FIELD_VIEW_H */

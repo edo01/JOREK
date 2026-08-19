@@ -2,7 +2,7 @@
 #ifndef JOREK_JGX_RECORD_IDS_H
 #define JOREK_JGX_RECORD_IDS_H
 
-#include "jgx/jgx_record_api.h"   /* JGX_MAX_RECORD_TYPES */
+#include "jgx/data/record_api.h"   /* JGX_MAX_RECORD_TYPES */
 
 namespace jorek {
 

@@ -1,4 +1,4 @@
-/* jgx_record_api.h -- registration of a Fortran derived type's memory layout.
+/* jgx/data/record_api.h -- registration of a Fortran derived type's memory layout.
  *                     (C/C++ side of mod_jgx_record.f90)
  *
  * A Fortran array of a derived type is a strided of components of
@@ -35,8 +35,8 @@
  * jgx/jorek/jgx_record_ids.def -- jgx/jorek is the application's side of the
  * seam and is the only part of jgx/ allowed to name a JOREK type.
  */
-#ifndef JGX_RECORD_API_H
-#define JGX_RECORD_API_H
+#ifndef JGX_DATA_RECORD_API_H
+#define JGX_DATA_RECORD_API_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -85,18 +85,18 @@ int32_t jgx_c_record_is_registered(int32_t record_id);
 #ifdef __cplusplus
 }  /* extern "C" */
 
-namespace jgx {
+namespace jgx::data {
 /* Read a completed registration. Aborts if record_id was never registered, or
  * if expect_n_fields -- the length of the caller's own field list -- differs
  * from the count given at begin().
  * 
  * A registered type exposes <name>_set::record(), which retrieves its
- * jgx_record_desc through this function, and <name>_set::from_registry(void*,
- * size_t), which then builds the C++ object (jgx/record_set.h).
+ * jgx_record_desc through this function; passing that to <name>_set::from_aos
+ * builds the C++ object over a Fortran array (jgx/record_set.h).
  *  */
 const jgx_record_desc& registered_record(int record_id, int expect_n_fields);
-}  /* namespace jgx */
+} /* namespace jgx::data */
 
 #endif /* __cplusplus */
 
-#endif /* JGX_RECORD_API_H */
+#endif /* JGX_DATA_RECORD_API_H */

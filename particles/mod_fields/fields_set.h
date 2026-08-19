@@ -14,8 +14,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include "jgx/jgx_record_api.h"
-#include "jgx/field_view.h"
+#include "jgx/data/record_api.h"
+#include "jgx/data/field_view.h"
 #include "jgx/view.h"
 #include "datatypes/data_structure/element_set.h"
 #include "datatypes/data_structure/node_set.h"
@@ -49,8 +49,8 @@ JGX_HD inline void
 fill_fields_interp_base(fields_interp_base& f,
                         const void* interp_base, const jgx_record_desc& r) {
   /* registered as int32; `!= 0` is the contract -- see the header comment. */
-  f.is_static        = jgx::record_scalar<std::int32_t>(interp_base, r.field[JGX_FI_STATIC]) != 0;
-  f.flag_zero_dpsidt = jgx::record_scalar<std::int32_t>(interp_base, r.field[JGX_FI_FLAG_ZERO_DPSIDT]) != 0;
+  f.is_static        = jgx::data::record_scalar<std::int32_t>(interp_base, r.field[JGX_FI_STATIC]) != 0;
+  f.flag_zero_dpsidt = jgx::data::record_scalar<std::int32_t>(interp_base, r.field[JGX_FI_FLAG_ZERO_DPSIDT]) != 0;
 }
 
 /* The jacobian R_s*Z_t - R_t*Z_s, clamped away from zero.

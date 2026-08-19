@@ -174,8 +174,8 @@ JGX_HD inline fields_interp_linear_set<Real>
 make_fields_interp_linear_set(const void* interp_base, const jgx_record_desc& r) {
   fields_interp_linear_set<Real> f;
   fill_fields_interp_base(f, interp_base, r);
-  f.time_now  = jgx::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_NOW ]);
-  f.time_prev = jgx::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_PREV]);
+  f.time_now  = jgx::data::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_NOW ]);
+  f.time_prev = jgx::data::record_scalar<Real>(interp_base, r.field[JGX_FIL_TIME_PREV]);
   return f;
 }
 
@@ -185,7 +185,7 @@ inline fields_interp_linear_set<>
 fields_interp_linear_set_from_registry(const void* interp_base) {
   return make_fields_interp_linear_set<double>(
       interp_base,
-      jgx::registered_record(JGX_REC_FIELDS_INTERP_LINEAR, JGX_FIL_COUNT));
+      jgx::data::registered_record(JGX_REC_FIELDS_INTERP_LINEAR, JGX_FIL_COUNT));
 }
 
 /* The whole fields object. All three bases come from inside the caller's select
@@ -194,9 +194,10 @@ inline fields_linear_set_aos
 fields_linear_set_from_registry(void* el_base, std::size_t n_elements,
                                 void* nd_base, std::size_t n_nodes,
                                 const void* interp_base) {
-  return make_fields_set(element_set_aos::from_registry(el_base, n_elements),
-                         node_set_aos::from_registry(nd_base, n_nodes),
-                         fields_interp_linear_set_from_registry(interp_base));
+  return make_fields_set(
+      element_set_aos::from_aos(el_base, element_set_aos::record(), n_elements),
+      node_set_aos::from_aos(nd_base, node_set_aos::record(), n_nodes),
+      fields_interp_linear_set_from_registry(interp_base));
 }
 
 } /* namespace jorek */

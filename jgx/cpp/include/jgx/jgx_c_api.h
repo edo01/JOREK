@@ -48,9 +48,9 @@ void        jgx_c_synchronize(void);
 
 /* ---- device globals ---------------------------------------------------- */
 /*
- * The push and pull above moves data the kernel is *handed*: a buffer whose device
- * pointer travels in a jgx_buf_desc and arrives as an argument. Ambient state
- * cannot work that way and must be handled differently.
+ * The push and pull above move data the kernel is *handed*: a device pointer
+ * that arrives as an argument. Ambient state cannot work that way and must be
+ * handled differently.
  *
  * So it lives in a JGX_DEVICE_VAR (jgx/macros.h) instead, and these two move
  * bytes in and out of one. `symbol` is JGX_SYMBOL(the variable), taken in the

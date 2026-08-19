@@ -12,11 +12,11 @@
 #include <cstddef>
 #include <type_traits>
 #include "jgx/jorek/jgx_record_ids.h"
-#include "jgx/jgx_record_api.h"
+#include "jgx/data/record_api.h"
 #include "jgx/macros.h"
-#include "jgx/field_view.h"
-#include "jgx/pack.h"
-#include "jgx/record_set.h"
+#include "jgx/data/field_view.h"
+#include "jgx/data/pack.h"
+#include "jgx/data/record_set.h"
 #include "jgx/view.h"
 
 namespace jorek {
@@ -33,7 +33,7 @@ enum element_field {
 };
 
 template <class L, class Real = double, class Int = int>
-struct element_set : jgx::record_set {
+struct element_set : jgx::data::record_set {
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) view<T, (RANK) + 1, L> comp;
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
@@ -47,7 +47,7 @@ struct element_set : jgx::record_set {
     element_set<layout_stride, Real, Int> s;
     s.n_records = n_elements;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_EF_##TAG], \
+    s.comp = jgx::data::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_EF_##TAG], \
                                            r.record_stride_bytes, n_elements);
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
@@ -59,8 +59,8 @@ struct element_set : jgx::record_set {
     element_set<layout_left, Real, Int> s;
     s.n_records = n_elements;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
-        jgx::soa_field_ptr(soa_base, r, JGX_EF_##TAG, n_elements),             \
+    s.comp = jgx::data::soa_field<T, (RANK) + 1>(                                    \
+        jgx::data::soa_field_ptr(soa_base, r, JGX_EF_##TAG, n_elements),             \
         r.field[JGX_EF_##TAG], n_elements);
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
@@ -72,12 +72,12 @@ struct element_set : jgx::record_set {
    * registry lives on the host. */
   static const jgx_record_desc& record() {
     const jgx_record_desc& r =
-        jgx::registered_record(JGX_REC_ELEMENT, JGX_EF_COUNT);
+        jgx::data::registered_record(JGX_REC_ELEMENT, JGX_EF_COUNT);
 /** @todo: guard this using DEBUG 
  * 
 */
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    jgx::check_record_field(r, JGX_EF_##TAG, KIND, RANK, sizeof(T), #comp);
+    jgx::data::check_record_field(r, JGX_EF_##TAG, KIND, RANK, sizeof(T), #comp);
 #include "jgx/jorek/records/element_record.def"
 #undef JGX_FIELD
     return r;

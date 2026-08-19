@@ -25,11 +25,11 @@
 #include <cstdint>
 #include <type_traits>
 #include "jgx/jorek/jgx_record_ids.h"
-#include "jgx/jgx_record_api.h"
+#include "jgx/data/record_api.h"
 #include "jgx/macros.h"
-#include "jgx/field_view.h"
-#include "jgx/pack.h"
-#include "jgx/record_set.h"
+#include "jgx/data/field_view.h"
+#include "jgx/data/pack.h"
+#include "jgx/data/record_set.h"
 #include "jgx/view.h"
 
 namespace jorek {
@@ -61,7 +61,7 @@ static_assert(JGX_PKR_P == JGX_PF_BASE_COUNT,
               "the extension must continue the base numbering");
 
 template <class L, class Real = double, class Int = int>
-struct particle_base_set : jgx::record_set {
+struct particle_base_set : jgx::data::record_set {
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) view<T, (RANK) + 1, L> comp;
 #include "jgx/jorek/records/particle_base_record.def"
 #undef JGX_FIELD
@@ -75,7 +75,7 @@ struct particle_base_set : jgx::record_set {
                               std::size_t n_particles) {
     s.n_records = n_particles;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_PF_##TAG], \
+    s.comp = jgx::data::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_PF_##TAG], \
                                            r.record_stride_bytes, n_particles);
 #include "jgx/jorek/records/particle_base_record.def"
 #undef JGX_FIELD
@@ -86,8 +86,8 @@ struct particle_base_set : jgx::record_set {
                               std::size_t n_particles) {
     s.n_records = n_particles;
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
-        jgx::soa_field_ptr(soa_base, r, JGX_PF_##TAG, n_particles),            \
+    s.comp = jgx::data::soa_field<T, (RANK) + 1>(                                    \
+        jgx::data::soa_field_ptr(soa_base, r, JGX_PF_##TAG, n_particles),            \
         r.field[JGX_PF_##TAG], n_particles);
 #include "jgx/jorek/records/particle_base_record.def"
 #undef JGX_FIELD
@@ -110,7 +110,7 @@ struct particle_kin_rel_set : particle_base_set<L, Real, Int> {
     particle_base_set<layout_stride, Real, Int>::fill_aos(s, aos_base, r,
                                                           n_particles);
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_PKR_##TAG],\
+    s.comp = jgx::data::aos_field<T, (RANK) + 1>(aos_base, r.field[JGX_PKR_##TAG],\
                                            r.record_stride_bytes, n_particles);
 #include "jgx/jorek/records/particle_kin_rel_record.def"
 #undef JGX_FIELD
@@ -123,8 +123,8 @@ struct particle_kin_rel_set : particle_base_set<L, Real, Int> {
     particle_base_set<layout_left, Real, Int>::fill_soa(s, soa_base, r,
                                                         n_particles);
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    s.comp = jgx::soa_field<T, (RANK) + 1>(                                    \
-        jgx::soa_field_ptr(soa_base, r, JGX_PKR_##TAG, n_particles),           \
+    s.comp = jgx::data::soa_field<T, (RANK) + 1>(                                    \
+        jgx::data::soa_field_ptr(soa_base, r, JGX_PKR_##TAG, n_particles),           \
         r.field[JGX_PKR_##TAG], n_particles);
 #include "jgx/jorek/records/particle_kin_rel_record.def"
 #undef JGX_FIELD
@@ -136,9 +136,9 @@ struct particle_kin_rel_set : particle_base_set<L, Real, Int> {
    * so no caller can skip the check. Host-side: the registry lives on the host. */
   static const jgx_record_desc& record() {
     const jgx_record_desc& r =
-        jgx::registered_record(JGX_REC_PARTICLE_KIN_REL, JGX_PKR_COUNT);
+        jgx::data::registered_record(JGX_REC_PARTICLE_KIN_REL, JGX_PKR_COUNT);
 #define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES)                              \
-    jgx::check_record_field(r, JGX_PKR_##TAG, KIND, RANK, sizeof(T), #comp);
+    jgx::data::check_record_field(r, JGX_PKR_##TAG, KIND, RANK, sizeof(T), #comp);
 #include "jgx/jorek/records/particle_base_record.def"
 #include "jgx/jorek/records/particle_kin_rel_record.def"
 #undef JGX_FIELD
