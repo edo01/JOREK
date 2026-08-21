@@ -10,20 +10,20 @@ module mod_runaway_evolution
     private
     public :: evolve_REs !< public for regtesting, used by evolve_particle_group
 
-    !> Interface only -- the body is in C++ (runaway_evolution_shim.cpp next door).
-    interface
-      subroutine jgx_host_runaway_evolution_evolve_REs(part_base, n_particles, &
-                                                       el_base, n_elements,    &
-                                                       nd_base, n_nodes,       &
-                                                       interp_base,            &
-                                                       rhs_data, rhs_ext,      &
-                                                       i_P_par, i_P_perp,      &
-                                                       i_j_Phi,                &
-                                                       mass, time, timestep,   &
-                                                       nstep, phi_search,      &
-                                                       not_found, nf_R, nf_Z,  &
-                                                       bad_i_from, bad_i_to)   &
-          bind(C, name="jgx_host_runaway_evolution_evolve_REs")
+    !> Interface only -- the bodies are in C++. One signature, because the two
+    !> entry points are one kernel; which one is bound is a build decision.
+    abstract interface
+      subroutine jgx_evolve_REs_iface(part_base, n_particles, &
+                                      el_base, n_elements,    &
+                                      nd_base, n_nodes,       &
+                                      interp_base,            &
+                                      rhs_data, rhs_ext,      &
+                                      i_P_par, i_P_perp,      &
+                                      i_j_Phi,                &
+                                      mass, time, timestep,   &
+                                      nstep, phi_search,      &
+                                      not_found, nf_R, nf_Z,  & !> debug
+                                      bad_i_from, bad_i_to) bind(C)
         use, intrinsic :: iso_c_binding, only: c_double, c_int32_t, c_ptr
         implicit none
         type(c_ptr),        value, intent(in)  :: part_base, el_base, nd_base, interp_base
@@ -36,6 +36,13 @@ module mod_runaway_evolution
         real(c_double),            intent(out) :: nf_R, nf_Z
       end subroutine
     end interface
+
+    procedure(jgx_evolve_REs_iface), &
+      bind(C, name="jgx_host_runaway_evolution_evolve_REs")     :: evolve_REs_host
+#ifdef JGX_HAS_DEVICE
+    procedure(jgx_evolve_REs_iface), &
+      bind(C, name="jgx_host_runaway_evolution_evolve_REs_device") :: evolve_REs_device
+#endif
 contains
 
   !> Gathers the runaway-electron projections of a particle group and pushes its
@@ -58,10 +65,19 @@ contains
     integer(c_int32_t) :: rhs_ext(5), not_found, bad_i_from, bad_i_to
     real(c_double)     :: nf_R, nf_Z
     integer            :: i
+    procedure(jgx_evolve_REs_iface), pointer :: evolve_REs_kernel
 
 #if defined(fullmhd) || STELLARATOR_MODEL
     error stop "evolve_REs: the C++ kernel is reduced MHD only (calc_EBpsiU_reduced)"
 #else
+    ! One kernel, two entry points: a device build runs on the device, a host
+    ! build over the Fortran storage in place. Decided by the build, not by input.
+#ifdef JGX_HAS_DEVICE
+    evolve_REs_kernel => evolve_REs_device
+#else
+    evolve_REs_kernel => evolve_REs_host
+#endif
+
     do i = 1, 5
       rhs_ext(i) = int(size(feedback_rhs, i), c_int32_t)
     end do
@@ -78,7 +94,7 @@ contains
 
       select type (fi => sim%fields%interp)
       type is (jorek_fields_interp_linear)
-        call jgx_host_runaway_evolution_evolve_REs(                             &
+        call evolve_REs_kernel(                                                 &
                c_loc(particles(1)), int(size(particles,1), c_int32_t),          &
                c_loc(sim%fields%element_list%element(1)),                       &
                int(sim%fields%element_list%n_elements, c_int32_t),              &

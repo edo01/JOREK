@@ -2,6 +2,11 @@
  * kernel behind mod_runaway_evolution.f90, next door.
  *
  * Reduced MHD with jorek_fields_interp_linear only.
+ *
+ * The per-particle body only. The launchers are one file out each way -- OpenMP
+ * over the particles in runaway_evolution_host.h, one thread per particle in
+ * runaway_evolution_device.hip.cpp -- so that nothing in here names a host
+ * parallel construct and the device translation unit can include it.
  */
 #ifndef JOREK_RUNAWAY_EVOLUTION_H
 #define JOREK_RUNAWAY_EVOLUTION_H
@@ -15,12 +20,13 @@
 #include "models/mod_settings/mod_settings.h"
 #include "particles/pushers/mod_kinetic_relativistic/kinetic_relativistic.h"
 #include "tools/mod_coordinate_transforms/coordinate_transforms.h"
+#include "jgx/atomic.h"
 #include "jgx/macros.h"
 #include "jgx/view.h"
 
 namespace jorek {
 
-/* feedback_rhs(n_degrees, n_vertex_max, n_elements, n_tor, n_proj) */
+/* feedback_rhs(n_degrees, n_vertex_max, n_elements, n_tor, n_proj). */
 using re_rhs_view = jgx::view<double, 5, jgx::layout_left>;
 
 /**
@@ -55,9 +61,9 @@ struct re_projection_indices {
  * @param phi_search see kinetic_relativistic::find_particle_st
  * @param[inout] diag  what the searches would have printed; first occurrence wins
  */
-template<bool Debug, class PS, class FS>
+template<bool Debug, class PS, class FS, class RhsView>
 JGX_HD inline void evolve_RE(PS& part, const std::size_t ip, const FS& fields,
-                             re_rhs_view rhs, const re_projection_indices& idx,
+                             RhsView rhs, const re_projection_indices& idx,
                              const double mass, const double time,
                              const double timestep, const int nstep,
                              const double phi_search,
@@ -137,10 +143,13 @@ JGX_HD inline void evolve_RE(PS& part, const std::size_t ip, const FS& fields,
                 const double v_jPhi = -proj_factor*static_cast<double>(part.q(ip))
                                     * EL_CHG*cylindrical_velocity[2]*part.x(ip, 0)*MU_ZERO;
 
+                /* Every worker deposits into the same element, so the += is a
+                 * device atomic and a plain += on the host, where the launcher's
+                 * reduction has already made the array private. */
                 for (std::size_t i_tor = 0; i_tor < n_tor; ++i_tor) {
-                    rhs(n, m, ie, i_tor, idx.P_par ) += HZ(i_tor)*v_Ppar;
-                    rhs(n, m, ie, i_tor, idx.P_perp) += HZ(i_tor)*v_Pperp;
-                    rhs(n, m, ie, i_tor, idx.j_Phi ) += HZ(i_tor)*v_jPhi;
+                    jgx::atomic_add(&rhs(n, m, ie, i_tor, idx.P_par ), HZ(i_tor)*v_Ppar);
+                    jgx::atomic_add(&rhs(n, m, ie, i_tor, idx.P_perp), HZ(i_tor)*v_Pperp);
+                    jgx::atomic_add(&rhs(n, m, ie, i_tor, idx.j_Phi ), HZ(i_tor)*v_jPhi);
                 }
             }
         }
@@ -163,61 +172,6 @@ JGX_HD inline void evolve_RE(PS& part, const std::size_t ip, const FS& fields,
         }
     } // steps
 } // evolve_RE
-
-/**
- * mod_runaway_evolution::evolve_REs -- gather the runaway-electron projections
- * of a particle group and push its particles.
- *
- * @param rhs_data  first element of feedback_rhs
- * @param rhs_ext   its five extents, in Fortran declaration order
- * @see evolve_RE for the remaining parameters
- */
-template<bool Debug, class PS, class FS>
-inline void evolve_REs(PS& part, const FS& fields,
-                       double* rhs_data, const std::size_t rhs_ext[5],
-                       const re_projection_indices& idx,
-                       const double mass, const double time,
-                       const double timestep, const int nstep,
-                       const double phi_search,
-                       kinetic_relativistic::push_diagnostics& diag) {
-    const std::size_t n_particles = part.n_particles;
-    const std::size_t rhs_size = rhs_ext[0]*rhs_ext[1]*rhs_ext[2]*rhs_ext[3]*rhs_ext[4];
-
-    #pragma omp parallel reduction(+: rhs_data[0:rhs_size])
-    {
-        /*
-         * rhs arrives as a bare pointer and its extents rather than as a view, because
-         * the reduction clause redirects rhs_data at a per-thread copy and only a view
-         * built inside the region points at it. Building one outside would have every
-         * thread accumulate into the original, which is both a race and a double count.
-         */
-        const re_rhs_view rhs(rhs_data, rhs_ext);
-
-        /* Each thread keeps its own first occurrence and the merge below takes
-         * whichever arrives first, so which one survives depends on the
-         * schedule -- as it did in the Fortran, where the message came from
-         * whichever thread reached the critical section first. */
-        kinetic_relativistic::push_diagnostics my_diag;
-
-        #pragma omp for schedule(runtime)
-        for (std::size_t ip = 0; ip < n_particles; ++ip)
-            evolve_RE<Debug>(part, ip, fields, rhs, idx, mass, time, timestep,
-                             nstep, phi_search, my_diag);
-
-        #pragma omp critical
-        {
-            if (my_diag.not_found != 0 && diag.not_found == 0) {
-                diag.not_found = my_diag.not_found;
-                diag.nf_R      = my_diag.nf_R;
-                diag.nf_Z      = my_diag.nf_Z;
-            }
-            if (my_diag.bad_i_to != 0 && diag.bad_i_to == 0) {
-                diag.bad_i_from = my_diag.bad_i_from;
-                diag.bad_i_to   = my_diag.bad_i_to;
-            }
-        }
-    }
-} // evolve_REs
 
 } // namespace jorek
 

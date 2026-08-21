@@ -148,6 +148,11 @@
       "jobs": 16
     },
     {
+      "name": "pitagora-hip",
+      "configurePreset": "pitagora-hip",
+      "jobs": 16
+    },
+    {
       "name": "viper-intel",
       "configurePreset": "viper-intel",
       "jobs": 16

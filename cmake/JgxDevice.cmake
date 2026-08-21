@@ -91,7 +91,8 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 # sources of the module it belongs to without icpx ever seeing it.
 set(JGX_DEVICE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/backends/hip/jgx_backend_hip.hip.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/models/phys_module/phys_device.hip.cpp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/models/phys_module/phys_device.hip.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/particles/mod_runaway_evolution/runaway_evolution_device.hip.cpp")
 
 set_source_files_properties(${JGX_DEVICE_SOURCES} PROPERTIES LANGUAGE CUDA)
 
