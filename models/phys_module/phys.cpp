@@ -9,26 +9,16 @@
 #include "models/constants/constants.h"
 
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 
 namespace {
 
-jorek::phys_state g_phys  = {};
-bool              g_valid = false;
+jorek::phys_state g_phys = {};
 
 }
 
 namespace jorek {
 
-const phys_state& host_phys() {
-  if (!g_valid) {
-    std::fprintf(stderr, "phys_module: read before mod_jgx_phys pushed a copy "
-                         "(call jgx_set_phys)\n");
-    std::abort();
-  }
-  return g_phys;
-}
+const phys_state& host_phys() { return g_phys; }
 
 } /* namespace jorek */
 
@@ -51,15 +41,11 @@ void jgx_c_set_phys(double F0, double central_mass, double central_density,
                              * central_mass * central_density * 1.0e20);
   g_phys.t_jorek = tstep * g_phys.t_norm;
 
-  g_valid = true;
-
   /* Keep the device mirror in step with the host copy, so that a kernel and the
-   * host path of the same routine cannot read different values. Guarded because
-   * the push lives in a device translation unit -- there is no such symbol to
-   * call when JGX_DEVICE=off. */
-#ifdef JGX_HAS_DEVICE
+   * host path of the same routine cannot read different values. Eight scalars,
+   * so on every push rather than on a dirty bit. Unconditional: with no device
+   * backend the copy goes nowhere (phys_device_off.cpp). */
   jorek::phys_push_to_device(g_phys);
-#endif
 }
 
 } /* extern "C" */
