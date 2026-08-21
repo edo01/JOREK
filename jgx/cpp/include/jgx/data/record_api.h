@@ -80,7 +80,14 @@ void    jgx_c_record_add_field(int32_t record_id, int32_t field_id,
                                size_t offset_bytes, int32_t elem_kind,
                                int32_t intra_rank, const size_t* intra_extents);
 void    jgx_c_record_end(int32_t record_id);
-int32_t jgx_c_record_is_registered(int32_t record_id);
+
+/* ---- the pack ----------------------------------------------------------- */
+/* AoS->SoA transposition on the device. */
+void jgx_c_pack(void* soa_base_d, const jgx_record_desc* r,
+                const void* aos_base_d, size_t n_records);
+/* SoA->AoS transposition on the device. */
+void jgx_c_unpack(void* aos_base_d, const void* soa_base_d,
+                  const jgx_record_desc* r, size_t n_records);
 
 #ifdef __cplusplus
 }  /* extern "C" */

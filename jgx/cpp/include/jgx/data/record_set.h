@@ -36,10 +36,10 @@
  *   aos  the Fortran array itself. A component sits at its offset inside a
  *        record and repeats at the record stride, so nothing is copied and
  *        nothing is owned -- the set is valid as long as that array is.
- *   soa  one packed block, owned by a jgx::data::host_pack_buffers or a
- *        jgx::data::device_pack that must outlive the set. A component sits at
- *        jgx::data::soa_field_offset() and runs contiguously; the record stride plays
- *        no part here, only the kind and the intra extents do.
+ *   soa  one packed block, owned by a jgx::data::device_pack that must outlive
+ *        the set. A component sits at jgx::data::soa_field_offset() and runs
+ *        contiguously; the record stride plays no part here, only the kind and
+ *        the intra extents do.
  */
 #ifndef JGX_DATA_RECORD_SET_H
 #define JGX_DATA_RECORD_SET_H
