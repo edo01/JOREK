@@ -1,6 +1,10 @@
 !  -*-f90-*-  (for emacs)    vim:set filetype=fortran:  (for vim)
 !
 !> Module containing a collection of interpolation methods
+!>
+!> DUPLICATED IN C++ as the interp_methods namespace, in interp_methods.h next
+!> door -- keep the two in step. The C++ clamps the cell index at the top edge of
+!> the mesh, where interp_bilinear below reads one past the array.
 
 module mod_interp_methods
 
