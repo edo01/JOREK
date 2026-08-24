@@ -88,6 +88,18 @@ void jgx_c_pack(void* soa_base_d, const jgx_record_desc* r,
 /* SoA->AoS transposition on the device. */
 void jgx_c_unpack(void* aos_base_d, const void* soa_base_d,
                   const jgx_record_desc* r, size_t n_records);
+/**
+ * Permute a packed SoA block: source record `rec` becomes destination record
+ * `dst_slot[rec]`, every field moving with it.
+ *
+ * @param dst_soa_d   destination block; must not alias the source.
+ * @param src_soa_d   source block, same record type and n_records.
+ * @param dst_slot_d  device array of n_records int32, required to be a
+ *                    permutation of [0, n_records).
+ */
+void jgx_c_scatter(void* dst_soa_d, const void* src_soa_d,
+                   const jgx_record_desc* r, size_t n_records,
+                   const int32_t* dst_slot_d);
 
 #ifdef __cplusplus
 }  /* extern "C" */

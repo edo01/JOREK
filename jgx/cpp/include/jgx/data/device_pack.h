@@ -57,8 +57,12 @@ class device_pack {
   }
 
   /* Unpack + pull a SoA data structure from the device. */
-  void download(void* aos_base) const {
-    jgx_c_unpack(aos_, soa_, &r_, n_records_);
+  void download(void* aos_base) const { download(aos_base, soa_); }
+
+  /* Unpack + pull a SoA data structure from the device by passing
+    the source when this is not the owned one. */
+  void download(void* aos_base, const void* soa_base) const {
+    jgx_c_unpack(aos_, soa_base, &r_, n_records_);
     jgx_c_pull(aos_base, aos_, aos_bytes_);
   }
 
