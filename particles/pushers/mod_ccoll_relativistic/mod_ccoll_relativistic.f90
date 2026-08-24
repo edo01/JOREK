@@ -4,6 +4,14 @@
 !> See Sarkimaki et al, "Adaptive time-stepping Monte Carlo integration of Coulomb collisions",
 !> Comp. Phys. Comm.
 !> For the partial screening operator, see PhD thesis by Linnea Hesslow.
+!>
+!> PARTLY DUPLICATED IN C++ as the ccoll namespace, in ccoll_relativistic.h next
+!> door -- keep the two in step. What is duplicated is the standard kinetic
+!> operator for one electron and one main ion species: ccoll_clog, the K / Dpar /
+!> Dperp outputs of ccoll_coeffs, the values of ccoll_mufuncs, interp_L0L1,
+!> ccoll_kinetic_relativistic_explicitpush and its wrapper. The partial-screening
+!> and guiding-centre operators, the derivative outputs, and the table
+!> construction are Fortran-only and are the general path.
 !<
 module mod_ccoll_relativistic
   use data_structure
