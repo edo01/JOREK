@@ -413,7 +413,7 @@ void evolve_collision_kernel(
     // Physics / simulation parameters
     double t_jorek, double sim_time, double group_mass, double tstep_part_adj,
     int num_particles,
-    // Collision physics: per-thread RNG streams + L0/L1 table + runtime params.
+    // Collision physics: per-PARTICLE RNG streams + L0/L1 table + runtime params.
     pcg32_state* __restrict__ rng_states,
     ccoll_data_c ccoll,
     re_gpu_params_c params
@@ -426,13 +426,20 @@ void evolve_collision_kernel(
 {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // Load this worker's RNG stream once per kernel launch (16 B round-trip).
-    pcg32_state rng = rng_states[tid];
-
     const int sp_stride = gridDim.x * blockDim.x;
     for (int j = tid; j < num_particles; j += sp_stride) {
         int i_elm = p_i_elm[j];
         if (i_elm <= 0) continue;   // lost particle: leave push output as is
+
+        // rng_states is indexed by particle SLOT, not by thread: the state is carried
+        // through the counting sort with the particle payload (scatter_copy_payload),
+        // so this is THIS particle's own stream, advanced across all previous steps.
+        // Keying by thread instead would hand a particle a different stream every step
+        // as the sort reshuffles slots, splicing many streams into one particle's noise
+        // history; keying by particle keeps one independent stream per particle, which
+        // is what the Wiener increments assume.  Slot-indexed access stays coalesced:
+        // consecutive lanes hold consecutive j.
+        pcg32_state rng = rng_states[j];
 
         double st[2] = {p_st[idx2(j, 0, num_particles)], p_st[idx2(j, 1, num_particles)]};
         double phi   =  p_x[idx2(j, 2, num_particles)];   // only x[2]=phi is needed
@@ -461,23 +468,26 @@ void evolve_collision_kernel(
         p_p[idx2(j, 0, num_particles)] = pm[0];
         p_p[idx2(j, 1, num_particles)] = pm[1];
         p_p[idx2(j, 2, num_particles)] = pm[2];
-    }
 
-    rng_states[tid] = rng;
+        // Persist this particle's advanced stream; the next sort carries it along.
+        rng_states[j] = rng;
+    }
 }
 
 
 // ---------------------------------------------------------------------------
-// rng_init_kernel: seed one pcg32 stream per worker thread.  Stream ids are
-// globally unique across MPI ranks: initseq = my_id*total_threads + tid
-// (mirrors the CPU initialize(seed, n_streams, i_stream) scheme).
+// rng_init_kernel: seed one pcg32 stream per PARTICLE.  The stream id is derived
+// from the particle's slot at launch time, offset by rank so ids are globally
+// unique across MPI ranks: initseq = my_id*RNG_RANK_STRIDE + j.
+// After seeding, the state travels with its particle through the in-launch sorts,
+// so the slot only ever picks the stream, never re-binds it mid-launch.
 // ---------------------------------------------------------------------------
 static __global__
 void rng_init_kernel(pcg32_state* __restrict__ states, int n,
                      unsigned long long seed, unsigned long long stream_base)
 {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid < n) pcg32_srandom(states[tid], seed, stream_base + tid);
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j < n) pcg32_srandom(states[j], seed, stream_base + j);
 }
 
 
@@ -533,6 +543,7 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     const size_t sz_st      = 2 * num_particles * sizeof(double);
     const size_t sz_i_elm   = num_particles * sizeof(int);
     const size_t sz_weight  = num_particles * sizeof(double);
+    const size_t sz_rng     = num_particles * sizeof(pcg32_state);  // per-particle RNG state
 
     const size_t sz_nl_x      = (size_t)N_COORD_TOR * NDEG * NDIM * n_nodes * sizeof(double);
     const size_t sz_nl_values = (size_t)N_TOR  * NDEG * N_FIELD_VARS * n_nodes * sizeof(double);
@@ -753,25 +764,44 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     int sort_call_count = 0;
 
     // --- Small-angle collision / RNG setup -------------------------------
-    // do_ccoll drives both the per-thread RNG streams and the L0/L1 device
+    // do_ccoll drives both the per-particle RNG streams and the L0/L1 device
     // table.  The radiation-reaction force needs no host-side setup (it is a
     // pure per-particle flag threaded into the push kernel).
     const bool do_ccoll = (re_params.re_ccoll != 0);
 
-    // One persistent pcg32 stream per grid-stride worker thread (the GPU
-    // analog of the CPU's one-stream-per-OMP-thread), with globally unique
-    // stream ids across MPI ranks.
-    const int total_threads = grid_size * SP_BLOCK_SIZE;
-    pcg32_state* d_rng = nullptr;
+    // One persistent pcg32 stream per PARTICLE, not per worker thread.
+    //
+    // Why per particle: the counting sort permutes the particle arrays every kinetic
+    // step, so a thread-keyed stream feeds a different particle each step.  Each
+    // particle's Wiener increments would then be spliced together from many streams,
+    // and each stream would be shared out among many particles -- the small-angle
+    // collision operator assumes one independent Brownian path per particle, so this
+    // is a statistical defect, not just a bookkeeping one.  Keying the state by
+    // particle and moving it with the sort (see scatter_copy_payload) gives every
+    // particle one continuous, independent stream for the whole launch.
+    //
+    // Stream ids are globally unique across MPI ranks: initseq = my_id*STRIDE + slot.
+    // The stride is a fixed constant rather than the particle count so a rank's ids
+    // do not shift when the particle count changes between fluid steps.
+    //
+    // d_rng holds the state for the current slot order; d_rng_alt is the scatter
+    // scratch the sort swaps with, exactly like d_x/d_x_alt.
+    constexpr unsigned long long RNG_RANK_STRIDE = 1000000000000ULL;  // 1e12 slots/rank
+    pcg32_state* d_rng     = nullptr;
+    pcg32_state* d_rng_alt = nullptr;
     if (do_ccoll) {
-        HIP_CHECK(hipMalloc(&d_rng, (size_t)total_threads * sizeof(pcg32_state)));
-        int init_blocks = (total_threads + 255) / 256;
+        HIP_CHECK(hipMalloc(&d_rng,     sz_rng));
+        HIP_CHECK(hipMalloc(&d_rng_alt, sz_rng));
+        int init_blocks = (num_particles + 255) / 256;
         hipLaunchKernelGGL(rng_init_kernel, dim3(init_blocks), dim3(256), 0, 0,
-            d_rng, total_threads,
+            d_rng, num_particles,
             (unsigned long long)re_params.rng_seed,
-            (unsigned long long)sim.my_id * (unsigned long long)total_threads);
+            (unsigned long long)sim.my_id * RNG_RANK_STRIDE);
         HIP_CHECK(hipGetLastError());
     }
+    // The sort swaps d_rng with d_rng_alt, so keep the original handles to free.
+    pcg32_state* const d_rng_orig     = d_rng;
+    pcg32_state* const d_rng_alt_orig = d_rng_alt;
 
     // Device copy of the L0/L1 table: d_ccoll keeps h_ccoll's scalars but its
     // pointers are replaced with device buffers.  Passed by value to kernels.
@@ -844,7 +874,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
             d_x_curr, d_p_curr, d_st_curr, d_i_elm_curr, d_weight_curr,
             d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt,
             num_particles, n_elements, d_hist, d_offsets, d_cursors,
-            d_block_sums, d_block_offsets);
+            d_block_sums, d_block_offsets,
+            d_rng, d_rng_alt);
         ++sort_call_count;
 #if GPU_DEBUG == 1
         HIP_CHECK(hipEventRecord(t_sort_stop, 0));
@@ -1066,7 +1097,8 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
     HIP_CHECK(hipFree(d_stg_phi));
     HIP_CHECK(hipFree(d_stg_w));
     if (d_du_dump) HIP_CHECK(hipFree(d_du_dump));
-    if (d_rng)     HIP_CHECK(hipFree(d_rng));
+    if (d_rng_orig)     HIP_CHECK(hipFree(d_rng_orig));
+    if (d_rng_alt_orig) HIP_CHECK(hipFree(d_rng_alt_orig));
     if (d_lut_lu)  HIP_CHECK(hipFree(d_lut_lu));
     if (d_lut_lth) HIP_CHECK(hipFree(d_lut_lth));
     if (d_lut_L0)  HIP_CHECK(hipFree(d_lut_L0));

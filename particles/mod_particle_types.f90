@@ -1260,16 +1260,17 @@ end subroutine deallocate_particle_arrays
     integer, intent(in) :: np
     type(particle_kinetic_relativistic), intent(inout) :: particles(:)
 
-    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:)
+    real(c_double), pointer :: x_arr(:), p_arr(:), st_arr(:), w_arr(:)
     integer(c_int), pointer :: ielm_arr(:)
     integer :: j
 
-    call c_f_pointer(soa%x,     x_arr,    [3*np])
-    call c_f_pointer(soa%p,     p_arr,    [3*np])
-    call c_f_pointer(soa%st,    st_arr,   [2*np])
-    call c_f_pointer(soa%i_elm, ielm_arr, [np])
+    call c_f_pointer(soa%x,      x_arr,    [3*np])
+    call c_f_pointer(soa%p,      p_arr,    [3*np])
+    call c_f_pointer(soa%st,     st_arr,   [2*np])
+    call c_f_pointer(soa%i_elm,  ielm_arr, [np])
+    call c_f_pointer(soa%weight, w_arr,    [np])
 
-    !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, ielm_arr) private(j)
+    !$omp parallel do default(none) shared(particles, np, x_arr, p_arr, st_arr, ielm_arr, w_arr) private(j)
     do j = 1, np
       particles(j)%x(1)  = x_arr(j)
       particles(j)%x(2)  = x_arr(j + np)
@@ -1280,6 +1281,13 @@ end subroutine deallocate_particle_arrays
       particles(j)%st(1) = st_arr(j)
       particles(j)%st(2) = st_arr(j + np)
       particles(j)%i_elm = int(ielm_arr(j), 4)
+      ! Weight MUST be written back even though the kernel never modifies a particle's
+      ! weight: the GPU counting-sorts the particles internally and copies back the
+      ! SORTED order, so slot j holds a different particle than it did at H2D time.
+      ! Leaving the AoS weight untouched would pair each particle with the previous
+      ! occupant's weight from the second fluid step on.  w_arr is permuted by exactly
+      ! the same permutation as x/p/st/i_elm, so copying it keeps the slot consistent.
+      particles(j)%weight = w_arr(j)
     end do
     !$omp end parallel do
   end subroutine particles_SoA_to_AoS

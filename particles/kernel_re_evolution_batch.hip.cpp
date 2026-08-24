@@ -755,11 +755,16 @@ void launch_evolve_REs(particle_sim sim, double* h_feedback_rhs,
         HIP_CHECK(hipEventCreate(&t_sort_stop));
         HIP_CHECK(hipEventRecord(t_sort_start, 0));
 #endif
+        // The batch kernel does not implement small-angle collisions, so there is no
+        // per-particle RNG state to permute.  The sort takes these by reference and
+        // skips the RNG scatter/swap entirely when they are null.
+        pcg32_state *d_rng_null = nullptr, *d_rng_alt_null = nullptr;
         sort_particles_by_i_elm_gpu(
             d_x, d_p, d_st, d_i_elm, d_weight,
             d_x_sorted, d_p_sorted, d_st_sorted, d_i_elm_sorted, d_weight_sorted,
             num_particles, n_elements, d_hist, d_offsets, d_cursors,
-            d_block_sums, d_block_offsets);
+            d_block_sums, d_block_offsets,
+            d_rng_null, d_rng_alt_null);
         ++sort_call_count;
 #if GPU_DEBUG == 1
         HIP_CHECK(hipEventRecord(t_sort_stop, 0));

@@ -392,7 +392,13 @@ void scatter_copy_payload(
     const double* __restrict__ st_in, const double* __restrict__ weight_in,
     double* __restrict__ x_out,  double* __restrict__ p_out,
     double* __restrict__ st_out, int* __restrict__ i_elm_out,
-    double* __restrict__ weight_out)
+    double* __restrict__ weight_out,
+    // Per-particle carried RNG state: rng_states is indexed by particle SLOT, so it
+    // must be permuted with exactly the same permutation as the particle payload for
+    // each particle's pcg32 stream to keep following it across steps.  Null when the
+    // group runs without small-angle collisions (no state to carry).
+    const pcg32_state* __restrict__ rng_in,
+    pcg32_state* __restrict__ rng_out)
 {
     x_out[idx2(pos, 0, num_particles)] = x_in[idx2(j, 0, num_particles)];
     x_out[idx2(pos, 1, num_particles)] = x_in[idx2(j, 1, num_particles)];
@@ -407,6 +413,8 @@ void scatter_copy_payload(
 
     weight_out[pos] = weight_in[j];
     i_elm_out[pos] = i_elm;
+
+    if (rng_out) rng_out[pos] = rng_in[j];
 }
 
 // scatter_particles_by_i_elm_shared (block-local rank): each block owns a CONTIGUOUS
@@ -435,7 +443,9 @@ void scatter_particles_by_i_elm_shared(
     double* __restrict__ p_out,
     double* __restrict__ st_out,
     int*    __restrict__ i_elm_out,
-    double* __restrict__ weight_out)
+    double* __restrict__ weight_out,
+    const pcg32_state* __restrict__ rng_in,
+    pcg32_state* __restrict__ rng_out)
 {
     extern __shared__ int sh_scatter[];
     int* sh_cnt  = sh_scatter;              // [n_bins] local per-bin count
@@ -467,7 +477,8 @@ void scatter_particles_by_i_elm_shared(
     int pos = sh_base[key] + my_rank;
     scatter_copy_payload(j, pos, i_elm, num_particles,
                          x_in, p_in, st_in, weight_in,
-                         x_out, p_out, st_out, i_elm_out, weight_out);
+                         x_out, p_out, st_out, i_elm_out, weight_out,
+                         rng_in, rng_out);
 }
 
 // scatter_particles_by_i_elm_global: no LDS.  Each lane reserves its output slot with a
@@ -490,7 +501,9 @@ void scatter_particles_by_i_elm_global(
     double* __restrict__ p_out,
     double* __restrict__ st_out,
     int*    __restrict__ i_elm_out,
-    double* __restrict__ weight_out)
+    double* __restrict__ weight_out,
+    const pcg32_state* __restrict__ rng_in,
+    pcg32_state* __restrict__ rng_out)
 {
     long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= num_particles) return;
@@ -500,7 +513,8 @@ void scatter_particles_by_i_elm_global(
     int pos   = warp_aggregated_atomic_reserve(&cursors[key], key);
     scatter_copy_payload(j, pos, i_elm, num_particles,
                          x_in, p_in, st_in, weight_in,
-                         x_out, p_out, st_out, i_elm_out, weight_out);
+                         x_out, p_out, st_out, i_elm_out, weight_out,
+                         rng_in, rng_out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1842,7 +1856,12 @@ static void sort_particles_by_i_elm_gpu(
     double*& d_x_alt, double*& d_p_alt, double*& d_st_alt, int*& d_i_elm_alt, double*& d_weight_alt,
     int num_particles, int n_elements,
     int* d_hist, int* d_offsets, int* d_cursors,
-    int* d_block_sums, int* d_block_offsets)
+    int* d_block_sums, int* d_block_offsets,
+    // Per-particle carried RNG state.  rng_states is indexed by particle slot, so it
+    // is scattered with the same permutation as the particle arrays and swapped with
+    // its scratch buffer, keeping each particle's pcg32 stream attached to it across
+    // steps.  Both null when the group runs without small-angle collisions.
+    pcg32_state*& d_rng, pcg32_state*& d_rng_alt)
 {
     if (num_particles <= 0) return;
 
@@ -1921,13 +1940,15 @@ static void sort_particles_by_i_elm_gpu(
             dim3(grid_size), dim3(SORTING_BLOCK_SIZE), scatter_shared_bytes, 0,
             d_x, d_p, d_st, d_i_elm, d_weight,
             num_particles, n_bins, d_cursors,
-            d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt);
+            d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt,
+            d_rng, d_rng_alt);
     } else {
         hipLaunchKernelGGL(scatter_particles_by_i_elm_global,
             dim3(grid_size), dim3(SORTING_BLOCK_SIZE), 0, 0,
             d_x, d_p, d_st, d_i_elm, d_weight,
             num_particles, n_bins, d_cursors,
-            d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt);
+            d_x_alt, d_p_alt, d_st_alt, d_i_elm_alt, d_weight_alt,
+            d_rng, d_rng_alt);
     }
     HIP_CHECK(hipGetLastError());
 
@@ -1956,5 +1977,6 @@ static void sort_particles_by_i_elm_gpu(
     std::swap(d_st, d_st_alt);
     std::swap(d_i_elm, d_i_elm_alt);
     std::swap(d_weight, d_weight_alt);
+    if (d_rng) std::swap(d_rng, d_rng_alt);
 }
 
