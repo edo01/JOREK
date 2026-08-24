@@ -71,6 +71,7 @@ set(JOREK_SOURCE_DIRS
   tools/mod_bessel
   tools/mod_coordinate_transforms
   tools/mod_interp_methods
+  tools/mod_pcg32
   vacuum)
 
 # The IMAS coupling only compiles against the ITER Access Layer.

@@ -114,6 +114,7 @@ DIRS := diagnostics				\
 	tools/mod_bessel			\
 	tools/mod_coordinate_transforms		\
 	tools/mod_interp_methods		\
+	tools/mod_pcg32				\
 	tools/tests				\
 	non_regression_tests/unit_tests		\
 	datatypes				\

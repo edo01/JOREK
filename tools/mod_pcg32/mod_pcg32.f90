@@ -1,3 +1,8 @@
+!> The Fortran face of the pcg32 generator.
+!>
+!> The bodies are in C++ (pcg32.h next door, entry points in pcg32_shim.cpp);
+!> the interfaces below are unchanged from when they bound to the reference C
+!> implementation, so nothing outside this module can tell the difference.
 module mod_pcg32
 use iso_c_binding, only: c_int32_t, c_int64_t
 use phys_module, only: use_fixed_rng_value, fixed_rng_value
