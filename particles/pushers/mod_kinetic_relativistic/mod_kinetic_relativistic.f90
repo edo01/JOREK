@@ -173,6 +173,11 @@ end subroutine volume_preserving_push_jorek
 !> This subroutine integrates a relativistic particle trajectory in JOREK
 !> fields using the Volume Preserving Algorithm (VPA) while also including
 !> the effect from the radiation reaction force
+!>
+!> DUPLICATED IN C++ as kinetic_relativistic::volume_preserving_push_jorek with
+!> use_radreact set, in kinetic_relativistic.h -- keep the two in step. The two
+!> Fortran subroutines differ by one call, so the port carries the difference as
+!> a flag rather than as a second body.
 subroutine volume_preserving_radiation_push_jorek(particle,fields,mass,time,timestep,ifail)
   ! load functions
   use mod_coordinate_transforms, only: cartesian_to_cylindrical

@@ -22,6 +22,9 @@ extern "C" {
      * sends every other strategy down the Fortran path.
      * 
      * The particle set is a particle_kin_rel_set.
+     *
+     * use_radreact selects volume_preserving_radiation_push_jorek instead; a
+     * Fortran logical, so it is tested against zero and never against one.
      */
     void jgx_host_volume_preserving_push_jorek(void* part_base,
                                                void* el_base, const int32_t n_elements,
@@ -30,6 +33,7 @@ extern "C" {
                                                const double mass, const double time,
                                                const double timestep,
                                                const double phi_search,
+                                               const int32_t use_radreact,
                                                int32_t* ifail,
                                                int32_t* not_found,
                                                double* nf_R, double* nf_Z,
@@ -47,7 +51,8 @@ extern "C" {
         kinetic_relativistic::push_diagnostics diag;
 
         kinetic_relativistic::volume_preserving_push_jorek<kFindRZNearbyDebug>(
-            part, 0, fields, mass, time, timestep, phi_search, fail, diag);
+            part, 0, fields, mass, time, timestep, phi_search,
+            use_radreact != 0, fail, diag);
 
         *ifail      = static_cast<int32_t>(fail);
         *not_found  = static_cast<int32_t>(diag.not_found);

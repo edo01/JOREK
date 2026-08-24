@@ -7,6 +7,11 @@
 !!
 !! The implemented operators are taken from here:
 !! https://arxiv.org/pdf/1412.1966.pdf
+!!
+!! DUPLICATED IN C++ as the radreactforce namespace, in radreactforce.h next
+!! door -- keep the two in step. Only radreactforce_chartime and
+!! radreactforce_kinetic are ported; the guiding-centre operators have no ported
+!! caller and are Fortran-only.
 module mod_radreactforce
   use constants, only: EL_CHG, SPEED_OF_LIGHT, ATOMIC_MASS_UNIT, PI, EPS_ZERO
   use mod_particle_types

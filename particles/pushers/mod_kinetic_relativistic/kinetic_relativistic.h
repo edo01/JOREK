@@ -18,6 +18,7 @@
 
 #include "grids/grid_utils/mod_find_rz_nearby/find_rz_nearby.h"
 #include "models/constants/constants.h"
+#include "particles/pushers/mod_radreactforce/radreactforce.h"
 #include "particles/pushers/mod_pusher_tools/pusher_tools.h"
 #include "tools/mod_coordinate_transforms/coordinate_transforms.h"
 #include "jgx/macros.h"
@@ -166,6 +167,9 @@ JGX_HD inline void find_particle_st(PS& part, const std::size_t ip, const FS& fi
  * @param time         current time [s]
  * @param timestep     time step [s]
  * @param phi_search   see find_particle_st
+ * @param use_radreact whether to apply the radiation-reaction force after the
+ *                     second half-step, which is what the Fortran spells as the
+ *                     separate volume_preserving_radiation_push_jorek
  * @param[out] ifail   find_RZ_nearby's own code, from whichever of the two
  *                     searches ran last. Untouched when the particle was
  *                     already lost on entry, as in the Fortran.
@@ -179,6 +183,7 @@ JGX_HD inline void volume_preserving_push_jorek(PS& part, const std::size_t ip,
                                                 const double mass, const double time,
                                                 const double timestep,
                                                 const double phi_search,
+                                                const bool use_radreact,
                                                 int& ifail, push_diagnostics& diag) {
     diag = push_diagnostics{};
 
@@ -225,6 +230,14 @@ JGX_HD inline void volume_preserving_push_jorek(PS& part, const std::size_t ip,
     coordinate_transforms::vector_cylindrical_to_cartesian(part.x(ip, 2), B_, B_cart);
     volume_preserving_second_half_step_jorek(part, ip, half_position, scaling_factor,
                                              E_cart, B_cart, mass, timestep);
+
+    /* The one line that separates volume_preserving_radiation_push_jorek from
+     * this routine in the Fortran: the radiation-reaction force, taking the
+     * cylindrical B at the half-step. A runtime flag rather than a second
+     * instantiation -- it is uniform over a launch, and the locals it needs are
+     * live only inside the branch. */
+    if (use_radreact)
+        radreactforce::radreactforce_kinetic(part, ip, B_, timestep, mass);
 
     // transform back from cartesian to cylindrical coordinates
     coordinate_transforms::cartesian_to_cylindrical(half_position, half_position + 3);
