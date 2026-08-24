@@ -1146,6 +1146,8 @@ write(*,'(1x,a)',advance='no') ' USE_DOMM            : '
         write(*,REAL_FMT) 're_energy,              ',part_group_configs(group_num)%re_energy
         write(*,REAL_FMT) 're_std_energy,          ',part_group_configs(group_num)%re_std_energy
         write(*,REAL_FMT) 're_pitch,               ',part_group_configs(group_num)%re_pitch
+        write(*,LOGI_FMT) 'use_ccoll,              ',part_group_configs(group_num)%use_ccoll
+        write(*,LOGI_FMT) 'use_radreact,           ',part_group_configs(group_num)%use_radreact
       endif
 
       ! epf (energetic particles, full pressure tensor coupling)

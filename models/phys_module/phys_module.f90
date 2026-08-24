@@ -1116,6 +1116,8 @@ module phys_module
     real*8              :: re_energy               !< energy [eV] of the runaway electrons in the group
     real*8              :: re_std_energy           !< standard deviation of the energy [eV] of the runaway electrons in the group
     real*8              :: re_pitch                !< pitch between RE momentum and magnetic field line (i.e. p_re_par/p_re_tot)
+    logical             :: use_ccoll               !< switch on small-angle Coulomb collisions for group (partial screening not supported)
+    logical             :: use_radreact            !< switch on the radiation-reaction force in the RE pusher
 
     ! =============== for energetic particles ('epc', 'epp', 'epf' coupling schemes) ==========
     real*8              :: T_maxwell               !< Maxwellian temperature [eV] for the energetic particles

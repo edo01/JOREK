@@ -311,6 +311,18 @@ subroutine check_no_rep_params(group_num)
     call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   endif
 
+  if (part_group_configs(group_num)%use_ccoll) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_ccoll can only be .t. for groups with coupling scheme 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
+  if (part_group_configs(group_num)%use_radreact) then
+    write(*,*) "ERROR: incompatible setting enabled for group '", part_group_configs(group_num)%id, "':"
+    write(*,*) "  use_radreact can only be .t. for groups with coupling scheme 'rep'"
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
+  endif
+
 end subroutine check_no_rep_params
 
 !> CHecks that no epf/rep parameters have been set - used for non epf and non rep groups

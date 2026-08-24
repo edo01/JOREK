@@ -929,6 +929,8 @@ part_group_configs(:)%num_re                 = 0.d0
 part_group_configs(:)%re_energy              = 0.d0
 part_group_configs(:)%re_std_energy          = 0.d0
 part_group_configs(:)%re_pitch               = 0.d0
+part_group_configs(:)%use_ccoll              = .false.
+part_group_configs(:)%use_radreact           = .false.
 
 !----- specific to epf
 part_group_configs(:)%T_maxwell              = 0.d0
