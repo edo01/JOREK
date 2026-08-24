@@ -76,8 +76,10 @@ DIRS := diagnostics				\
 	particles/mod_runaway_evolution		\
 	particles/particle_types		\
 	particles/pushers			\
+	particles/pushers/mod_ccoll_relativistic \
 	particles/pushers/mod_kinetic_relativistic \
 	particles/pushers/mod_pusher_tools	\
+	particles/pushers/mod_radreactforce	\
 	particles/examples			\
 	particles/diagnostics			\
 	particles/tests				\
@@ -109,7 +111,9 @@ DIRS := diagnostics				\
 	diagnostics/postproc			\
 	tools					\
 	tools/fruit				\
+	tools/mod_bessel			\
 	tools/mod_coordinate_transforms		\
+	tools/mod_interp_methods		\
 	tools/tests				\
 	non_regression_tests/unit_tests		\
 	datatypes				\

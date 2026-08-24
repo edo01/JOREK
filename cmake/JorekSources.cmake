@@ -54,8 +54,10 @@ set(JOREK_SOURCE_DIRS
   particles/initialisers
   particles/projection_functions
   particles/pushers
+  particles/pushers/mod_ccoll_relativistic
   particles/pushers/mod_kinetic_relativistic
   particles/pushers/mod_pusher_tools
+  particles/pushers/mod_radreactforce
   # Not optional despite the name: the synthetic-light postprocessors in
   # particles/postprocessors/lights `use mod_particle_common_test_tools`, which
   # lives here. The Make build always had this directory in DIRS, so the
@@ -66,7 +68,9 @@ set(JOREK_SOURCE_DIRS
   solvers
   tools
   tools/fruit
+  tools/mod_bessel
   tools/mod_coordinate_transforms
+  tools/mod_interp_methods
   vacuum)
 
 # The IMAS coupling only compiles against the ITER Access Layer.
