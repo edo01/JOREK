@@ -50,10 +50,10 @@
       }
     },
     {
-      "name": "pitagora-hip",
+      "name": "pitagora-gpu-hip",
       "inherits": "pitagora-intel",
-      "displayName": "Pitagora GPU - Intel oneAPI plus the JGX HIP backend (H100)",
-      "description": "Requires the pitagora-intel modules and, additively, `source hip.env`. The .hip.cpp sources are compiled by nvcc: HIP-on-NVIDIA is header-only over CUDA, so hipcc would only exec nvcc anyway.",
+      "displayName": "Pitagora GPU - Intel oneAPI plus the HIP backend (H100)",
+      "description": "Requires the pitagora-intel modules and the hip library to be installed.",
       "cacheVariables": {
         "JGX_DEVICE": "hip",
         "JGX_DEVICE_ARCH": "sm_90",
@@ -92,6 +92,17 @@
       "displayName": "Viper CPU - Intel oneAPI, debug build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "viper-gpu-hip",
+      "inherits": "viper-intel",
+      "displayName": "Viper GPU - Intel oneAPI plus the JGX HIP backend (MI300A)",
+      "description": "Requires the intel modules and rocm",
+      "cacheVariables": {
+        "JGX_DEVICE": "hip",
+        "JGX_DEVICE_ARCH": "gfx942",
+        "CMAKE_HIP_FLAGS": "-Xarch_host -mcmodel=medium"
       }
     },
     {
@@ -148,8 +159,8 @@
       "jobs": 16
     },
     {
-      "name": "pitagora-hip",
-      "configurePreset": "pitagora-hip",
+      "name": "pitagora-gpu-hip",
+      "configurePreset": "pitagora-gpu-hip",
       "jobs": 16
     },
     {
@@ -167,6 +178,11 @@
     {
       "name": "viper-intel-debug",
       "configurePreset": "viper-intel-debug",
+      "jobs": 16
+    },
+    {
+      "name": "viper-gpu-hip",
+      "configurePreset": "viper-gpu-hip",
       "jobs": 16
     },
     {

@@ -13,11 +13,13 @@ message(STATUS "  C / C++ compiler  : ${CMAKE_C_COMPILER_ID} / ${CMAKE_CXX_COMPI
 message(STATUS "  MPI               : ${MPI_Fortran_VERSION}")
 if(JGX_DEVICE STREQUAL "off")
   message(STATUS "  JGX device        : off (host only)")
+elseif(JGX_DEVICE_AMD_ARCH)
+  message(STATUS "  JGX device        : ${JGX_DEVICE} (${JGX_DEVICE_ARCH}), "
+                 "compiled as ${CMAKE_HIP_COMPILER_ID} HIP ${CMAKE_HIP_COMPILER_VERSION}")
 else()
   message(STATUS "  JGX device        : ${JGX_DEVICE} (${JGX_DEVICE_ARCH}), "
                  "compiled as ${CMAKE_CUDA_COMPILER_ID} CUDA ${CMAKE_CUDA_COMPILER_VERSION}")
 endif()
-#@TODO: AMD branch
 message(STATUS "  BLAS/LAPACK       : ${JOREK_BLAS_LAPACK_SUMMARY}")
 if(JOREK_USE_HDF5)
   message(STATUS "  HDF5              : ${JOREK_HDF5_SUMMARY}")
