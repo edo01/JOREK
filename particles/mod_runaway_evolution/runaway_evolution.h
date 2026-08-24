@@ -8,26 +8,32 @@
  * runaway_evolution_device.hip.cpp -- so that nothing in here names a host
  * parallel construct and the device translation unit can include it.
  *
- * One step is three pieces: re_project (what the particle contributes, needs a
+ * One step is four pieces: re_project (what the particle contributes, needs a
  * field evaluation), re_deposit (spreading that over the element's degrees of
- * freedom) and the pusher. They are separate because the device runs them as
- * separate kernels: the deposit is atomic-free only when one thread owns a
- * feedback cell and sums the whole element's run into it, which is a different
- * decomposition from one-thread-per-particle. The host launcher calls all three
- * back to back on one particle, which is what the Fortran did.
+ * freedom), the pusher, and -- when the group asks for it -- the small-angle
+ * Coulomb collision. They are separate because the device runs them as separate
+ * kernels: the deposit is atomic-free only when one thread owns a feedback cell
+ * and sums the whole element's run into it, which is a different decomposition
+ * from one-thread-per-particle, and the collision is split off the push so that
+ * its Bessel and table work does not sit on the pusher's register budget. The
+ * host launcher calls all of them back to back on one particle, which is what
+ * the Fortran did.
  */
 #ifndef JOREK_RUNAWAY_EVOLUTION_H
 #define JOREK_RUNAWAY_EVOLUTION_H
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 #include "elements/mod_basisfunctions/basisfunctions.h"
 #include "elements/mod_interp/interp.h"
 #include "models/constants/constants.h"
 #include "models/mod_settings/mod_settings.h"
+#include "particles/pushers/mod_ccoll_relativistic/ccoll_relativistic.h"
 #include "particles/pushers/mod_kinetic_relativistic/kinetic_relativistic.h"
 #include "tools/mod_coordinate_transforms/coordinate_transforms.h"
+#include "tools/mod_pcg32/pcg32.h"
 #include "jgx/atomic.h"
 #include "jgx/macros.h"
 #include "jgx/view.h"
@@ -63,6 +69,46 @@ struct re_projection_indices {
     std::size_t P_perp = 0;
     std::size_t j_Phi  = 0;
 };
+
+/**
+ * The optional physics of a runaway group, as one kernel argument.
+ *
+ * Both flags are namelist settings of the particle group
+ * (part_group_configs%use_ccoll / %use_radreact) and are uniform over a launch,
+ * so they are runtime values rather than template parameters: a second
+ * instantiation of the pusher would double the largest kernel in the loop to
+ * save one predicated branch at the end of it.
+ *
+ * The table is read only when use_ccoll is set; when it is not, the four views
+ * inside it are null and nothing dereferences them.
+ */
+template <class Real = double>
+struct re_options {
+    ccoll::ccoll_table<Real> ccoll;   /*< the L0/L1 table and the background ions */
+    bool use_ccoll    = false;        /*< collide after each push */
+    bool use_radreact = false;        /*< radiation-reaction force inside the push */
+};
+
+/**
+ * The rule that binds a generator stream to a particle. One place, because the
+ * host and the device arms must agree on it exactly.
+ *
+ * The stream is chosen by the particle's index in the array Fortran handed
+ * over, not by the worker that happens to run it. On the host that makes the
+ * collisions independent of the OpenMP schedule; on the device the state is
+ * carried through the counting sort with its particle, so the same particle
+ * draws the same numbers in the same order in both arms -- which is what makes
+ * a device build's collisions bit-comparable against a host build's.
+ *
+ * @param seed         one seed for the whole run, drawn on rank 0 and broadcast
+ * @param stream_base  the rank's first stream id; the facade spaces the ranks
+ *                     far enough apart that no two overlap
+ */
+JGX_HD inline void re_seed_stream(pcg32::state& rng, const std::size_t ip,
+                                  const std::uint64_t seed,
+                                  const std::uint64_t stream_base) {
+    pcg32::srandom(rng, seed, stream_base + static_cast<std::uint64_t>(ip));
+}
 
 /**
  * What one particle contributes to the feedback, before it is spread over the
@@ -233,6 +279,9 @@ JGX_HD inline void re_deposit(const re_projection& pr, const FS& fields,
  * @param fields     the grid and the interpolation strategy
  * @param rhs        the feedback array this thread accumulates into
  * @param idx        which of rhs' last dimension the three projections use
+ * @param opt        the group's optional physics
+ * @param rng        this particle's generator state, read only when collisions
+ *                   are on and advanced by three draws per step
  * @param mass       particle mass [AMU]
  * @param time       current time [s]
  * @param timestep   time step [s]
@@ -240,9 +289,10 @@ JGX_HD inline void re_deposit(const re_projection& pr, const FS& fields,
  * @param phi_search see kinetic_relativistic::find_particle_st
  * @param[inout] diag  what the searches would have printed; first occurrence wins
  */
-template<bool Debug, class PS, class FS, class RhsView>
+template<bool Debug, class PS, class FS, class RhsView, class Real>
 JGX_HD inline void evolve_RE(PS& part, const std::size_t ip, const FS& fields,
                              RhsView rhs, const re_projection_indices& idx,
+                             const re_options<Real>& opt, pcg32::state& rng,
                              const double mass, const double time,
                              const double timestep, const int nstep,
                              const double phi_search,
@@ -257,7 +307,15 @@ JGX_HD inline void evolve_RE(PS& part, const std::size_t ip, const FS& fields,
         int ifail = 0;
         kinetic_relativistic::push_diagnostics step_diag;
         kinetic_relativistic::volume_preserving_push_jorek<Debug>(
-            part, ip, fields, mass, time, timestep, phi_search, ifail, step_diag);
+            part, ip, fields, mass, time, timestep, phi_search,
+            opt.use_radreact, ifail, step_diag);
+
+        /* Push first, then collide, and only while the particle is still in the
+         * mesh: the collision operator interpolates the background at (i_elm,
+         * s, t), which a lost particle no longer has. */
+        if (opt.use_ccoll && part.i_elm(ip) > 0)
+            ccoll::ccoll_kinetic_relativistic_push(opt.ccoll, part, ip, fields,
+                                                   mass, time, timestep, rng);
 
         if (step_diag.not_found != 0 && diag.not_found == 0) {
             diag.not_found = step_diag.not_found;

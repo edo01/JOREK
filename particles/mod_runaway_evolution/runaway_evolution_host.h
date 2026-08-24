@@ -5,6 +5,8 @@
 #define JOREK_RUNAWAY_EVOLUTION_HOST_H
 
 #include <cstddef>
+#include <cstdint>
+#include <vector>
 
 #include "particles/mod_runaway_evolution/runaway_evolution.h"
 
@@ -13,20 +15,32 @@ namespace jorek {
 /**
  * mod_runaway_evolution::evolve_REs
  *
- * @param rhs_data  first element of feedback_rhs
- * @param rhs_ext   its five extents, in Fortran declaration order
+ * @param rhs_data     first element of feedback_rhs
+ * @param rhs_ext      its five extents, in Fortran declaration order
+ * @param opt          the group's optional physics
+ * @param seed         the run's generator seed
+ * @param stream_base  this rank's first generator stream id
  * @see evolve_RE for the remaining parameters
  */
-template<bool Debug, class PS, class FS>
+template<bool Debug, class PS, class FS, class Real>
 inline void evolve_REs(PS& part, const FS& fields,
                        double* rhs_data, const std::size_t rhs_ext[5],
                        const re_projection_indices& idx,
+                       const re_options<Real>& opt,
+                       const std::uint64_t seed, const std::uint64_t stream_base,
                        const double mass, const double time,
                        const double timestep, const int nstep,
                        const double phi_search,
                        kinetic_relativistic::push_diagnostics& diag) {
     const std::size_t n_particles = part.n_records;
     const std::size_t rhs_size = rhs_ext[0]*rhs_ext[1]*rhs_ext[2]*rhs_ext[3]*rhs_ext[4];
+
+    /* One generator stream per particle, seeded by the particle's index -- see
+     * re_seed_stream for why it is the index and not the worker. Held for the
+     * whole call, so a particle's draws over the nstep steps come from one
+     * continuous stream. Allocated even when collisions are off, at 16 bytes a
+     * particle, rather than making every reference below conditional. */
+    std::vector<pcg32::state> rng(n_particles);
 
     #pragma omp parallel reduction(+: rhs_data[0:rhs_size])
     {
@@ -47,10 +61,17 @@ inline void evolve_REs(PS& part, const FS& fields,
          * whichever thread reached the critical section first. */
         kinetic_relativistic::push_diagnostics my_diag;
 
+        /* Seeding is per particle, so which thread does it cannot matter; the
+         * barrier at the end of the loop is what makes the states ready before
+         * any of them is drawn from. */
+        #pragma omp for schedule(static)
+        for (std::size_t ip = 0; ip < n_particles; ++ip)
+            re_seed_stream(rng[ip], ip, seed, stream_base);
+
         #pragma omp for schedule(runtime)
         for (std::size_t ip = 0; ip < n_particles; ++ip)
-            evolve_RE<Debug>(part, ip, fields, rhs, idx, mass, time, timestep,
-                             nstep, phi_search, my_diag);
+            evolve_RE<Debug>(part, ip, fields, rhs, idx, opt, rng[ip],
+                             mass, time, timestep, nstep, phi_search, my_diag);
 
         #pragma omp critical
         {

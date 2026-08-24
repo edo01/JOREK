@@ -5,7 +5,7 @@
  * volume_preserving_push_jorek come from the headers the host arm uses. What is
  * here is the decomposition -- which thread does which piece of one step.
  *
- * One step is five launches:
+ * One step is five launches, six when the group collides:
  *
  *   1. count_bins / scan_bins / assign_slots  -- a counting sort of the
  *      particles by element index, producing the run start and length of every
@@ -16,7 +16,15 @@
  *      velocity moments, staged;
  *   4. proj_accumulate_kernel                 -- block per element, thread per
  *      feedback cell: the outer product summed over the element's run;
- *   5. push_kernel                            -- thread per particle, in place.
+ *   5. push_kernel                            -- thread per particle, in place;
+ *   6. collide_kernel                         -- thread per particle, in place,
+ *      only when the group asks for small-angle collisions.
+ *
+ * The collision is a launch of its own rather than the tail of the push: it
+ * brings the Bessel evaluations, the L0/L1 table read and a second field
+ * interpolation, and the pusher already takes every register sm_90 allows.  It
+ * reads the momentum the push just wrote, on the same stream, and writes only
+ * the momentum back.
  *
  * The point of the sort is step 4. A feedback cell is written by exactly one
  * thread, which sums every particle of that element into it, so the projection
@@ -32,6 +40,7 @@
  */
 #include "particles/mod_runaway_evolution/runaway_evolution_device.h"
 #include "particles/mod_runaway_evolution/runaway_evolution.h"
+#include "particles/pushers/mod_ccoll_relativistic/ccoll_relativistic.h"
 #include "particles/mod_fields_linear/fields_linear.h"
 #include "particles/particle_types/particle_set.h"
 
@@ -57,6 +66,7 @@ namespace {
 using part_set    = jorek::particle_kin_rel_set_soa;
 using fields_set  = jorek::fields_linear_set_soa;
 using diagnostics = kinetic_relativistic::push_diagnostics;
+using ccoll_table = ccoll::ccoll_table<double>;
 
 constexpr int kNDeg = JGX_N_DEGREES;
 constexpr int kNVtx = JGX_N_VERTEX_MAX;
@@ -238,13 +248,27 @@ __global__ void assign_slots(const int* __restrict__ i_elm, std::size_t n,
   if (have) dst_slot[j] = static_cast<std::int32_t>(pos);
 }
 
-/* The `orig` index rides the same permutation as the record it belongs to. */
-__global__ void scatter_index(std::int32_t* __restrict__ dst,
-                              const std::int32_t* __restrict__ src,
-                              const std::int32_t* __restrict__ dst_slot,
-                              std::size_t n) {
+/* Anything held per particle outside the record rides the same permutation as
+ * the record it belongs to: the original index, and the generator state when the
+ * group collides. Both are plain payload -- one slot in, one slot out -- so one
+ * kernel serves them. */
+template <class T>
+__global__ void scatter_payload(T* __restrict__ dst, const T* __restrict__ src,
+                                const std::int32_t* __restrict__ dst_slot,
+                                std::size_t n) {
   const std::size_t j = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
   if (j < n) dst[dst_slot[j]] = src[j];
+}
+
+/* One generator stream per particle, seeded from the slot it starts the launch
+ * in -- which is the slot Fortran handed over, since this runs before the first
+ * sort. From here the state travels with its particle, so the slot only ever
+ * picks the stream and never re-binds it. See jorek::re_seed_stream. */
+__global__ void seed_rng(pcg32::state* __restrict__ rng, std::size_t n,
+                         unsigned long long seed,
+                         unsigned long long stream_base) {
+  const std::size_t j = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  if (j < n) jorek::re_seed_stream(rng[j], j, seed, stream_base);
 }
 
 __global__ void iota_index(std::int32_t* __restrict__ v, std::size_t n) {
@@ -379,7 +403,7 @@ __global__ void proj_accumulate_kernel(part_set part, fields_set fields,
  */
 __global__ void push_kernel(part_set part, fields_set fields, double mass,
                             double time, double timestep, double phi_search,
-                            diagnostics* diag) {
+                            bool use_radreact, diagnostics* diag) {
   const std::size_t ip = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
   if (ip >= part.n_records) return;
 
@@ -388,7 +412,8 @@ __global__ void push_kernel(part_set part, fields_set fields, double mass,
   int ifail = 0;
   diagnostics my_diag;
   kinetic_relativistic::volume_preserving_push_jorek<kFindRZNearbyDebug>(
-      part, ip, fields, mass, time, timestep, phi_search, ifail, my_diag);
+      part, ip, fields, mass, time, timestep, phi_search, use_radreact,
+      ifail, my_diag);
 
   /* First occurrence wins, as it does under the host launcher's critical
    * section -- and which occurrence that is depends on the schedule there too.
@@ -405,16 +430,51 @@ __global__ void push_kernel(part_set part, fields_set fields, double mass,
   }
 }
 
+/* The small-angle Coulomb collision, thread per particle, in place.
+ *
+ * Launched after the push, on the same stream, so it reads the momentum the
+ * push has just written. Only the momentum is touched: position, (s,t) and the
+ * element index stay exactly as the push left them, which is what lets this run
+ * over the same buffers without a second copy.
+ *
+ * A lost particle is skipped rather than collided, matching the host loop --
+ * the operator interpolates the background at (i_elm, s, t), which a particle
+ * outside the mesh no longer has.
+ *
+ * rng is indexed by SLOT, and the slot is this particle's because the state was
+ * carried through the sort with the record (scatter_payload). Keying by thread
+ * instead would hand a particle a different stream every step as the sort
+ * reshuffles, splicing many streams into one particle's Wiener path -- which the
+ * operator's increments assume is one independent path. Slot-indexed access
+ * stays coalesced: consecutive lanes hold consecutive slots.
+ */
+__global__ void collide_kernel(part_set part, fields_set fields,
+                               ccoll_table dat,
+                               pcg32::state* __restrict__ rng,
+                               double mass, double time, double timestep) {
+  const std::size_t ip = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  if (ip >= part.n_records) return;
+  if (part.i_elm(ip) <= 0) return;
+
+  pcg32::state my_rng = rng[ip];
+  ccoll::ccoll_kinetic_relativistic_push(dat, part, ip, fields, mass, time,
+                                         timestep, my_rng);
+  rng[ip] = my_rng;  /* the next sort carries it along */
+}
+
 /* ------------------------------------------------------------------------- */
 /*  small owners                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* A device buffer's worth of a POD, zeroed, freed with the object. */
+/* A device buffer's worth of a POD, zeroed, freed with the object.
+ *
+ * Zero bytes is a legal size and allocates nothing: it is how the collision
+ * buffers stand down when the group does not collide. */
 class device_buffer {
  public:
   explicit device_buffer(std::size_t n_bytes)
       : n_bytes_(n_bytes), p_(jgx_c_alloc(n_bytes)) {
-    jgx_c_memset(p_, 0, n_bytes_);
+    if (n_bytes_ != 0) jgx_c_memset(p_, 0, n_bytes_);
   }
   ~device_buffer() { jgx_c_free(p_); }
   device_buffer(const device_buffer&) = delete;
@@ -443,10 +503,16 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
     const void* interp_base, const jgx_record_desc* interp_desc,
     double* rhs_data, const size_t* rhs_ext, const size_t* idx,
     double mass, double time, double timestep, int32_t nstep, double phi_search,
+    int32_t use_ccoll, int32_t use_radreact, const jgx_re_ccoll_args* ccoll_args,
+    int64_t rng_seed, int64_t rng_stream_base,
     int32_t* not_found, double* nf_R, double* nf_Z,
     int32_t* bad_i_from, int32_t* bad_i_to) {
 
   if (n_particles == 0 || n_elements == 0) return;
+
+  /* Fortran logicals: `.true.` is -1, so both are tested against zero. */
+  const bool do_ccoll    = (use_ccoll    != 0);
+  const bool do_radreact = (use_radreact != 0);
 
   /* --- the packs: one contiguous H2D each, then a transpose on the device --- */
   const jgx::data::device_pack part_pk(*part_desc, n_particles);
@@ -499,6 +565,42 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
   std::int32_t* orig_curr = orig_a.as<std::int32_t>();
   std::int32_t* orig_alt  = orig_b.as<std::int32_t>();
 
+  /* --- the collision working set ------------------------------------------ */
+  /*
+   * The generator state is per particle and rides the sort exactly as `orig`
+   * does, so it needs the same ping-pong pair. The L0/L1 table is read-only and
+   * uploaded once: it is a property of the plasma composition, not of the step.
+   *
+   * All five buffers are sized zero when the group does not collide, which
+   * allocates nothing and leaves every pointer below unused.
+   */
+  const std::size_t n_rng = do_ccoll ? n_particles : 0;
+  const std::size_t n_u   = do_ccoll ? std::size_t(ccoll_args->nu)  : 0;
+  const std::size_t n_th  = do_ccoll ? std::size_t(ccoll_args->nth) : 0;
+
+  const device_buffer rng_a(n_rng * sizeof(pcg32::state));
+  const device_buffer rng_b(n_rng * sizeof(pcg32::state));
+  pcg32::state* rng_curr = rng_a.as<pcg32::state>();
+  pcg32::state* rng_alt  = rng_b.as<pcg32::state>();
+
+  const device_buffer tab_u (n_u  * sizeof(double));
+  const device_buffer tab_th(n_th * sizeof(double));
+  const device_buffer tab_L0(n_u * n_th * sizeof(double));
+  const device_buffer tab_L1(n_u * n_th * sizeof(double));
+
+  ccoll_table ccoll_dev;
+  if (do_ccoll) {
+    jgx_c_push(tab_u.get(),  ccoll_args->u,     tab_u.bytes());
+    jgx_c_push(tab_th.get(), ccoll_args->theta, tab_th.bytes());
+    jgx_c_push(tab_L0.get(), ccoll_args->L0,    tab_L0.bytes());
+    jgx_c_push(tab_L1.get(), ccoll_args->L1,    tab_L1.bytes());
+    ccoll_dev = ccoll::make_ccoll_table<double>(
+        ccoll_args->nu, ccoll_args->nth,
+        tab_u.as<double>(), tab_th.as<double>(),
+        tab_L0.as<double>(), tab_L1.as<double>(),
+        ccoll_args->mi, ccoll_args->Z0);
+  }
+
   /* --- the projection staging --------------------------------------------- */
   /* Three arrays, not seven: (s, t, phi) are read straight from the sorted
    * particle set, which phase two holds anyway. */
@@ -510,6 +612,10 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
   const unsigned grid_e = static_cast<unsigned>(n_elements);
 
   iota_index<<<grid_p, kBlock>>>(orig_curr, n_particles);
+  if (do_ccoll)
+    seed_rng<<<grid_p, kBlock>>>(rng_curr, n_particles,
+                                 static_cast<unsigned long long>(rng_seed),
+                                 static_cast<unsigned long long>(rng_stream_base));
 
   /* --- the step loop ------------------------------------------------------ */
   for (int k = 0; k < nstep; ++k) {
@@ -527,10 +633,14 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
     /* (2) move the records, and the original index with them */
     jgx_c_scatter(alt_base, curr_base, part_desc, n_particles,
                   slot.as<std::int32_t>());
-    scatter_index<<<grid_p, kBlock>>>(orig_alt, orig_curr,
-                                      slot.as<std::int32_t>(), n_particles);
+    scatter_payload<<<grid_p, kBlock>>>(orig_alt, orig_curr,
+                                        slot.as<std::int32_t>(), n_particles);
+    if (do_ccoll)
+      scatter_payload<<<grid_p, kBlock>>>(rng_alt, rng_curr,
+                                          slot.as<std::int32_t>(), n_particles);
     std::swap(curr_base, alt_base);
     std::swap(orig_curr, orig_alt);
+    if (do_ccoll) std::swap(rng_curr, rng_alt);
     curr = part_set::from_soa(curr_base, *part_desc, n_particles);
 
     /* (3, 4) project: stage, then accumulate atomic-free */
@@ -545,8 +655,13 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
 
     /* (5) push */
     push_kernel<<<grid_p, kBlock>>>(curr, fields, mass, time, timestep,
-                                    phi_search,
+                                    phi_search, do_radreact,
                                     static_cast<diagnostics*>(diag_buf.get()));
+
+    /* (6) collide, on the momentum the push has just written */
+    if (do_ccoll)
+      collide_kernel<<<grid_p, kBlock>>>(curr, fields, ccoll_dev, rng_curr,
+                                         mass, time, timestep);
   }
 
   /* Undo the sorts: record rec goes back to the slot Fortran gave it. */

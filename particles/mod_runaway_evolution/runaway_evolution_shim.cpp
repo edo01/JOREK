@@ -34,6 +34,28 @@ jorek::re_projection_indices idx_from(std::int32_t i_P_par, std::int32_t i_P_per
              static_cast<std::size_t>(i_j_Phi) };
 }
 
+/* The group's optional physics, from the flags and the collision table.
+ *
+ * The table pointers are the Fortran ccoll_data's four allocatable components,
+ * which are only allocated when collisions are on; with the flag clear they are
+ * null and the views stay empty, which nothing reads.
+ */
+jorek::re_options<double> opt_from(std::int32_t use_ccoll, std::int32_t use_radreact,
+                                   std::int32_t nu, std::int32_t nth,
+                                   const double* u, const double* theta,
+                                   const double* L0, const double* L1,
+                                   double mi, double Z0) {
+    jorek::re_options<double> opt;
+    /* Fortran logicals: `.true.` is -1, so both are tested against zero. */
+    opt.use_ccoll    = (use_ccoll    != 0);
+    opt.use_radreact = (use_radreact != 0);
+    if (opt.use_ccoll)
+        opt.ccoll = ccoll::make_ccoll_table<double>(static_cast<int>(nu),
+                                                    static_cast<int>(nth),
+                                                    u, theta, L0, L1, mi, Z0);
+    return opt;
+}
+
 void report(const kinetic_relativistic::push_diagnostics& diag,
             std::int32_t* not_found, double* nf_R, double* nf_Z,
             std::int32_t* bad_i_from, std::int32_t* bad_i_to) {
@@ -49,8 +71,10 @@ void report(const kinetic_relativistic::push_diagnostics& diag,
 
 extern "C" {
 /**
- * @todo :  too many parameters. Some of them used to live in the sim object which 
- *          doesn't cross the seam.
+ * @todo :  too many parameters. Some of them used to live in the sim object which
+ *          doesn't cross the seam, and the collision table and its two flags
+ *          have since been added flat as well -- scalars by value, arrays as a
+ *          pointer with their extents, which is the seam's rule everywhere else.
  */
     /* mod_runaway_evolution::evolve_REs - host execution entry. */
     void jgx_host_runaway_evolution_evolve_REs(void* part_base, const int32_t n_particles,
@@ -65,6 +89,18 @@ extern "C" {
                                                 const double timestep,
                                                 const int32_t nstep,
                                                 const double phi_search,
+                                                const int32_t use_ccoll,
+                                                const int32_t use_radreact,
+                                                const int32_t ccoll_nu,
+                                                const int32_t ccoll_nth,
+                                                const double* ccoll_u,
+                                                const double* ccoll_theta,
+                                                const double* ccoll_L0,
+                                                const double* ccoll_L1,
+                                                const double ccoll_mi,
+                                                const double ccoll_Z0,
+                                                const int64_t rng_seed,
+                                                const int64_t rng_stream_base,
                                                 int32_t* not_found,
                                                 double* nf_R, double* nf_Z,
                                                 int32_t* bad_i_from, int32_t* bad_i_to) {
@@ -85,6 +121,10 @@ extern "C" {
 
         jorek::evolve_REs<kFindRZNearbyDebug>(
             part, fields, rhs_data, ext, idx_from(i_P_par, i_P_perp, i_j_Phi),
+            opt_from(use_ccoll, use_radreact, ccoll_nu, ccoll_nth,
+                     ccoll_u, ccoll_theta, ccoll_L0, ccoll_L1, ccoll_mi, ccoll_Z0),
+            static_cast<std::uint64_t>(rng_seed),
+            static_cast<std::uint64_t>(rng_stream_base),
             mass, time, timestep, static_cast<int>(nstep), phi_search, diag);
 
         report(diag, not_found, nf_R, nf_Z, bad_i_from, bad_i_to);
@@ -104,6 +144,18 @@ extern "C" {
                                                        const double timestep,
                                                        const int32_t nstep,
                                                        const double phi_search,
+                                                       const int32_t use_ccoll,
+                                                       const int32_t use_radreact,
+                                                       const int32_t ccoll_nu,
+                                                       const int32_t ccoll_nth,
+                                                       const double* ccoll_u,
+                                                       const double* ccoll_theta,
+                                                       const double* ccoll_L0,
+                                                       const double* ccoll_L1,
+                                                       const double ccoll_mi,
+                                                       const double ccoll_Z0,
+                                                       const int64_t rng_seed,
+                                                       const int64_t rng_stream_base,
                                                        int32_t* not_found,
                                                        double* nf_R, double* nf_Z,
                                                        int32_t* bad_i_from, int32_t* bad_i_to) {
@@ -115,6 +167,18 @@ extern "C" {
                                      static_cast<std::size_t>(i_P_perp),
                                      static_cast<std::size_t>(i_j_Phi) };
 
+        /* The table crosses as host pointers: the launcher owns the device copy,
+         * because it is the only side that knows when the buffers may be freed. */
+        jgx_re_ccoll_args ccoll_args;
+        ccoll_args.nu    = ccoll_nu;
+        ccoll_args.nth   = ccoll_nth;
+        ccoll_args.u     = ccoll_u;
+        ccoll_args.theta = ccoll_theta;
+        ccoll_args.L0    = ccoll_L0;
+        ccoll_args.L1    = ccoll_L1;
+        ccoll_args.mi    = ccoll_mi;
+        ccoll_args.Z0    = ccoll_Z0;
+
         jgx_device_runaway_evolution_evolve_REs(
             part_base,
             &jorek::particle_kin_rel_set_aos::record(),
@@ -125,6 +189,7 @@ extern "C" {
             &jgx::data::registered_record(jorek::JGX_REC_FIELDS_INTERP_LINEAR, jorek::JGX_FIL_COUNT),
             rhs_data, ext, idx,
             mass, time, timestep, nstep, phi_search,
+            use_ccoll, use_radreact, &ccoll_args, rng_seed, rng_stream_base,
             not_found, nf_R, nf_Z, bad_i_from, bad_i_to);
     }
 #endif /* JGX_HAS_DEVICE */
