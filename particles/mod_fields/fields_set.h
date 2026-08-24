@@ -147,8 +147,9 @@ struct fields_set {
     const jgx::view<Real, 1> P_phi(P_phi_, pe), P_time(P_time_, pe);
 
     double R, R_s, R_t, Z, Z_s, Z_t;
-    interp.interp_PRZ(element_list, node_list, time, ie, i_v, n_v, s, t, phi,
-                      P, P_s, P_t, P_phi, P_time, R, R_s, R_t, Z, Z_s, Z_t);
+    interp.interp_PRZ(element_list, node_list, time, ie, i_v, n_v,
+                      s, t, phi, P, P_s, P_t, P_phi, P_time,
+                      R, R_s, R_t, Z, Z_s, Z_t);
 
     Real P_R_[n_v], P_Z_[n_v];
     const jgx::view<Real, 1> P_R(P_R_, pe), P_Z(P_Z_, pe);

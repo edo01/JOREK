@@ -1,7 +1,34 @@
 /* particles/mod_runaway_evolution/runaway_evolution_device.hip.cpp -- the
  * device launcher of the runaway-electron kernel.
  *
- * evolve_RE itself is untouched and is not duplicated here.
+ * The per-particle physics is not duplicated here: re_project, re_deposit and
+ * volume_preserving_push_jorek come from the headers the host arm uses. What is
+ * here is the decomposition -- which thread does which piece of one step.
+ *
+ * One step is five launches:
+ *
+ *   1. count_bins / scan_bins / assign_slots  -- a counting sort of the
+ *      particles by element index, producing the run start and length of every
+ *      element and the destination slot of every particle;
+ *   2. jgx_c_scatter                          -- the move itself, every field of
+ *      the record, driven by the descriptor;
+ *   3. proj_stage_kernel                      -- thread per particle: the three
+ *      velocity moments, staged;
+ *   4. proj_accumulate_kernel                 -- block per element, thread per
+ *      feedback cell: the outer product summed over the element's run;
+ *   5. push_kernel                            -- thread per particle, in place.
+ *
+ * The point of the sort is step 4. A feedback cell is written by exactly one
+ * thread, which sums every particle of that element into it, so the projection
+ * carries no atomics at all -- where one thread per particle has every particle
+ * of an element contending for the same n_degrees*n_vertex_max*n_tor*3 cells.
+ * The sort is also what makes the push's field interpolation read a mesh
+ * neighbourhood a warp shares.
+ *
+ * The particle order is restored before the download: the sort permutes the
+ * device copy, and the host arm does not, so an `orig` index rides along and the
+ * last scatter puts every record back where Fortran had it. A device build must
+ * not be observable in the array that comes home.
  */
 #include "particles/mod_runaway_evolution/runaway_evolution_device.h"
 #include "particles/mod_runaway_evolution/runaway_evolution.h"
@@ -11,9 +38,11 @@
 #include "jgx/data/device_pack.h"
 #include "jgx/jgx_c_api.h"
 #include "jgx/macros.h"
+#include "jgx/device.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 /* Same switch as the host shim: find_RZ_nearby takes the DEBUG build as a
  * template parameter rather than reading the preprocessor itself. */
@@ -25,28 +54,341 @@ static constexpr bool kFindRZNearbyDebug = false;
 
 namespace {
 
-using part_set   = jorek::particle_kin_rel_set_soa;
-using fields_set = jorek::fields_linear_set_soa;
+using part_set    = jorek::particle_kin_rel_set_soa;
+using fields_set  = jorek::fields_linear_set_soa;
 using diagnostics = kinetic_relativistic::push_diagnostics;
 
+constexpr int kNDeg = JGX_N_DEGREES;
+constexpr int kNVtx = JGX_N_VERTEX_MAX;
+constexpr int kNTor = JGX_N_TOR;
+constexpr int kNVar = 3;                     /* P_par, P_perp, j_Phi */
 
-constexpr unsigned kBlock = 256;
+/* One element's share of the feedback array. */
+constexpr int kCells = kNDeg * kNVtx * kNTor * kNVar;
 
-/**
- * One particle per thread, the whole nstep loop inside.
+constexpr unsigned kBlock = 256;             /* the per-particle kernels */
+
+/* The pusher takes all 254 registers sm_90 allows -- two inlined find_RZ_nearby
+ * Newton loops and a field evaluation, each with its own 48-double basis-function
+ * scratch -- which leaves 8 warps per SM. Capping it with __launch_bounds__ was
+ * measured and does not pay: 170 registers (12 warps, 40 bytes of spill) came out
+ * 10% SLOWER and 128 (16 warps, 460 bytes) came out level. The pusher is not
+ * short of warps; it is a long dependent chain and a divergent neighbour walk.
+ * Do not re-propose a register cap without a measurement that says otherwise. */
+
+/* The accumulate block owns one element and one cell per thread, rounded up to
+ * a whole warp. At n_tor = 1 that is 64 threads for 48 cells; at n_tor = 7 it is
+ * 384 for 336. */
+constexpr unsigned kAccumBlock = ((kCells + 63) / 64) * 64;
+static_assert(kAccumBlock >= static_cast<unsigned>(kCells), "one cell per thread");
+
+/* Particles whose factor vectors are held in shared memory at once. The runs are
+ * n_particles/n_elements long, a few tens per rank at production sizes, so one
+ * tile usually covers a whole run. */
+constexpr int kProjTile = 64;
+
+/* Row widths padded to an odd number of doubles. In the cooperative store one
+ * lane owns a tile particle and writes its whole row, so for a fixed column the
+ * per-lane address stride is the row length: a length sharing a factor with the
+ * 32 banks serialises the store (n_degrees*n_vertex_max = 16 gives a 16-way
+ * conflict). An odd width is coprime with the bank count, so the lanes land on
+ * distinct banks. The reads are at a loop-uniform row, which broadcasts either
+ * way. */
+constexpr int kShBF = (kNDeg * kNVtx) | 1;
+constexpr int kShHZ = (kNTor) | 1;
+constexpr int kShVW = (kNVar) | 1;
+
+constexpr unsigned kScanThreads = 1024;      /* the one-block scan over the bins */
+
+/* ------------------------------------------------------------------------- */
+/*  the counting sort                                                         */
+/* ------------------------------------------------------------------------- */
+
+/* Bins are the elements plus one for "lost": a valid 1-based i_elm goes to
+ * i_elm-1, anything else to the last bin. The accumulate walks the element bins
+ * only, so the lost run is simply never read. */
+JGX_HD inline int bin_of(int i_elm, int n_bins) {
+  const int n_elements = n_bins - 1;
+  return (i_elm >= 1 && i_elm <= n_elements) ? i_elm - 1 : n_elements;
+}
+
+/* The three warp-collective primitives the aggregation needs, spelled per
+ * platform. CUDA dropped the maskless __shfl at sm_70 and HIP-on-NVIDIA does not
+ * supply the AMD spellings, so neither side's names work for both; the warp is
+ * also 32 lanes wide on one and 64 on the other. Confined to these two wrappers.
  */
-JGX_KERNEL void evolve_REs_kernel(part_set part, fields_set fields,
-                                  jorek::re_rhs_view rhs,
-                                  jorek::re_projection_indices idx,
-                                  double mass, double time, double timestep,
-                                  int nstep, double phi_search,
-                                  diagnostics* diag) {
+#if defined(__HIP_PLATFORM_AMD__)
+constexpr int kWarp = 64;
+__device__ inline unsigned long long warp_ballot(bool p) { return __ballot(p); }
+__device__ inline int warp_bcast(int v, int src) { return __shfl(v, src, kWarp); }
+#else
+constexpr int kWarp = 32;
+__device__ inline unsigned long long warp_ballot(bool p) {
+  return static_cast<unsigned long long>(__ballot_sync(0xffffffffu, p));
+}
+__device__ inline int warp_bcast(int v, int src) {
+  return __shfl_sync(0xffffffffu, v, src);
+}
+#endif
+
+/* Aggregate the lanes of a warp that share a bin into one global atomic.
+ *
+ * Worth the trouble precisely because the input is nearly sorted already -- the
+ * particles were sorted last step and few crossed an element -- so a warp's 32
+ * lanes usually want the *same* counter, which is the case a plain per-lane
+ * atomicAdd serialises 32 ways.
+ *
+ * Every thread of the warp runs every iteration, including the ones with no
+ * particle (have = false): the ballots are warp-wide and must not be reached
+ * under divergence. `pos_out`, when given, receives the lane's own slot within
+ * the run its group reserved.
+ */
+__device__ inline void warp_bin_add(int* counter, bool have, int key,
+                                    int* pos_out) {
+  const int lane = static_cast<int>(threadIdx.x) % kWarp;
+  const unsigned long long lt = (1ull << lane) - 1ull;
+
+  unsigned long long active = warp_ballot(have);
+  while (active) {
+    const int leader = __ffsll(active) - 1;
+    const int lkey   = warp_bcast(key, leader);
+    const unsigned long long peers = warp_ballot(have && key == lkey) & active;
+
+    int base = 0;
+    if (lane == leader) base = atomicAdd(&counter[lkey], __popcll(peers));
+    base = warp_bcast(base, leader);
+
+    if (pos_out != nullptr && ((peers >> lane) & 1ull))
+      *pos_out = base + __popcll(peers & lt);
+
+    active &= ~peers;
+  }
+}
+
+__global__ void count_bins(const int* __restrict__ i_elm, std::size_t n,
+                           int n_bins, int* __restrict__ hist) {
+  const std::size_t j = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  const bool have = (j < n);
+  const int key = have ? bin_of(i_elm[j], n_bins) : 0;
+  warp_bin_add(hist, have, key, nullptr);
+}
+
+/* Exclusive scan of the histogram, one block, chunk by chunk.
+ *
+ * A single block is enough: the bins are the elements, tens of thousands at
+ * most, and this runs once per pusher step against a push that reads the mesh
+ * for every particle. A multi-block scan would add two more launches to a loop
+ * that is launch-bound already.
+ *
+ * It emits four things from the one read of the histogram, so that the step loop
+ * needs no host-side memset or device-to-device copy -- both of those are
+ * synchronous in the jgx C ABI, and a synchronous call per pusher step would
+ * drain the queue 41 002 times per fluid step:
+ *   offsets  the run start, what assign_slots reserves from and the accumulate
+ *            reads;
+ *   cursors  the same values, to be consumed by assign_slots;
+ *   run_len  the counts, preserved for the accumulate;
+ *   hist     zeroed behind the read, ready for the next step's count_bins.
+ */
+__global__ void scan_bins(int* __restrict__ hist, int* __restrict__ offsets,
+                          int* __restrict__ cursors, int* __restrict__ run_len,
+                          int n_bins) {
+  __shared__ int buf[kScanThreads];
+  __shared__ int carry;
+  if (threadIdx.x == 0) carry = 0;
+  __syncthreads();
+
+  for (int base = 0; base < n_bins; base += kScanThreads) {
+    const int i = base + static_cast<int>(threadIdx.x);
+    const int v = (i < n_bins) ? hist[i] : 0;
+    buf[threadIdx.x] = v;
+    __syncthreads();
+
+    for (unsigned off = 1; off < kScanThreads; off <<= 1) {
+      const int t = (threadIdx.x >= off) ? buf[threadIdx.x - off] : 0;
+      __syncthreads();
+      buf[threadIdx.x] += t;
+      __syncthreads();
+    }
+
+    if (i < n_bins) {
+      const int excl = carry + buf[threadIdx.x] - v;  /* inclusive -> exclusive */
+      offsets[i] = excl;
+      cursors[i] = excl;
+      run_len[i] = v;
+      hist[i]    = 0;
+    }
+    __syncthreads();
+    if (threadIdx.x == kScanThreads - 1) carry += buf[kScanThreads - 1];
+    __syncthreads();
+  }
+}
+
+/* Where each particle goes. `cursors` starts as a copy of the run starts, so a
+ * group's reservation packs its element's run densely; the order within a run is
+ * unspecified, which the accumulate does not care about. */
+__global__ void assign_slots(const int* __restrict__ i_elm, std::size_t n,
+                             int n_bins, int* __restrict__ cursors,
+                             std::int32_t* __restrict__ dst_slot) {
+  const std::size_t j = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  const bool have = (j < n);
+  const int key = have ? bin_of(i_elm[j], n_bins) : 0;
+  int pos = 0;
+  warp_bin_add(cursors, have, key, &pos);
+  if (have) dst_slot[j] = static_cast<std::int32_t>(pos);
+}
+
+/* The `orig` index rides the same permutation as the record it belongs to. */
+__global__ void scatter_index(std::int32_t* __restrict__ dst,
+                              const std::int32_t* __restrict__ src,
+                              const std::int32_t* __restrict__ dst_slot,
+                              std::size_t n) {
+  const std::size_t j = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  if (j < n) dst[dst_slot[j]] = src[j];
+}
+
+__global__ void iota_index(std::int32_t* __restrict__ v, std::size_t n) {
+  const std::size_t j = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  if (j < n) v[j] = static_cast<std::int32_t>(j);
+}
+
+/* ------------------------------------------------------------------------- */
+/*  the three physics kernels                                                 */
+/* ------------------------------------------------------------------------- */
+
+/* Projection, phase one: the field evaluation, thread per particle.
+ *
+ * The weight is folded in here so a lost particle stages three zeros and phase
+ * two needs no branch for it -- though it never reads one anyway, the lost run
+ * being past the last element bin.
+ */
+__global__ void proj_stage_kernel(part_set part, fields_set fields,
+                                  double mass, double time,
+                                  double* __restrict__ stg_Ppar,
+                                  double* __restrict__ stg_Pperp,
+                                  double* __restrict__ stg_jPhi) {
   const std::size_t ip = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
   if (ip >= part.n_records) return;
 
+  const jorek::re_projection pr = jorek::re_project(part, ip, fields, mass, time);
+  stg_Ppar [ip] = pr.m_Ppar  * pr.weight;
+  stg_Pperp[ip] = pr.m_Pperp * pr.weight;
+  stg_jPhi [ip] = pr.m_jPhi  * pr.weight;
+}
+
+/* Projection, phase two: one block per element, one thread per feedback cell.
+ *
+ * The projection factorises per particle,
+ *
+ *   F[n,m,it,var] = size(ie,m,n) * SUM_p HH(s_p,t_p)[n,m] * HZ(phi_p)[it] * v_var(p)
+ *
+ * so each particle's three small factor vectors are worked out once, into shared
+ * memory, and every cell-thread then sums cheap products out of shared memory.
+ * The basis functions and the toroidal harmonics are evaluated once per particle
+ * rather than once per particle per cell, and no cell is written by more than one
+ * thread.
+ *
+ * The running sum spans the whole run, which can be thousands of particles, while
+ * one tile contributes a small slice of it -- so the tile partials go in with
+ * Kahan compensation rather than a plain +=.
+ */
+__global__ void proj_accumulate_kernel(part_set part, fields_set fields,
+                                       const int* __restrict__ run_start,
+                                       const int* __restrict__ run_len,
+                                       const double* __restrict__ stg_Ppar,
+                                       const double* __restrict__ stg_Pperp,
+                                       const double* __restrict__ stg_jPhi,
+                                       jorek::re_rhs_view_device rhs,
+                                       jorek::re_projection_indices idx) {
+  const std::size_t ie = blockIdx.x;
+
+  __shared__ double sh_bf[kProjTile][kShBF];
+  __shared__ double sh_hz[kProjTile][kShHZ];
+  __shared__ double sh_vw[kProjTile][kShVW];
+
+  const int start = run_start[ie];
+  const int cnt   = run_len[ie];
+
+  const int c = static_cast<int>(threadIdx.x);
+  const bool mine = (c < kCells);
+
+  /* c = var + kNVar*(it + kNTor*(m + kNVtx*n)) */
+  int d = c;
+  const int var = d % kNVar; d /= kNVar;
+  const int it  = d % kNTor; d /= kNTor;
+  const int m   = d % kNVtx; d /= kNVtx;
+  const int n   = d;
+  const int nm  = n * kNVtx + m;
+
+  double acc = 0.0, cmp = 0.0;
+
+  for (int base = 0; base < cnt; base += kProjTile) {
+    const int tile = min(kProjTile, cnt - base);
+
+    /* (a) one lane per tile particle works out its factor vectors, once. */
+    for (int q = static_cast<int>(threadIdx.x); q < tile;
+         q += static_cast<int>(blockDim.x)) {
+      const std::size_t p = static_cast<std::size_t>(start + base + q);
+
+      const std::size_t bf_ext[2] = { kNDeg, 4 };
+      const std::size_t hz_ext[1] = { kNTor };
+      const jgx::view<double, 2, jgx::layout_right> HH(&sh_bf[q][0], bf_ext);
+      const jgx::view<double, 1> HZ(&sh_hz[q][0], hz_ext);
+
+      /* HH is (degree, vertex) with a vertex stride of 4 = n_vertex_max, which
+       * is the nm ordering phase (b) indexes, so the row is filled in place. */
+      basisfunctions::basisfunctions_2D_0_T(part.st(p, 0), part.st(p, 1), HH);
+      interp::mode_moivre_explicit(part.x(p, 2), HZ, JGX_N_TOR, JGX_N_PERIOD);
+
+      sh_vw[q][0] = stg_Ppar [p];
+      sh_vw[q][1] = stg_Pperp[p];
+      sh_vw[q][2] = stg_jPhi [p];
+    }
+    __syncthreads();
+
+    /* (b) each cell-thread sums this tile into its own accumulator. */
+    if (mine) {
+      double s = 0.0;
+      for (int q = 0; q < tile; ++q)
+        s += sh_bf[q][nm] * sh_hz[q][it] * sh_vw[q][var];
+      const double y  = s - cmp;
+      const double tt = acc + y;
+      cmp = (tt - acc) - y;
+      acc = tt;
+    }
+    __syncthreads();  /* the tile's rows are read; the next tile may overwrite */
+  }
+
+  if (!mine) return;
+
+  /* Selected rather than indexed out of a local array: `var` is a runtime value,
+   * so an array would be spilled to local memory for three reads. */
+  const std::size_t pv = (var == 0) ? idx.P_par
+                       : (var == 1) ? idx.P_perp
+                                    : idx.j_Phi;
+  rhs(n, m, ie, it, pv) +=
+      acc * fields.element_list.size(ie, static_cast<std::size_t>(m),
+                                     static_cast<std::size_t>(n));
+}
+
+/* The pusher, thread per particle, in place.
+ *
+ * In place rather than into a second buffer: the projection has already been
+ * accumulated by the time this launches, so there is no reader left to protect,
+ * and the sort's own destination block is the only spare copy needed.
+ */
+__global__ void push_kernel(part_set part, fields_set fields, double mass,
+                            double time, double timestep, double phi_search,
+                            diagnostics* diag) {
+  const std::size_t ip = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x;
+  if (ip >= part.n_records) return;
+
+  /* ifail is written by every push and read by none of them, here as in the
+   * Fortran -- a lost particle shows up as i_elm <= 0. */
+  int ifail = 0;
   diagnostics my_diag;
-  jorek::evolve_RE<kFindRZNearbyDebug>(part, ip, fields, rhs, idx, mass, time,
-                                       timestep, nstep, phi_search, my_diag);
+  kinetic_relativistic::volume_preserving_push_jorek<kFindRZNearbyDebug>(
+      part, ip, fields, mass, time, timestep, phi_search, ifail, my_diag);
 
   /* First occurrence wins, as it does under the host launcher's critical
    * section -- and which occurrence that is depends on the schedule there too.
@@ -63,8 +405,11 @@ JGX_KERNEL void evolve_REs_kernel(part_set part, fields_set fields,
   }
 }
 
-/* A device buffer's worth of a POD, zeroed, freed with the object. The feedback
- * array and the diagnostics both want exactly this and nothing more. */
+/* ------------------------------------------------------------------------- */
+/*  small owners                                                              */
+/* ------------------------------------------------------------------------- */
+
+/* A device buffer's worth of a POD, zeroed, freed with the object. */
 class device_buffer {
  public:
   explicit device_buffer(std::size_t n_bytes)
@@ -76,12 +421,17 @@ class device_buffer {
   device_buffer& operator=(const device_buffer&) = delete;
 
   void* get() const noexcept { return p_; }
+  template <class T> T* as() const noexcept { return static_cast<T*>(p_); }
   std::size_t bytes() const noexcept { return n_bytes_; }
 
  private:
   std::size_t n_bytes_;
   void* p_;
 };
+
+unsigned grid_for(std::size_t n, unsigned block) {
+  return static_cast<unsigned>((n + block - 1) / block);
+}
 
 } /* anonymous namespace */
 
@@ -96,6 +446,8 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
     int32_t* not_found, double* nf_R, double* nf_Z,
     int32_t* bad_i_from, int32_t* bad_i_to) {
 
+  if (n_particles == 0 || n_elements == 0) return;
+
   /* --- the packs: one contiguous H2D each, then a transpose on the device --- */
   const jgx::data::device_pack part_pk(*part_desc, n_particles);
   const jgx::data::device_pack el_pk(*el_desc, n_elements);
@@ -104,8 +456,13 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
   el_pk.upload(el_base);
   nd_pk.upload(nd_base);
 
-  part_set part = jorek::particle_kin_rel_set_soa::from_soa(
-      part_pk.base(), *part_desc, n_particles);
+  /* The sort's destination. Only the packed block, not a second staging buffer:
+   * nothing uploads or downloads through this one, the two blocks just take
+   * turns being the live copy. */
+  const device_buffer alt_blk(jgx::data::soa_block_bytes(*part_desc, n_particles));
+
+  void* curr_base = part_pk.base();
+  void* alt_base  = alt_blk.get();
 
   /* The interpolator is a record of count 1 -- six scalars read where they lie,
    * on the host, and carried into the kernel inside the set. */
@@ -118,44 +475,108 @@ extern "C" void jgx_device_runaway_evolution_evolve_REs(
   /*
    * Zeroed rather than uploaded: the Fortran array is accumulated into across
    * groups, so what comes back is this call's contribution and the host adds it.
-   * Plain layout_left first, which puts consecutive elements 16 doubles apart --
-   * every thread in a warp then atomically updates its own cache line. Making
-   * `ie` the fastest axis needs no new machinery, only jgx::layout_perm on the
-   * alias in runaway_evolution.h; measure before changing it (section 4.5).
+   * That is also what frees the layout -- see re_rhs_view_device.
    */
   std::size_t rhs_size = 1;
   for (int d = 0; d < 5; ++d) rhs_size *= rhs_ext[d];
 
   const device_buffer rhs_buf(rhs_size * sizeof(double));
-  const jorek::re_rhs_view rhs(static_cast<double*>(rhs_buf.get()), rhs_ext);
+  const jorek::re_rhs_view_device rhs(rhs_buf.as<double>(), rhs_ext);
+  const jorek::re_projection_indices proj = { idx[0], idx[1], idx[2] };
 
   const device_buffer diag_buf(sizeof(diagnostics));
 
-  /* --- launch ------------------------------------------------------------- */
-  const jorek::re_projection_indices proj = { idx[0], idx[1], idx[2] };
-  const unsigned grid =
-      static_cast<unsigned>((n_particles + kBlock - 1) / kBlock);
+  /* --- the sort's working set --------------------------------------------- */
+  const int n_bins = static_cast<int>(n_elements) + 1;
+  const device_buffer hist(std::size_t(n_bins) * sizeof(int));     /* zeroed here, and by every scan */
+  const device_buffer offsets(std::size_t(n_bins) * sizeof(int));
+  const device_buffer cursors(std::size_t(n_bins) * sizeof(int));
+  const device_buffer run_len(std::size_t(n_bins) * sizeof(int));
+  const device_buffer slot(n_particles * sizeof(std::int32_t));
 
-  if (grid > 0) {
-    evolve_REs_kernel<<<grid, kBlock>>>(
-        part, fields, rhs, proj, mass, time, timestep,
-        static_cast<int>(nstep), phi_search,
-        static_cast<diagnostics*>(diag_buf.get()));
+  const device_buffer orig_a(n_particles * sizeof(std::int32_t));
+  const device_buffer orig_b(n_particles * sizeof(std::int32_t));
+  std::int32_t* orig_curr = orig_a.as<std::int32_t>();
+  std::int32_t* orig_alt  = orig_b.as<std::int32_t>();
+
+  /* --- the projection staging --------------------------------------------- */
+  /* Three arrays, not seven: (s, t, phi) are read straight from the sorted
+   * particle set, which phase two holds anyway. */
+  const device_buffer stg_Ppar (n_particles * sizeof(double));
+  const device_buffer stg_Pperp(n_particles * sizeof(double));
+  const device_buffer stg_jPhi (n_particles * sizeof(double));
+
+  const unsigned grid_p = grid_for(n_particles, kBlock);
+  const unsigned grid_e = static_cast<unsigned>(n_elements);
+
+  iota_index<<<grid_p, kBlock>>>(orig_curr, n_particles);
+
+  /* --- the step loop ------------------------------------------------------ */
+  for (int k = 0; k < nstep; ++k) {
+    part_set curr = part_set::from_soa(curr_base, *part_desc, n_particles);
+
+    /* (1) sort by element. Nothing here is synchronous: the whole loop is queued
+     * and the host does not wait on it until the jgx_c_synchronize below. */
+    count_bins<<<grid_p, kBlock>>>(curr.i_elm.data, n_particles, n_bins,
+                                   hist.as<int>());
+    scan_bins<<<1, kScanThreads>>>(hist.as<int>(), offsets.as<int>(),
+                                   cursors.as<int>(), run_len.as<int>(), n_bins);
+    assign_slots<<<grid_p, kBlock>>>(curr.i_elm.data, n_particles, n_bins,
+                                     cursors.as<int>(), slot.as<std::int32_t>());
+
+    /* (2) move the records, and the original index with them */
+    jgx_c_scatter(alt_base, curr_base, part_desc, n_particles,
+                  slot.as<std::int32_t>());
+    scatter_index<<<grid_p, kBlock>>>(orig_alt, orig_curr,
+                                      slot.as<std::int32_t>(), n_particles);
+    std::swap(curr_base, alt_base);
+    std::swap(orig_curr, orig_alt);
+    curr = part_set::from_soa(curr_base, *part_desc, n_particles);
+
+    /* (3, 4) project: stage, then accumulate atomic-free */
+    proj_stage_kernel<<<grid_p, kBlock>>>(curr, fields, mass, time,
+                                          stg_Ppar.as<double>(),
+                                          stg_Pperp.as<double>(),
+                                          stg_jPhi.as<double>());
+    proj_accumulate_kernel<<<grid_e, kAccumBlock>>>(
+        curr, fields, offsets.as<int>(), run_len.as<int>(),
+        stg_Ppar.as<double>(), stg_Pperp.as<double>(), stg_jPhi.as<double>(),
+        rhs, proj);
+
+    /* (5) push */
+    push_kernel<<<grid_p, kBlock>>>(curr, fields, mass, time, timestep,
+                                    phi_search,
+                                    static_cast<diagnostics*>(diag_buf.get()));
   }
+
+  /* Undo the sorts: record rec goes back to the slot Fortran gave it. */
+  jgx_c_scatter(alt_base, curr_base, part_desc, n_particles, orig_curr);
+  std::swap(curr_base, alt_base);
 
   /* Both the launch error and the completion error, so nothing below reads a
    * buffer a failed kernel never wrote. */
   jgx_c_synchronize();
 
   /* --- back to the host --------------------------------------------------- */
+  /* Both views over the same five extents, differing only in stride order, so
+   * the un-permute is the identity in index space. Half a million elements once
+   * per group-step, against a kernel that ran nstep times over every particle. */
   double* rhs_dev = new double[rhs_size];
   jgx_c_pull(rhs_dev, rhs_buf.get(), rhs_buf.bytes());
-  for (std::size_t i = 0; i < rhs_size; ++i) rhs_data[i] += rhs_dev[i];
+  const jorek::re_rhs_view_device src(rhs_dev, rhs_ext);
+  const jorek::re_rhs_view        dst(rhs_data, rhs_ext);
+  for (std::size_t v = 0; v < rhs_ext[4]; ++v)
+    for (std::size_t it = 0; it < rhs_ext[3]; ++it)
+      for (std::size_t ie = 0; ie < rhs_ext[2]; ++ie)
+        for (std::size_t m = 0; m < rhs_ext[1]; ++m)
+          for (std::size_t n = 0; n < rhs_ext[0]; ++n)
+            dst(n, m, ie, it, v) += src(n, m, ie, it, v);
   delete[] rhs_dev;
 
   /* Only the particles were written; the mesh comes home unchanged and is
-   * dropped with the packs. */
-  part_pk.download(part_base);
+   * dropped with the packs. The unpack reads whichever block the swaps left the
+   * restored copy in, which is not necessarily the pack's own. */
+  part_pk.download(part_base, curr_base);
 
   diagnostics diag;
   jgx_c_pull(&diag, diag_buf.get(), sizeof(diagnostics));

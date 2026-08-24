@@ -67,11 +67,12 @@ struct fields_interp_linear_set : fields_interp_base {
 
     const double t_jorek = phys().t_jorek;
 
-    interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
-                         false, P, P_s, P_t, P_phi,
-                         R, R_s, R_t, Z, Z_s, Z_t);
-
-    if (t_jorek <= 0.0) return;
+    if (t_jorek <= 0.0) {
+      interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
+                           false, P, P_s, P_t, P_phi,
+                           R, R_s, R_t, Z, Z_s, Z_t);
+      return;
+    }
 
     // The deltas, in the scratch the Fortran gets from automatic arrays.
     const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
@@ -80,7 +81,11 @@ struct fields_interp_linear_set : fields_interp_base {
     const jgx::view<Real, 1> Pd(Pd_, pe), Pd_s(Pd_s_, pe);
     const jgx::view<Real, 1> Pd_t(Pd_t_, pe), Pd_phi(Pd_phi_, pe);
 
-    // R..Z_t come out identical: the geometry does not read values/deltas.
+    // Values
+    interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
+                         false, P, P_s, P_t, P_phi,
+                         R, R_s, R_t, Z, Z_s, Z_t);
+    // Deltas
     interp::interp_PRZ_1(element_list, node_list, ie, i_v, n_v, s, t, phi,
                          true, Pd, Pd_s, Pd_t, Pd_phi,
                          R, R_s, R_t, Z, Z_s, Z_t);
