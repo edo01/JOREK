@@ -19,6 +19,7 @@
 #include "jgx/view.h"
 #include "datatypes/data_structure/element_set.h"
 #include "datatypes/data_structure/node_set.h"
+#include "models/constants/constants.h"
 #include "models/phys_module/phys.h"
 #include "jgx/macros.h"
 
@@ -166,6 +167,56 @@ struct fields_set {
     EB_from_psiU(1.0/R, phys().F0, t_norm,
                  P_R(0), P_Z(0), P_R(1), P_Z(1), P_phi(1), psi_time, E, B);
   } // calc_EBpsiU_reduced
+
+  /**
+   * type_fields%calc_NjTj -- the background electron density and temperature at
+   * (s,t,phi) in element ie.
+   *
+   * The with_impurities = .false., with_TiTe = .false. branch.  There the
+   * Fortran's other two outputs are not independent -- ni(1) is ne and Ti is Te
+   * -- so they are not returned, and there is exactly one ion species.  A
+   * caller that needs either of the other branches must not come here;
+   * mod_runaway_evolution.f90 error stops on both.
+   *
+   * Unlike calc_EBpsiU_reduced this is not a reduced-MHD restriction: nothing
+   * below depends on the equation set, only on the two model switches.
+   *
+   * @param time   time to interpolate at, SI
+   * @param ie     element index into element_list
+   * @param s, t   element-local coordinates
+   * @param phi    toroidal angle
+   * @param[out] ne  electron density [m^-3], floored at 1e16 as in the Fortran
+   * @param[out] Te  electron temperature [K], floored at 1
+   */
+  JGX_HD void calc_NjTj(const double time, const std::size_t ie,
+                        const double s, const double t, const double phi,
+                        double& ne, double& Te) const {
+    constexpr int n_v = 2;
+    const std::size_t pe[1] = { static_cast<std::size_t>(n_v) };
+
+    /* var_rho and var_T of mod_model_settings.f90, 0-based across the seam --
+     * the same hard-coded correspondence calc_EBpsiU_reduced makes for
+     * var_psi and var_u.  Both indices are with_TiTe = .false. values; with
+     * with_TiTe on, var_T is 0 and the temperature lives in var_Te instead,
+     * which is the second reason this branch is the only one covered. */
+    const std::int32_t iv_[n_v] = { 4, 5 };
+    const jgx::view<const std::int32_t, 1> i_v(iv_, pe);
+
+    Real P_[n_v], P_s_[n_v], P_t_[n_v], P_phi_[n_v], P_time_[n_v];
+    const jgx::view<Real, 1> P(P_, pe), P_s(P_s_, pe), P_t(P_t_, pe);
+    const jgx::view<Real, 1> P_phi(P_phi_, pe), P_time(P_time_, pe);
+
+    double R, R_s, R_t, Z, Z_s, Z_t;
+    interp.interp_PRZ(element_list, node_list, time, ie, i_v, n_v,
+                      s, t, phi, P, P_s, P_t, P_phi, P_time,
+                      R, R_s, R_t, Z, Z_s, Z_t);
+    (void)R; (void)R_s; (void)R_t; (void)Z; (void)Z_s; (void)Z_t;
+    (void)P_s; (void)P_t; (void)P_phi; (void)P_time;  /* values only */
+
+    const double n_ref = phys().central_density;
+    Te = fmax(P(1)/(2.0*K_BOLTZ*MU_ZERO*n_ref*1.0e20), 1.0);
+    ne = fmax(n_ref*P(0)*1.0e20, 1.0e16);
+  } // calc_NjTj
 };
 
 template <class Interp> using fields_set_aos = fields_set<layout_stride, Interp>;

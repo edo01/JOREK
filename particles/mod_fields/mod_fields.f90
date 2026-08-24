@@ -484,6 +484,16 @@ end subroutine calc_NeTevpar
 !> (call init_imp_adas).
 !>
 !> TODO make this "pure" subroutine but currently imp_cor%interp_linear prevents this.
+!> Evaluates the background densities and temperatures at a point.
+!>
+!> DUPLICATED IN C++ as fields_set::calc_NjTj, in fields_set.h -- keep the two in
+!> step. The C++ covers the with_impurities = .false., with_TiTe = .false. branch
+!> only, where ni(1) is ne and Ti is Te; this body is the general path.
+!> Evaluates the background densities and temperatures at a point.
+!>
+!> DUPLICATED IN C++ as fields_set::calc_NjTj, in fields_set.h -- keep the two in
+!> step. The C++ covers the with_impurities = .false., with_TiTe = .false. branch
+!> only, where ni(1) is ne and Ti is Te; this body is the general path.
 subroutine calc_NjTj(fields, time, i_elm, st, phi, m_i_over_m_imp, ne, te, ni, ti)
   use phys_module, only: central_density, imp_cor
   use constants

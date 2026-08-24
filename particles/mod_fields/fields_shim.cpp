@@ -28,6 +28,25 @@ extern "C" {
                               s, t, phi, Ev, Bv, *psi, *U);
     }
 
+    /* mod_fields::calc_NjTj, the with_impurities = .f., with_TiTe = .f. branch.
+     *
+     * ni and Ti are not returned: there ni(1) is ne and Ti is Te. */
+    void jgx_host_fields_calc_NjTj(void* el_base, const int32_t n_elements,
+                                   void* nd_base, const int32_t n_nodes,
+                                   const void* interp_base,
+                                   const int32_t i_elm0,
+                                   const double s, const double t, const double phi,
+                                   const double time,
+                                   double* ne, double* Te) {
+
+        const auto f = jorek::fields_linear_set_from_registry(
+            el_base, static_cast<std::size_t>(n_elements),
+            nd_base, static_cast<std::size_t>(n_nodes),
+            interp_base);
+
+        f.calc_NjTj(time, static_cast<std::size_t>(i_elm0), s, t, phi, *ne, *Te);
+    }
+
     /* mod_fields::grad_st_to_RZ. */
     void jgx_host_fields_grad_st_to_RZ(const int32_t n_v,
                                        const double* P_s, const double* P_t,
