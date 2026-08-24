@@ -5,6 +5,10 @@
 !> 
 !> NOTE: output of functions bessel_k0, bessel_k1,  and bessel_k2 is scaled
 !> by scalar e^(x), i.e., f_scaled = e^(x)*f_exact  to avoid under & overflow issues.
+!>
+!> DUPLICATED IN C++ as the bessel namespace, in bessel.h next door -- keep the
+!> two in step. The C++ carries the scaled branch (jint = 2) only, which is what
+!> the three public functions below ask for; the unscaled branch is Fortran-only.
 module mod_bessel
   implicit none
   
