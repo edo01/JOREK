@@ -19,7 +19,16 @@ const char* jgx_c_layout_tag(void) { return "colmajor"; }
 /* Rank->device binding happens above this call (jgx-gpu-backend.md, section
  * 4.6: kinetic_main, from the node-local rank) -- this just pins the process
  * to the device it was told to use. */
-void jgx_c_init_device(int device_id) { JGX_HIP_CHECK(hipSetDevice(device_id)); }
+void jgx_c_init_device(int device_id) {
+  int n_devices = 0;
+  JGX_HIP_CHECK(hipGetDeviceCount(&n_devices));
+  if (n_devices < 1) {
+    std::fprintf(stderr, "%s:%d: no HIP device visible to this rank\n", __FILE__,
+                 __LINE__);
+    std::abort();
+  }
+  JGX_HIP_CHECK(hipSetDevice(device_id % n_devices));
+}
 
 /* Symmetric with jgx_c_init_device: releases everything the runtime holds for this
  * device on this process, rather than leaving it to process exit. */
