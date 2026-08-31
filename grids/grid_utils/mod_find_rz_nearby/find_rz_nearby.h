@@ -12,6 +12,34 @@
 
 namespace find_rz_nearby
 {
+    
+    struct diagnostics {
+        int    not_found  = 0;   /*< the search ran out of iterations and the
+                                  *  global fallback failed too */
+        double nf_R = 0.0;       /*< the (R,Z) it was searching from, for the message */
+        double nf_Z = 0.0;
+        int    bad_i_from = 0;   /*< element pair whose connectivity disagreed */
+        int    bad_i_to   = 0;
+    };
+
+    /**
+     * Merge one search's diagnostics into a running set: first occurrence wins,
+     * each of the two independently.
+     */
+    JGX_HD inline void merge_diagnostics(diagnostics& into, const int not_found,
+                                         const double nf_R, const double nf_Z,
+                                         const int bad_i_from, const int bad_i_to) {
+        if (not_found != 0 && into.not_found == 0) {
+            into.not_found = not_found;
+            into.nf_R      = nf_R;
+            into.nf_Z      = nf_Z;
+        }
+        if (bad_i_to != 0 && into.bad_i_to == 0) {
+            into.bad_i_from = bad_i_from;
+            into.bad_i_to   = bad_i_to;
+        }
+    }
+
     /**
      * Auxiliary subroutine for find_RZ_nearby -- the geometry and the inverse
      * jacobian determinant at (st, p) in element i_elm.

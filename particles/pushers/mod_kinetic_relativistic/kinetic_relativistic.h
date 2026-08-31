@@ -26,20 +26,13 @@
 namespace kinetic_relativistic {
 
 /**
- * What the two find_RZ_nearby calls inside a push would have printed.
+ * What the two find_RZ_nearby calls inside a push would have printed. Only the
+ * first occurrence in a push survives.
  *
- * The kernel cannot write, so it carries the diagnostics out and the facade
- * prints them -- the same arrangement find_RZ_nearby's own facade uses, one
- * level further up. Only the first occurrence in a push survives.
+ * The type is find_rz_nearby's -- every kernel that drives a search reports the
+ * same two things, and this name is what the runaway code already calls it.
  */
-struct push_diagnostics {
-    int    not_found  = 0;   /*< the search ran out of iterations and the global
-                              *  fallback failed too */
-    double nf_R = 0.0;       /*< the (R,Z) it was searching from, for the message */
-    double nf_Z = 0.0;
-    int    bad_i_from = 0;   /*< element pair whose connectivity disagreed */
-    int    bad_i_to   = 0;
-};
+using push_diagnostics = find_rz_nearby::diagnostics;
 
 /**
  * mod_kinetic_relativistic::volume_preserving_first_half_step_jorek.
@@ -145,15 +138,8 @@ JGX_HD inline void find_particle_st(PS& part, const std::size_t ip, const FS& fi
     part.st(ip, 1) = t_new;
     part.i_elm(ip) = i_elm_new;
 
-    if (not_found != 0 && diag.not_found == 0) {
-        diag.not_found = not_found;
-        diag.nf_R = R_old;
-        diag.nf_Z = Z_old;
-    }
-    if (bad_i_to != 0 && diag.bad_i_to == 0) {
-        diag.bad_i_from = bad_i_from;
-        diag.bad_i_to   = bad_i_to;
-    }
+    find_rz_nearby::merge_diagnostics(diag, not_found, R_old, Z_old,
+                                      bad_i_from, bad_i_to);
 } // find_particle_st
 
 /**
