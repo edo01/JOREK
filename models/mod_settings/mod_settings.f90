@@ -13,7 +13,7 @@ integer, parameter :: n_nodes_max       = 60001  !< maximum number of nodes
 integer, parameter :: n_elements_max    = 60001  !< maximum number of elements
 integer, parameter :: n_boundary_max    = 1001   !< maximum number of boundary elements
 integer, parameter :: n_pieces_max      = 6001   !< maximum number of line pieces describing a flux surface
-integer, parameter :: n_values_max      = 11     !< maximum number of variables stored per node
+integer, parameter :: n_values_max      = 12     !< maximum number of variables stored per node
 
 ! ##################################################################################################
 ! ####  @USERS: Please do not change below this line ###############################################
