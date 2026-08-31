@@ -56,6 +56,8 @@ program JOREK2
   use mod_atomic_coeff_deuterium, only: ad_deuterium 
   use mod_exchange_indices
   use mod_startup_teardown
+  use mod_jgx_jorek_records, only: jgx_register_jorek_records
+  use mod_jgx_phys, only: jgx_set_phys
   use mod_initial_grid
   use mod_flux_grid
 
@@ -222,6 +224,11 @@ mpi_required = 0
   write(*,'(A,I5,2A)') '  #MPI id, ProcessorName ', rank, ': ', name
   call MPI_Barrier(MPI_COMM_WORLD,ierr)
 
+  ! --- Register data layouts to jgx. Measured from local records, so this has
+  !     no ordering constraint against grid construction; it only has to happen
+  !     before the first record-backed view is taken (e.g. the element RTree).
+  call jgx_register_jorek_records()
+
   ! --- Initialise memory tracing
   call tr_meminit(my_id, n_mpi)
 
@@ -243,6 +250,10 @@ mpi_required = 0
   
   ! --- Preset input parameters to reasonable defaults, then read the input file.
   call initialise_and_broadcast_parameters(my_id, "__NO_FILENAME__", .false.)
+
+  ! --- Push phys_module's scalars over the seam, now that the input file has
+  !     given every rank its values. tstep is refreshed again in the time loop.
+  call jgx_set_phys()
   
   ! --- Initialize the vacuum part.
   call vacuum_init(my_id, freeboundary_equil, freeboundary, resistive_wall)
@@ -680,6 +691,8 @@ write(*,*) "n elements:", element_list%n_elements
     index_now = index_now + 1
     
     tstep = tstep_n(jstep)
+    ! tstep just changed: refresh the copy the ported interpolators read
+    call jgx_set_phys()
 
     ! start from t=0 
     if (index_now <= 1) tstep_prev = tstep
