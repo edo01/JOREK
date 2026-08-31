@@ -15,52 +15,40 @@ module mod_boris
   public gc_to_kinetic, kinetic_to_gc
   public kinetic_to_kinetic_leapfrog, kinetic_leapfrog_to_kinetic
   public kinetic_leapfrog_to_gc, gc_to_kinetic_leapfrog
+
+  !> Interface only -- the body is in C++ (mod_boris/boris_shim.cpp).
+  interface
+    subroutine jgx_host_boris_push_cylindrical(part_base, m, E, B, dt) &
+        bind(C, name="jgx_host_boris_push_cylindrical")
+      use, intrinsic :: iso_c_binding, only: c_double, c_ptr
+      implicit none
+      type(c_ptr),    value, intent(in) :: part_base
+      real(c_double), value, intent(in) :: m, dt
+      real(c_double),        intent(in) :: E(3), B(3)
+    end subroutine
+  end interface
+
 contains
 
-!> Push a single particle for some timesteps with the boris method
+!> Push a single particle for one timestep with the boris method
 !> See G.L. Delzanno, E. Camporeale / JCP 253 (2013) 259-277 for details.
 !> This routine works in RZPhi coordinates
-pure subroutine boris_push_cylindrical(particle, m, E, B, dt)
-  use mod_math_operators, only: cross_product
-  type(particle_kinetic_leapfrog), intent(inout)  :: particle
+!>
+!> Facade only -- the body is in C++ (mod_boris/boris.h, through
+!> mod_boris/boris_shim.cpp next door). The energetic-particle kernels call that
+!> header directly, so there is one body and not two.
+!>
+!> Not `pure` any more: the body is behind a bind(C) interface, and the particle
+!> reaches it as a C_LOC, which needs the dummy to be a target. No caller needed
+!> it pure.
+subroutine boris_push_cylindrical(particle, m, E, B, dt)
+  use, intrinsic :: iso_c_binding, only: c_loc
+  type(particle_kinetic_leapfrog), target, intent(inout)  :: particle
   real*8, intent(in) :: m
   real*8, dimension(3), intent(in) :: E, B
   real*8, intent(in) :: dt
-  real*8 :: R, Rphi
-  real*8 :: fE, fB, eom
-  real*8 :: B2, Bnorm
-  eom = EL_CHG / (m * ATOMIC_MASS_UNIT)
 
-  B2    = dot_product(B,B)
-  Bnorm = sqrt(B2)
-
-  ! update the velocity from v^(n-1/2) to v^(n+1/2)
-  ! Calculate the geometric factor f = tan(q/m delta_t/2 |B|)/|B|
-  fE =     particle%q*eom * dt * 0.5d0
-  fB = tan(particle%q*eom * dt * 0.5d0 * Bnorm) / Bnorm
-
-  ! Calculate the electric field update (v^n-1/2 -> v-) with the Boris method
-  particle%v = particle%v + fE * E
-  ! Calculate the rotation
-  particle%v = (particle%v + 2.d0*fB/(1.d0+fB*fB*B2)*( &
-    cross_product(particle%v,B) &
-    - fB * particle%v * B2 &
-    + fB * B * dot_product(particle%v,B)))
-  ! Calculate the next electric field update (v+ -> v^n+1/2)
-  particle%v = particle%v + fE * E
-  ! update the position from v^n to v^(n+1)
-  ! Calculate the new R and RPhi
-  R    = particle%x(1) + particle%v(1) * dt
-  RPhi = particle%v(3) * dt
-
-  ! Calculate the new R, Phi, Z
-  particle%x(1) = sqrt(R**2 + RPhi**2)
-  particle%x(2) = particle%x(2) + dt * particle%v(2)
-  particle%x(3) = particle%x(3) + asin(RPhi / particle%x(1))
-
-  ! Adjust R and Phi velocities (component 1 and 3) to the new reference frame
-  particle%v(1:3:2) = [R     * particle%v(1) + RPhi * particle%v(3), &
-                       -RPhi * particle%v(1) + R    * particle%v(3)] / particle%x(1)
+  call jgx_host_boris_push_cylindrical(c_loc(particle), m, E, B, dt)
 end subroutine boris_push_cylindrical
 
 !> Push a single particle for some timesteps with the boris method
