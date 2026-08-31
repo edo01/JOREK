@@ -76,6 +76,7 @@ DIRS := diagnostics				\
 	particles/mod_runaway_evolution		\
 	particles/particle_types		\
 	particles/pushers			\
+	particles/pushers/mod_boris		\
 	particles/pushers/mod_kinetic_relativistic \
 	particles/pushers/mod_pusher_tools	\
 	particles/examples			\

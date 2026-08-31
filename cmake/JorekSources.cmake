@@ -54,6 +54,7 @@ set(JOREK_SOURCE_DIRS
   particles/initialisers
   particles/projection_functions
   particles/pushers
+  particles/pushers/mod_boris
   particles/pushers/mod_kinetic_relativistic
   particles/pushers/mod_pusher_tools
   # Not optional despite the name: the synthetic-light postprocessors in
