@@ -3,6 +3,7 @@ module mod_jgx_jorek_records
   use mod_jgx_element_record,  only: jgx_register_element_record
   use mod_jgx_node_record,     only: jgx_register_node_record
   use mod_jgx_particle_record, only: jgx_register_particle_kin_rel_record
+  use mod_jgx_particle_record, only: jgx_register_particle_kin_lf_record
   use mod_jgx_fields_interp_linear_record, only: jgx_register_fields_interp_linear_record
   implicit none
   private
@@ -14,6 +15,7 @@ contains
     call jgx_register_element_record()
     call jgx_register_node_record()
     call jgx_register_particle_kin_rel_record()
+    call jgx_register_particle_kin_lf_record()
     call jgx_register_fields_interp_linear_record()
     ! add here the registration to your new structure
   end subroutine jgx_register_jorek_records

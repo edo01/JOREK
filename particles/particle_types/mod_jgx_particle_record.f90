@@ -1,9 +1,11 @@
-!> Registers particle_kinetic_relativistic's memory layout with jgx.
+!> Registers the particle types' memory layouts with jgx.
 !>
-!> The field list is jgx/jorek/records/particle_base_record.def followed by
-!> particle_kin_rel_record.def, expanded here and by particle_set.h -- one list,
-!> so nothing has to be kept in step by hand. The base list comes first, which is
-!> what keeps the inherited components at ids 0..5 in every particle record.
+!> One registration per concrete type.
+!>
+!> Each field list is jgx/jorek/records/particle_base_record.def followed by the
+!> type's own, expanded here and by particle_set.h -- one list, so nothing has to
+!> be kept in step by hand. The base list comes first, which is what keeps the
+!> inherited components at ids 0..5 in every particle record.
 !>
 !> Inheritance is not visible to the registry: the parent's components are
 !> ordinary fields of the concrete type, at offsets the compiler chose. They are
@@ -17,14 +19,19 @@
 module mod_jgx_particle_record
   use, intrinsic :: iso_c_binding
   use mod_particle_types, only: particle_kinetic_relativistic
-  use mod_jgx_record_ids, only: JGX_REC_PARTICLE_KIN_REL
+  use mod_particle_types, only: particle_kinetic_leapfrog
+  use mod_jgx_record_ids, only: JGX_REC_PARTICLE_KIN_REL, JGX_REC_PARTICLE_KIN_LF
   use mod_jgx_record
   implicit none
   private
   public :: jgx_register_particle_kin_rel_record
+  public :: jgx_register_particle_kin_lf_record
 
 contains
 
+  !>------------------------------------------
+  !> particle_kinetic_relativistic.
+  !>------------------------------------------
   subroutine jgx_register_particle_kin_rel_record()
     type(particle_kinetic_relativistic), target :: pk(2)
     integer(c_int32_t) :: f
@@ -53,5 +60,33 @@ contains
 
     call jgx_c_record_end(rid)
   end subroutine jgx_register_particle_kin_rel_record
+
+  !>------------------------------------------
+  !> particle_kinetic_leapfrog.
+  !>------------------------------------------
+  subroutine jgx_register_particle_kin_lf_record()
+    type(particle_kinetic_leapfrog), target :: pk(2)
+    integer(c_int32_t) :: f
+    integer(c_size_t)  :: stride
+    integer(c_int32_t), parameter :: rid = JGX_REC_PARTICLE_KIN_LF
+
+    f = 0
+#define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) f = f + 1
+#include "jgx/jorek/records/particle_base_record.def"
+#include "jgx/jorek/records/particle_kin_lf_record.def"
+#undef JGX_FIELD
+
+    stride = transfer(c_loc(pk(2)), 1_c_size_t) - transfer(c_loc(pk(1)), 1_c_size_t)
+    call jgx_c_record_begin(rid, stride, f)
+
+    f = 0
+#define JGX_FIELD(TAG, comp, T, RANK, KIND, AXES) \
+    call jgx_add_field(rid, f, c_loc(pk(1)%comp), c_loc(pk(1)), KIND, shape(pk(1)%comp)); f = f + 1
+#include "jgx/jorek/records/particle_base_record.def"
+#include "jgx/jorek/records/particle_kin_lf_record.def"
+#undef JGX_FIELD
+
+    call jgx_c_record_end(rid)
+  end subroutine jgx_register_particle_kin_lf_record
 
 end module mod_jgx_particle_record
