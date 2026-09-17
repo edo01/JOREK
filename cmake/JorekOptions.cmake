@@ -42,8 +42,8 @@ option(JOREK_USE_STD_BESSELK "Use the C++ standard library for modified Bessel f
 option(JOREK_USE_BOOST "Use Boost for modified Bessel functions" OFF)
 
 # --- The JGX device backend -------------------------------------------------
-set(JGX_DEVICE "off" CACHE STRING "JGX device backend: off | hip | kokkos")
-set_property(CACHE JGX_DEVICE PROPERTY STRINGS off hip kokkos)
+set(JGX_DEVICE "off" CACHE STRING "JGX device backend: off | hip | kokkos | alpaka")
+set_property(CACHE JGX_DEVICE PROPERTY STRINGS off hip kokkos alpaka)
 
 # A list is allowed, and each
 # entry is in its vendor's own spelling -- sm_90, gfx942 -- so that a preset can
@@ -81,8 +81,8 @@ if(JOREK_USE_QUADTREE AND JOREK_USE_NO_TREE)
   message(FATAL_ERROR "JOREK_USE_QUADTREE and JOREK_USE_NO_TREE are mutually exclusive")
 endif()
 
-if(NOT JGX_DEVICE MATCHES "^(off|hip|kokkos)$")
-  message(FATAL_ERROR "JGX_DEVICE must be 'off', 'hip' or 'kokkos', not '${JGX_DEVICE}'")
+if(NOT JGX_DEVICE MATCHES "^(off|hip|kokkos|alpaka)$")
+  message(FATAL_ERROR "JGX_DEVICE must be 'off', 'hip', 'kokkos' or 'alpaka', not '${JGX_DEVICE}'")
 endif()
 
 if(JOREK_USE_STD_BESSELK AND JOREK_USE_BOOST)

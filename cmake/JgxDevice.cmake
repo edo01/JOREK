@@ -3,8 +3,8 @@
 # Defines jgx_device, a static library holding the .hip.cpp translation units,
 # which jorek_core links publicly. Nothing here runs when JGX_DEVICE=off.
 #
-# The sources are HIP (JGX_DEVICE=hip) or Kokkos (JGX_DEVICE=kokkos) for both
-# vendors; only the build differs. JGX_DEVICE_ARCH selects the branch:
+# The sources are HIP (JGX_DEVICE=hip), Kokkos (JGX_DEVICE=kokkos) or alpaka
+# (JGX_DEVICE=alpaka) for both vendors; only the build differs. JGX_DEVICE_ARCH selects the branch:
 #
 #   sm_NN    NVIDIA. Compiled as CUDA: HIP-on-NVIDIA is a header layer over
 #            CUDA, so hipcc would exec nvcc in any case.
@@ -38,6 +38,19 @@ if(JGX_DEVICE STREQUAL "kokkos")
     $<TARGET_PROPERTY:Kokkos::kokkoscore,INTERFACE_INCLUDE_DIRECTORIES>)
   set(JGX_DEVICE_LIBRARIES
     $<TARGET_LINKER_FILE:Kokkos::kokkoscore> ${CMAKE_DL_LIBS})
+elseif(JGX_DEVICE STREQUAL "alpaka")
+  # alpaka is header-only and selects its vendor API at configure time. The
+  # sources are compiled in place, as for the other backends.
+  if(JGX_DEVICE_ARCH MATCHES "gfx")
+    set(alpaka_DEP_HIP ON CACHE BOOL "" FORCE)
+  else()
+    set(alpaka_DEP_CUDA ON CACHE BOOL "" FORCE)
+  endif()
+  set(alpaka_DEP_OMP OFF CACHE BOOL "" FORCE)
+  set(alpaka_LANGUAGE_SEPARATION OFF CACHE BOOL "" FORCE)
+  find_package(alpaka 3 CONFIG REQUIRED)
+  set(JGX_DEVICE_DEFINE JGX_DEVICE_ALPAKA)
+  set(JGX_DEVICE_STANDARD 20)
 endif()
 
 # hip-config.cmake is preferred; ROCM_PATH is the fallback for installs that do
@@ -110,6 +123,12 @@ if(JGX_DEVICE STREQUAL "kokkos")
     "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/backends/kokkos/jgx_pack_kokkos.kokkos.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/models/phys_module/phys_device.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/particles/mod_runaway_evolution/runaway_evolution_device.kokkos.cpp")
+elseif(JGX_DEVICE STREQUAL "alpaka")
+  set(JGX_DEVICE_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/backends/alpaka/jgx_backend_alpaka.alpaka.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/backends/alpaka/jgx_pack_alpaka.alpaka.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/models/phys_module/phys_device.hip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/particles/mod_runaway_evolution/runaway_evolution_device.alpaka.cpp")
 else()
   set(JGX_DEVICE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/jgx/cpp/backends/hip/jgx_backend_hip.hip.cpp"
@@ -171,6 +190,11 @@ if(JGX_DEVICE_AMD_ARCH)
 
   # Required; see above.
   target_compile_options(jgx_device_objs PRIVATE -fgpu-rdc)
+
+  if(JGX_DEVICE STREQUAL "alpaka")
+    target_link_libraries(jgx_device_objs PRIVATE alpaka::alpaka)
+    alpaka_finalize(jgx_device_objs)
+  endif()
   # -Werror=cross-execution-space-call likewise has no counterpart: clang already
   # rejects a host call from a __host__ __device__ function as an error.
 
@@ -247,6 +271,12 @@ else()
       -extended-lambda -Wext-lambda-captures-this)
   endif()
 
+  # Compile usage requirements only: alpaka is header-only.
+  if(JGX_DEVICE STREQUAL "alpaka")
+    target_link_libraries(jgx_device PRIVATE alpaka::alpaka)
+    alpaka_finalize(jgx_device)
+  endif()
+
   set_target_properties(jgx_device PROPERTIES
     CUDA_ARCHITECTURES "${JGX_DEVICE_CUDA_ARCH}"   # sm_90 -> 90, list-for-list
     # d_phys is read across translation units, so device code must be
@@ -266,6 +296,8 @@ endif()
 
 if(JGX_DEVICE STREQUAL "kokkos")
   message(STATUS "JGX device backend: ${JGX_DEVICE} ${Kokkos_VERSION}, arch ${JGX_DEVICE_ARCH}")
+elseif(JGX_DEVICE STREQUAL "alpaka")
+  message(STATUS "JGX device backend: ${JGX_DEVICE} ${alpaka_VERSION}, arch ${JGX_DEVICE_ARCH}")
 else()
   message(STATUS "JGX device backend: ${JGX_DEVICE}, arch ${JGX_DEVICE_ARCH}, "
                  "HIP headers ${JGX_HIP_INCLUDE_DIR}")

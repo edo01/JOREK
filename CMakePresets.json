@@ -72,6 +72,17 @@
       }
     },
     {
+      "name": "pitagora-gpu-alpaka",
+      "inherits": "pitagora-intel",
+      "displayName": "Pitagora GPU - Intel oneAPI plus the alpaka backend (H100)",
+      "description": "Requires the pitagora-intel modules, cuda and alpaka 3 on CMAKE_PREFIX_PATH.",
+      "cacheVariables": {
+        "JGX_DEVICE": "alpaka",
+        "JGX_DEVICE_ARCH": "sm_90",
+        "CMAKE_CUDA_FLAGS": "-Xcompiler=-mcmodel=medium"
+      }
+    },
+    {
       "name": "viper-intel",
       "inherits": "base",
       "displayName": "Viper CPU - Intel oneAPI + MKL + STRUMPACK (AMD Genoa/Zen4)",
@@ -177,6 +188,11 @@
     {
       "name": "pitagora-gpu-kokkos",
       "configurePreset": "pitagora-gpu-kokkos",
+      "jobs": 16
+    },
+    {
+      "name": "pitagora-gpu-alpaka",
+      "configurePreset": "pitagora-gpu-alpaka",
       "jobs": 16
     },
     {
