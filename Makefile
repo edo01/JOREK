@@ -189,8 +189,8 @@ most: jorek2_connection2 \
       rst_hdf52bin \
       jorek2_main
 # Make all object files we know of.
-# *.hip.cpp is filtered out.
-find_files = $(filter-out %.hip.cpp, \
+# *.hip.cpp and *.kokkos.cpp are filtered out.
+find_files = $(filter-out %.hip.cpp %.kokkos.cpp, \
 	$(wildcard $(dir)/*.f90) $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.f) $(wildcard $(dir)/*.cpp))
 objs: $(foreach file,$(foreach dir,$(DIRS), $(find_files)), $(OBJDIR)/$(notdir $(basename $(file))).o)
 

@@ -111,7 +111,7 @@ endforeach()
 
 # Device translation units belong to jgx_device (cmake/JgxDevice.cmake), which
 # lists them explicitly and compiles them with the device toolchain. 
-list(FILTER _all_sources EXCLUDE REGEX "\\.hip\\.cpp$")
+list(FILTER _all_sources EXCLUDE REGEX "\\.(hip|kokkos)\\.cpp$")
 
 
 # The Catalyst adaptor is guarded by USE_CATALYST but its .cpp does not compile

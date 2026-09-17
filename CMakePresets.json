@@ -61,6 +61,17 @@
       }
     },
     {
+      "name": "pitagora-gpu-kokkos",
+      "inherits": "pitagora-intel",
+      "displayName": "Pitagora GPU - Intel oneAPI plus the Kokkos backend (H100)",
+      "description": "Requires the pitagora-intel modules, cuda and Kokkos 5 (CUDA, sm_90, relocatable device code) on CMAKE_PREFIX_PATH.",
+      "cacheVariables": {
+        "JGX_DEVICE": "kokkos",
+        "JGX_DEVICE_ARCH": "sm_90",
+        "CMAKE_CUDA_FLAGS": "-Xcompiler=-mcmodel=medium"
+      }
+    },
+    {
       "name": "viper-intel",
       "inherits": "base",
       "displayName": "Viper CPU - Intel oneAPI + MKL + STRUMPACK (AMD Genoa/Zen4)",
@@ -161,6 +172,11 @@
     {
       "name": "pitagora-gpu-hip",
       "configurePreset": "pitagora-gpu-hip",
+      "jobs": 16
+    },
+    {
+      "name": "pitagora-gpu-kokkos",
+      "configurePreset": "pitagora-gpu-kokkos",
       "jobs": 16
     },
     {
