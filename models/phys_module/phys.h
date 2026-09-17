@@ -30,7 +30,7 @@ struct phys_state {
 /* The host copy of phys_state. */
 const phys_state& host_phys();
 
-#if defined(JGX_DEVICE_CUDA) || defined(JGX_DEVICE_HIP)
+#if defined(JGX_DEVICE_CUDA) || defined(JGX_DEVICE_HIP) || defined(JGX_DEVICE_KOKKOS)
 /* The device mirror of phys_state, defined in phys_device.*.cpp. 
  *
  * NOTE: It switches on the compilation *pass*, not the build! 
