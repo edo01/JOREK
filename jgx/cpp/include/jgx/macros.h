@@ -14,6 +14,9 @@
 #elif defined(JGX_DEVICE_ALPAKA)
 #  include <alpaka/core/common.hpp>
 #  define JGX_HD ALPAKA_FN_HOST_ACC
+#elif defined(JGX_DEVICE_OPENMP)
+/* A function called from a target region is compiled for the device implicitly. */
+#  define JGX_HD
 #else
 #  define JGX_HD
 #endif
@@ -37,6 +40,11 @@
 /* TODO: ALPAKA_DEVICE_GLOBAL provides device globals behind an accessor; the
  * annotation of the underlying vendor compiler is used meanwhile. */
 #  define JGX_DEVICE_VAR __device__
+#  define JGX_SYMBOL(x)  (&(x))
+#elif defined(JGX_DEVICE_OPENMP)
+/* The variable is made a device global by `omp declare target` beside its
+ * declaration; it keeps a host copy, which jgx_c_push_symbol writes as well. */
+#  define JGX_DEVICE_VAR
 #  define JGX_SYMBOL(x)  (&(x))
 #endif
 // ad here other backends symbols

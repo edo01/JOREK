@@ -11,6 +11,9 @@ namespace jgx {
 JGX_HD inline void atomic_add(double* dst, double value) {
 #if defined(JGX_DEVICE_KOKKOS)
   Kokkos::atomic_add(dst, value);
+#elif defined(JGX_DEVICE_OPENMP)
+  #pragma omp atomic update
+  *dst += value;
 #elif defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
   /* Native double atomicAdd since sm_60 and on every GFX9 and later, so no
    * compare-and-swap fallback is compiled here. */

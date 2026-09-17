@@ -18,6 +18,8 @@
 #  include <alpaka/alpaka.hpp>
 /* <sys/param.h>, which alpaka includes, defines HZ. */
 #  undef HZ
+#elif defined(JGX_DEVICE_OPENMP)
+#  include <omp.h>
 #endif
 // you can add other libraries here
 

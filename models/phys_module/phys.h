@@ -31,12 +31,18 @@ struct phys_state {
 const phys_state& host_phys();
 
 #if defined(JGX_DEVICE_CUDA) || defined(JGX_DEVICE_HIP) || defined(JGX_DEVICE_KOKKOS) || \
-    defined(JGX_DEVICE_ALPAKA)
+    defined(JGX_DEVICE_ALPAKA) || defined(JGX_DEVICE_OPENMP)
 /* The device mirror of phys_state, defined in phys_device.*.cpp. 
  *
  * NOTE: It switches on the compilation *pass*, not the build! 
  */
+#if defined(JGX_DEVICE_OPENMP)
+#pragma omp declare target
+#endif
 extern JGX_DEVICE_VAR phys_state d_phys;
+#if defined(JGX_DEVICE_OPENMP)
+#pragma omp end declare target
+#endif
 #endif
 
 /* Returns the right copy of the phys_state object depending on the calling
@@ -45,7 +51,8 @@ extern JGX_DEVICE_VAR phys_state d_phys;
  * NOTE: It switches on the compilation *pass*, not the build! 
  */
 JGX_HD inline const phys_state& phys() {
-#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__) || defined(JGX_DEVICE_OPENMP)
+  /* OpenMP compiles one pass for both; the host copy of d_phys mirrors the device. */
   return d_phys;
 #else
   return host_phys();
