@@ -4,7 +4,8 @@
 # which jorek_core links publicly. Nothing here runs when JGX_DEVICE=off.
 #
 # The sources are HIP (JGX_DEVICE=hip), Kokkos (JGX_DEVICE=kokkos) or alpaka
-# (JGX_DEVICE=alpaka) for both vendors; only the build differs. JGX_DEVICE_ARCH selects the branch:
+# (JGX_DEVICE=alpaka) for both vendors; only the build differs. OpenMP offload
+# (JGX_DEVICE=openmp) is built by cmake/JgxDeviceOpenMP.cmake. JGX_DEVICE_ARCH selects the branch:
 #
 #   sm_NN    NVIDIA. Compiled as CUDA: HIP-on-NVIDIA is a header layer over
 #            CUDA, so hipcc would exec nvcc in any case.
@@ -19,6 +20,11 @@ endif()
 
 # Host-visible: "a device backend is present"
 target_compile_definitions(jorek_common INTERFACE JGX_HAS_DEVICE)
+
+if(JGX_DEVICE STREQUAL "openmp")
+  include(JgxDeviceOpenMP)
+  return()
+endif()
 
 # --- Toolchain --------------------------------------------------------------
 #

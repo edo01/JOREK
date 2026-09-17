@@ -83,6 +83,16 @@
       }
     },
     {
+      "name": "pitagora-gpu-openmp",
+      "inherits": "pitagora-intel",
+      "displayName": "Pitagora GPU - Intel oneAPI plus the OpenMP offload backend (H100)",
+      "description": "Requires the pitagora-intel modules and nvhpc (nvc++) on PATH.",
+      "cacheVariables": {
+        "JGX_DEVICE": "openmp",
+        "JGX_DEVICE_ARCH": "sm_90"
+      }
+    },
+    {
       "name": "viper-intel",
       "inherits": "base",
       "displayName": "Viper CPU - Intel oneAPI + MKL + STRUMPACK (AMD Genoa/Zen4)",
@@ -193,6 +203,11 @@
     {
       "name": "pitagora-gpu-alpaka",
       "configurePreset": "pitagora-gpu-alpaka",
+      "jobs": 16
+    },
+    {
+      "name": "pitagora-gpu-openmp",
+      "configurePreset": "pitagora-gpu-openmp",
       "jobs": 16
     },
     {

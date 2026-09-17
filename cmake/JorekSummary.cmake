@@ -13,6 +13,9 @@ message(STATUS "  C / C++ compiler  : ${CMAKE_C_COMPILER_ID} / ${CMAKE_CXX_COMPI
 message(STATUS "  MPI               : ${MPI_Fortran_VERSION}")
 if(JGX_DEVICE STREQUAL "off")
   message(STATUS "  JGX device        : off (host only)")
+elseif(JGX_DEVICE STREQUAL "openmp")
+  message(STATUS "  JGX device        : ${JGX_DEVICE} (${JGX_DEVICE_ARCH}), "
+                 "compiled by ${JGX_OPENMP_CXX_COMPILER}")
 elseif(JGX_DEVICE_AMD_ARCH)
   message(STATUS "  JGX device        : ${JGX_DEVICE} (${JGX_DEVICE_ARCH}), "
                  "compiled as ${CMAKE_HIP_COMPILER_ID} HIP ${CMAKE_HIP_COMPILER_VERSION}")
