@@ -11,6 +11,9 @@
 #elif defined(JGX_DEVICE_KOKKOS)
 #  include <Kokkos_Macros.hpp>
 #  define JGX_HD KOKKOS_FUNCTION
+#elif defined(JGX_DEVICE_ALPAKA)
+#  include <alpaka/core/common.hpp>
+#  define JGX_HD ALPAKA_FN_HOST_ACC
 #else
 #  define JGX_HD
 #endif
@@ -28,6 +31,11 @@
 #elif defined(JGX_DEVICE_KOKKOS)
 /* TODO: Kokkos has no device global; the annotation of the underlying vendor
  * compiler is used (CUDA and HIP spell it alike). */
+#  define JGX_DEVICE_VAR __device__
+#  define JGX_SYMBOL(x)  (&(x))
+#elif defined(JGX_DEVICE_ALPAKA)
+/* TODO: ALPAKA_DEVICE_GLOBAL provides device globals behind an accessor; the
+ * annotation of the underlying vendor compiler is used meanwhile. */
 #  define JGX_DEVICE_VAR __device__
 #  define JGX_SYMBOL(x)  (&(x))
 #endif
