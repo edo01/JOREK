@@ -12,6 +12,8 @@
 #  include <hip/hip_runtime.h>
 #elif defined(JGX_DEVICE_CUDA)
 #  include <cuda_runtime.h>
+#elif defined(JGX_DEVICE_KOKKOS)
+#  include <Kokkos_Core.hpp>
 #endif
 // you can add other libraries here
 

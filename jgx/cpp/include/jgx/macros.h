@@ -8,10 +8,9 @@
  * writes `JGX_HD inline` explicitly. */
 #if defined(JGX_DEVICE_CUDA) || defined(JGX_DEVICE_HIP)
 #  define JGX_HD __host__ __device__
-// to add kokkos just:
-/*#elif defined(JGX_DEVICE_KOKKOS)
- *#  include <Kokkos_Macros.hpp>
- *#  define JGX_HD KOKKOS_FUNCTION*/
+#elif defined(JGX_DEVICE_KOKKOS)
+#  include <Kokkos_Macros.hpp>
+#  define JGX_HD KOKKOS_FUNCTION
 #else
 #  define JGX_HD
 #endif
@@ -26,6 +25,11 @@
 #  define JGX_DEVICE_VAR __device__
 #  define JGX_SYMBOL(x)  (&(x))
 #  define JGX_KERNEL     __global__
+#elif defined(JGX_DEVICE_KOKKOS)
+/* TODO: Kokkos has no device global; the annotation of the underlying vendor
+ * compiler is used (CUDA and HIP spell it alike). */
+#  define JGX_DEVICE_VAR __device__
+#  define JGX_SYMBOL(x)  (&(x))
 #endif
 // ad here other backends symbols
 
