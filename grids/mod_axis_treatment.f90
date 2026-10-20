@@ -285,6 +285,38 @@ enddo ! loop over iv
 
 end subroutine transform_basis_for_axis_element
 
+! Transform the test functions of an element RHS stored as (dof, vertex, harmonic), as in the particle
+! projections. Same transform as transform_basis_for_axis_element, applied one harmonic at a time.
+subroutine transform_rhs_for_axis_element(node_list, element, ielm, RHS, n_tor_local)
+use data_structure
+use phys_module
+implicit none
+type(type_node_list), intent(in)    :: node_list
+type(type_element),   intent(in)    :: element
+integer,              intent(in)    :: ielm, n_tor_local
+real*8,               intent(inout) :: RHS(n_degrees, n_vertex_max, n_tor_local)
+
+type(type_node) :: nodes(n_vertex_max)
+real*8          :: ELM(n_vertex_max*(n_order+1), n_vertex_max*(n_order+1))
+integer         :: iv, in
+
+if (.not. any(node_list%node(element%vertex(1:n_vertex_max))%axis_node)) return
+
+do iv = 1, n_vertex_max
+  call make_deep_copy_node(node_list%node(element%vertex(iv)), nodes(iv))
+enddo
+
+ELM = 0.d0
+do in = 1, n_tor_local
+  call transform_basis_for_axis_element(nodes, ielm, ELM, RHS(:,:,in), (/ 1 /), 1, (/ 1 /), 1)
+enddo
+
+do iv = 1, n_vertex_max
+  call dealloc_node(nodes(iv))
+enddo
+
+end subroutine transform_rhs_for_axis_element
+
 ! Since the axis treatment solves for new degrees of freedom, we need to
 ! transforms degrees of freedom to old ones.
 subroutine new_to_old_dofs_on_the_axis(node_list, vg, new_dofs, old_dofs)
