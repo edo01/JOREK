@@ -212,11 +212,20 @@ if(JGX_DEVICE_AMD_ARCH)
     list(APPEND JGX_DEVICE_OFFLOAD_FLAGS "--offload-arch=${_arch}")
   endforeach()
 
+  # A relocatable-device-code Kokkos defines device symbols of its own (e.g. the
+  # HIP constant-memory buffer its kernels launch through), so its archive joins
+  # the device link.
+  set(JGX_DEVICE_LINK_LIBS "")
+  if(JGX_DEVICE STREQUAL "kokkos")
+    set(JGX_DEVICE_LINK_LIBS $<TARGET_LINKER_FILE:Kokkos::kokkoscore>)
+  endif()
+
   set(JGX_DEVICE_LINK_OBJ "${CMAKE_CURRENT_BINARY_DIR}/jgx_device_link.o")
   add_custom_command(
     OUTPUT "${JGX_DEVICE_LINK_OBJ}"
     COMMAND "${CMAKE_HIP_COMPILER}" --hip-link -fgpu-rdc ${JGX_DEVICE_OFFLOAD_FLAGS}
-            -r $<TARGET_OBJECTS:jgx_device_objs> -o "${JGX_DEVICE_LINK_OBJ}"
+            -r $<TARGET_OBJECTS:jgx_device_objs> ${JGX_DEVICE_LINK_LIBS}
+            -o "${JGX_DEVICE_LINK_OBJ}"
     DEPENDS jgx_device_objs $<TARGET_OBJECTS:jgx_device_objs>
     COMMENT "Device-linking the JGX HIP objects (${JGX_DEVICE_AMD_ARCH})"
     COMMAND_EXPAND_LISTS

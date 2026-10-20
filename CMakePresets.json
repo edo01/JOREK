@@ -149,6 +149,38 @@
       }
     },
     {
+      "name": "viper-gpu-kokkos",
+      "inherits": "viper-intel",
+      "displayName": "Viper GPU - Intel oneAPI plus the Kokkos backend (MI300A)",
+      "description": "Requires the intel modules, rocm and Kokkos 5 (HIP, gfx942, relocatable device code) on CMAKE_PREFIX_PATH.",
+      "cacheVariables": {
+        "JGX_DEVICE": "kokkos",
+        "JGX_DEVICE_ARCH": "gfx942",
+        "CMAKE_HIP_FLAGS": "-Xarch_host -mcmodel=medium"
+      }
+    },
+    {
+      "name": "viper-gpu-alpaka",
+      "inherits": "viper-intel",
+      "displayName": "Viper GPU - Intel oneAPI plus the alpaka backend (MI300A)",
+      "description": "Requires the intel modules, rocm and alpaka 3 on CMAKE_PREFIX_PATH.",
+      "cacheVariables": {
+        "JGX_DEVICE": "alpaka",
+        "JGX_DEVICE_ARCH": "gfx942",
+        "CMAKE_HIP_FLAGS": "-Xarch_host -mcmodel=medium"
+      }
+    },
+    {
+      "name": "viper-gpu-openmp",
+      "inherits": "viper-intel",
+      "displayName": "Viper GPU - Intel oneAPI plus the OpenMP offload backend (MI300A)",
+      "description": "Requires the intel modules and rocm (ROCm's clang++ as the offload compiler).",
+      "cacheVariables": {
+        "JGX_DEVICE": "openmp",
+        "JGX_DEVICE_ARCH": "gfx942"
+      }
+    },
+    {
       "name": "tok-intel",
       "inherits": "base",
       "displayName": "TOK CPU - Intel oneAPI + MKL + STRUMPACK (IPP Garching)",
@@ -246,6 +278,21 @@
     {
       "name": "viper-gpu-hip",
       "configurePreset": "viper-gpu-hip",
+      "jobs": 16
+    },
+    {
+      "name": "viper-gpu-kokkos",
+      "configurePreset": "viper-gpu-kokkos",
+      "jobs": 16
+    },
+    {
+      "name": "viper-gpu-alpaka",
+      "configurePreset": "viper-gpu-alpaka",
+      "jobs": 16
+    },
+    {
+      "name": "viper-gpu-openmp",
+      "configurePreset": "viper-gpu-openmp",
       "jobs": 16
     },
     {
