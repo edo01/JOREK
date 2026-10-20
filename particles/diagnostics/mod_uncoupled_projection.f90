@@ -75,7 +75,7 @@ contains
     use mod_parameters, only: n_tor, n_vertex_max, n_degrees
     use phys_module, only: n_aux_var, treat_axis
     use data_structure, only: init_node
-    use mod_axis_treatment, only: transform_rhs_for_axis_element, new_to_old_dofs_on_the_axis
+    use mod_axis_treatment, only: transform_projection_rhs_for_axis_element, new_to_old_dofs_on_the_axis
 
     use mpi_mod
     use mod_event
@@ -149,7 +149,7 @@ contains
       do i_elm=1,this%element_list%n_elements
 
         rhs_elm = this%rhs(:, :, i_elm, :, i_rhs)
-        if (treat_axis) call transform_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
+        if (treat_axis) call transform_projection_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
 
         do i=1,n_vertex_max
 
@@ -188,7 +188,7 @@ contains
       do i_elm=1,this%element_list%n_elements
 
         rhs_elm = this%rhs_f(:, :, i_elm, :, i_rhs)
-        if (treat_axis) call transform_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
+        if (treat_axis) call transform_projection_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
           
         do i=1,n_vertex_max
         
@@ -386,7 +386,7 @@ contains
                               skip_factorisation, apply_dirichlet_condition_in)
   use phys_module, only : F0, TWOPI, mode, fix_axis_nodes, treat_axis
   use data_structure
-  use mod_axis_treatment, only: transform_basis_for_axis_element
+  use mod_axis_treatment, only: transform_elm_for_axis_element
   use basis_at_gaussian
   use mod_basisfunctions
   use mpi_mod
@@ -407,7 +407,6 @@ contains
   type (type_node)         :: nodes(n_vertex_max)
 
   real*8, allocatable      :: ELM(:,:)
-  real*8     :: RHS_axis(2*n_vertex_max*n_degrees)
   real*8     :: wgauss2(n_gauss)
   real*8, dimension(n_gauss,n_gauss) :: x_g,   x_s,   x_t,   x_ss,   x_tt,   x_st
   real*8, dimension(n_gauss,n_gauss) :: y_g,   y_s,   y_t,   y_ss,   y_tt,   y_st
@@ -479,7 +478,7 @@ contains
     !$omp shared(element_list, node_list, n_tor_local, i_tor_local,                       &
     !$omp        H, H_s, H_t, H_ss, H_st, H_tt, Hz, Hz_p, a_mat, wgauss2,                 &
     !$omp        filter, filter_hyper, filter_parallel, F0, fix_axis_nodes, treat_axis, my_id_master) &
-    !$omp private(ELM, RHS_axis, i_elm, element, i, j, k, l, ms, mt, in, im, mp,           &
+    !$omp private(ELM, i_elm, element, i, j, k, l, ms, mt, in, im, mp,                     &
     !$omp         x_g, x_s, x_t, x_ss, x_st, x_tt,                                      &
     !$omp         y_g, y_s, y_t, y_ss, y_st, y_tt,                                      &
     !$omp         psi_g, psi_s, psi_t, psi_ss, psi_tt, psi_st,                          &
@@ -649,8 +648,7 @@ contains
 
       ! Transform basis functions for the axis nodes, as for the fluid matrix
       if (treat_axis .and. any(nodes(:)%axis_node)) then
-        RHS_axis = 0.d0
-        call transform_basis_for_axis_element(nodes, i_elm, ELM, RHS_axis, (/ 1 /), 1, (/ 1, 2 /), 2)
+        call transform_elm_for_axis_element(nodes, i_elm, ELM, (/ 1 /), 1, (/ 1, 2 /), 2)
       endif
 
       ! Save contribution of this element in MUMPS format
@@ -794,7 +792,7 @@ contains
                                   apply_dirichlet_condition_in)
   use phys_module, only : F0, TWOPI, fix_axis_nodes, treat_axis
   use data_structure
-  use mod_axis_treatment, only: transform_basis_for_axis_element
+  use mod_axis_treatment, only: transform_elm_for_axis_element, transform_rhs_for_axis_element
   use basis_at_gaussian
   use mod_basisfunctions
   use mpi_mod
@@ -817,7 +815,7 @@ contains
   type (type_node)         :: nodes(n_vertex_max)
 
   real*8, allocatable      :: ELM(:,:)
-  real*8     :: RHS_axis(2*n_vertex_max*n_degrees)
+  real*8     :: RHS_axis(n_degrees,n_vertex_max)
   real*8     :: wgauss2(n_gauss)
   real*8, dimension(n_gauss,n_gauss) :: x_g,   x_s,   x_t,   x_ss,   x_tt,   x_st
   real*8, dimension(n_gauss,n_gauss) :: y_g,   y_s,   y_t,   y_ss,   y_tt,   y_st
@@ -1096,18 +1094,10 @@ contains
 
       ! Transform basis functions for the axis nodes, as for the fluid matrix, together with the integral weights
       if (treat_axis .and. any(nodes(:)%axis_node)) then
-        RHS_axis = 0.d0
-        do i=1,n_vertex_max
-          do j=1,n_degrees
-            RHS_axis(2*n_degrees*(i-1) + 2*(j-1) + 1) = basisfunction_volume(i,j)
-          enddo
-        enddo
-        call transform_basis_for_axis_element(nodes, i_elm, ELM, RHS_axis, (/ 1, 2 /), 2, (/ 1 /), 1)
-        do i=1,n_vertex_max
-          do j=1,n_degrees
-            basisfunction_volume(i,j) = RHS_axis(2*n_degrees*(i-1) + 2*(j-1) + 1)
-          enddo
-        enddo
+        call transform_elm_for_axis_element(nodes, i_elm, ELM, (/ 1, 2 /), 2, (/ 1 /), 1)
+        RHS_axis = transpose(basisfunction_volume)
+        call transform_rhs_for_axis_element(nodes, i_elm, RHS_axis, (/ 1 /), 1, (/ 1 /), 1)
+        basisfunction_volume = transpose(RHS_axis)
       endif
 
       ! Save contribution of this element in MUMPS format

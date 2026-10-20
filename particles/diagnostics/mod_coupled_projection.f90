@@ -52,7 +52,7 @@ contains
     use mod_parameters, only: n_tor, n_vertex_max, n_degrees
     use phys_module, only: n_aux_var, treat_axis
     use data_structure, only: init_node
-    use mod_axis_treatment, only: transform_rhs_for_axis_element, new_to_old_dofs_on_the_axis
+    use mod_axis_treatment, only: transform_projection_rhs_for_axis_element, new_to_old_dofs_on_the_axis
 
     use mpi_mod
     use mod_event
@@ -115,7 +115,7 @@ contains
       i_start =  this%rhs_vec%n * (i_rhs-1)
       do i_elm=1,this%element_list%n_elements
         rhs_elm = this%rhs(:, :, i_elm, :, i_rhs)
-        if (treat_axis) call transform_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
+        if (treat_axis) call transform_projection_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
         do i=1,n_vertex_max
           inode = this%element_list%element(i_elm)%vertex(i)
           do j=1,n_degrees
@@ -133,7 +133,7 @@ contains
       i_start =  this%rhs_vec%n * (n_rhs + i_rhs - 1)
       do i_elm=1,this%element_list%n_elements 
         rhs_elm = this%rhs_f(:, :, i_elm, :, i_rhs)
-        if (treat_axis) call transform_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
+        if (treat_axis) call transform_projection_rhs_for_axis_element(this%node_list, this%element_list%element(i_elm), i_elm, rhs_elm, n_tor)
         do i=1,n_vertex_max
           inode = this%element_list%element(i_elm)%vertex(i)
           do j=1,n_degrees
@@ -232,7 +232,7 @@ contains
   use mod_sparse_matrix, only: type_SP_MATRIX
   use mod_parameters, only: n_tor, n_vertex_max, n_degrees, n_coord_tor, n_plane
   use phys_module, only : F0, TWOPI, fix_axis_nodes, treat_axis, mode, n_tor_fft_thresh
-  use mod_axis_treatment, only: transform_basis_for_axis_element
+  use mod_axis_treatment, only: transform_elm_for_axis_element
   use iso_c_binding
 
   use mpi_mod
@@ -257,7 +257,6 @@ contains
   type (type_node)         :: nodes(n_vertex_max)
 
   real*8, allocatable      :: ELM(:,:)
-  real*8     :: RHS_axis(n_tor*n_vertex_max*n_degrees)
   integer    :: i_harm(n_tor)
   real*8     :: wgauss2(n_gauss)
   real*8, dimension(n_plane,n_gauss,n_gauss) :: x_g,   x_s,   x_t,   x_ss,   x_tt,   x_st
@@ -350,7 +349,7 @@ contains
     !$omp        H, H_s, H_t, H_ss, H_st, H_tt, Hz, Hz_p, HZ_coord, a_mat, wgauss2, mode, &
     !$omp        filter, filter_hyper, filter_parallel, F0, fix_axis_nodes, use_fft, fftw_plan,  &
     !$omp        treat_axis, i_harm)                                                      &
-    !$omp private(ELM, RHS_axis, i_elm, element, i, j, k, l, ms, mt, in, im, mp,                    &
+    !$omp private(ELM, i_elm, element, i, j, k, l, ms, mt, in, im, mp,                              &
     !$omp         x_g, x_s, x_t, x_ss, x_st, x_tt,                                        &
     !$omp         y_g, y_s, y_t, y_ss, y_st, y_tt,                                        &
     !$omp         psi_g, psi_s, psi_t, psi_ss, psi_tt, psi_st,                            &
@@ -607,8 +606,7 @@ contains
 
       ! Transform basis functions for the axis nodes, as for the fluid matrix
       if (treat_axis .and. any(nodes(:)%axis_node)) then
-        RHS_axis = 0.d0
-        call transform_basis_for_axis_element(nodes, i_elm, ELM, RHS_axis, (/ 1 /), 1, i_harm, n_tor)
+        call transform_elm_for_axis_element(nodes, i_elm, ELM, (/ 1 /), 1, i_harm, n_tor)
       endif
 
       ! Save contribution of this element in MUMPS format
