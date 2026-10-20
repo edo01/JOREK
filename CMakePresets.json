@@ -34,11 +34,11 @@
         "JOREK_USE_HDF5": "ON",
         "JOREK_USE_FFTW": "ON",
         "JOREK_USE_BLOCK": "ON",
-        "JOREK_LIB_DIR": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd",
-        "STRUMPACK_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/STRUMPACK/install",
-        "METIS_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/METIS/install",
-        "PARMETIS_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/ParMETIS/install",
-        "GKLIB_ROOT": "/pitagora_work/FUPA1_MHD/JOREK_LIBRARIES/libraries_recompile_amd/GKlib/install"
+        "JOREK_LIB_DIR": "/pitagora_work/FUPA2_REDISMHD/JOREK_LIBRARIES/libraries_recompile_amd",
+        "STRUMPACK_ROOT": "/pitagora_work/FUPA2_REDISMHD/JOREK_LIBRARIES/libraries_recompile_amd/STRUMPACK/install",
+        "METIS_ROOT": "/pitagora_work/FUPA2_REDISMHD/JOREK_LIBRARIES/libraries_recompile_amd/METIS/install",
+        "PARMETIS_ROOT": "/pitagora_work/FUPA2_REDISMHD/JOREK_LIBRARIES/libraries_recompile_amd/ParMETIS/install",
+        "GKLIB_ROOT": "/pitagora_work/FUPA2_REDISMHD/JOREK_LIBRARIES/libraries_recompile_amd/GKlib/install"
       }
     },
     {
@@ -78,6 +78,17 @@
       "description": "Requires the pitagora-intel modules, cuda and alpaka 3 on CMAKE_PREFIX_PATH.",
       "cacheVariables": {
         "JGX_DEVICE": "alpaka",
+        "JGX_DEVICE_ARCH": "sm_90",
+        "CMAKE_CUDA_FLAGS": "-Xcompiler=-mcmodel=medium"
+      }
+    },
+    {
+      "name": "pitagora-gpu-cuda",
+      "inherits": "pitagora-intel",
+      "displayName": "Pitagora GPU - Intel oneAPI plus the native CUDA backend (H100)",
+      "description": "Requires the pitagora-intel modules and the cuda module.",
+      "cacheVariables": {
+        "JGX_DEVICE": "cuda",
         "JGX_DEVICE_ARCH": "sm_90",
         "CMAKE_CUDA_FLAGS": "-Xcompiler=-mcmodel=medium"
       }
@@ -203,6 +214,11 @@
     {
       "name": "pitagora-gpu-alpaka",
       "configurePreset": "pitagora-gpu-alpaka",
+      "jobs": 16
+    },
+    {
+      "name": "pitagora-gpu-cuda",
+      "configurePreset": "pitagora-gpu-cuda",
       "jobs": 16
     },
     {
