@@ -105,13 +105,27 @@ else()
   set(JOREK_STELLARATOR FALSE)
 endif()
 
-# --- Feature switches (JorekOptions) ---------------------------------------
-if(JOREK_USE_DOMM)
+# Vacuum field of the stellarator models (use_domm/use_ext_field in model180/183).
+# As in defaults.mk, models without a use_domm setting keep USE_DOMM on.
+foreach(_old JOREK_USE_DOMM JOREK_USE_EXT_FIELD)
+  if(DEFINED CACHE{${_old}})
+    message(FATAL_ERROR "${_old} is no longer a CMake option: set use_domm/use_ext_field "
+      "with util/config.sh and remove ${_old} from the cache")
+  endif()
+endforeach()
+_jorek_read_setting(_use_domm "${JOREK_MODEL_SETTINGS}" "use_domm")
+_jorek_read_setting(_use_ext_field "${JOREK_MODEL_SETTINGS}" "use_ext_field")
+if(NOT _use_domm STREQUAL ".false.")
   list(APPEND JOREK_DEFINES "USE_DOMM")
 endif()
-if(JOREK_USE_EXT_FIELD)
+if(_use_ext_field STREQUAL ".true.")
+  if(NOT _use_domm STREQUAL ".false.")
+    message(FATAL_ERROR "use_ext_field=.true. requires use_domm=.false. in ${JOREK_MODEL_SETTINGS}")
+  endif()
   list(APPEND JOREK_DEFINES "USE_EXT_FIELD")
 endif()
+
+# --- Feature switches (JorekOptions) ---------------------------------------
 if(JOREK_USE_BLOCK)
   list(APPEND JOREK_DEFINES "USE_BLOCK")
 endif()
