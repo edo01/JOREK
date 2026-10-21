@@ -11,13 +11,24 @@ For a documentation about the code, see jorek.eu/wiki
  Building with CMake (recommended)
 =======================================================
 
-Each supported machine is a CMake preset in CMakePresets.json. To list them:
+CMakePresets.json only holds generic hidden presets (base, debug,
+intel-oneapi). Machine presets are local: copy cmake/presets/example.json to
+cmake/presets/<machine>.json (ignored by git), set JOREK_LIBDIR in its
+"environment" once and the module line in its "description". It includes
+CMakePresets.json itself so it can inherit intel-oneapi. Include it from a
+CMakeUserPresets.json (also ignored) in the source root:
+
+  {
+    "version": 4,
+    "include": ["cmake/presets/<machine>.json"]
+  }
+
+The library roots default to $env{JOREK_LIBDIR}/<lib>/install; override only
+the ones laid out differently. To list the presets:
 
   cmake --list-presets
 
-Pick the preset for your machine (add -debug
- for a debug build). Each preset's "description" field states the exact
-`module load` line to run first.
+Pick the preset for your machine (add -debug for a debug build).
 
   # 1. load the modules listed in the preset's description
   # 2. configure once
@@ -30,7 +41,7 @@ Pick the preset for your machine (add -debug
 
 Every .f90 file with a `program` statement becomes a target named after the
 file; the built executables land in build/<preset>/. Set the model and options
-per preset in CMakePresets.json (JOREK_MODEL, JOREK_USE_*), not in Makefile.inc.
+per preset (JOREK_MODEL, JOREK_USE_*), not in Makefile.inc.
 
 
 =======================================================
