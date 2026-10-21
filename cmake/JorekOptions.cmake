@@ -6,8 +6,6 @@ set(JOREK_MODEL "model600" CACHE STRING
   "Physics model to build (directory name under models/, e.g. model600)")
 
 # --- Physics / numerics switches -------------------------------------------
-option(JOREK_USE_DOMM "Use Dommaschk potentials (no FE correction of n.B on boundary)" ON)
-option(JOREK_USE_EXT_FIELD "Use external magnetic field from a gvec2jorek file (requires JOREK_USE_DOMM=OFF)" OFF)
 option(JOREK_USE_BLOCK "Enable blocked matrix assembly" ON)
 option(JOREK_USE_DIRECT_CONSTRUCTION "Construct the matrix directly" OFF)
 option(JOREK_USE_BICGSTAB "Use BiCGSTAB instead of GMRES as the iterative solver" OFF)
@@ -73,14 +71,6 @@ endif()
 
 if(JOREK_USE_STD_BESSELK AND JOREK_USE_BOOST)
   message(FATAL_ERROR "JOREK_USE_STD_BESSELK and JOREK_USE_BOOST are mutually exclusive")
-endif()
-
-# defaults.mk only honoured USE_EXT_FIELD when USE_DOMM was off; make that
-# an error rather than silently dropping the flag.
-if(JOREK_USE_EXT_FIELD AND JOREK_USE_DOMM)
-  message(FATAL_ERROR
-    "JOREK_USE_EXT_FIELD requires JOREK_USE_DOMM=OFF (the external field replaces "
-    "the Dommaschk potentials)")
 endif()
 
 if(NOT JOREK_USE_HDF5)
